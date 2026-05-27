@@ -3,4 +3,10 @@
 *.db-wal
 __pycache__/
 *.pyc
-webapp_upload.zip
+*.zip
+*.xlsx
+*.docx
+*.png
+*.svg
+.DS_Store
+webapp/uploads/
