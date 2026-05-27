@@ -7,6 +7,11 @@ import os
 import re
 from html import escape
 
+try:
+    import email_service
+except Exception:
+    email_service = None
+
 jobs = Blueprint('jobs', __name__, url_prefix='/jobs')
 DB_PATH = None
 
@@ -613,6 +618,24 @@ def assign():
                 start_time = excluded.start_time,
                 end_time   = excluded.end_time
         ''', (role_key, week_start, day, slot, staff_name, start_time, end_time))
+        role_row = conn.execute('SELECT title FROM job_role_templates WHERE role_key=?', (role_key,)).fetchone()
+        role_title = role_row['title'] if role_row else role_key
+
+    if email_service and staff_name:
+        email_service.send_notification(
+            'jobs',
+            subject=f'Job assignment updated: {role_title} — {day} ({week_start})',
+            lines=[
+                f'Role: {role_title}',
+                f'Week: {week_start}',
+                f'Day: {day}',
+                f'Slot: {slot}',
+                f'Staff: {staff_name}',
+                f'Time: {start_time or "-"} → {end_time or "-"}',
+            ],
+            link_path=f'/jobs/?week={week_start}',
+            actor=session.get('role',''),
+        )
 
     return jsonify({'ok': True, 'staff_name': staff_name, 'start_time': start_time, 'end_time': end_time})
 

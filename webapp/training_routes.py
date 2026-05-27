@@ -4,6 +4,11 @@ from io import BytesIO
 from datetime import datetime, date, timedelta
 from functools import wraps
 
+try:
+    import email_service
+except Exception:
+    email_service = None
+
 training_bp = Blueprint('training', __name__, url_prefix='/training')
 DB_PATH = None
 CHECKLISTS_DATA = {}   # injected from app.py at init time
@@ -332,6 +337,31 @@ def training_new():
                  session.get('role','')))
             sid = cur.lastrowid
             _save_items(conn, sid, request.form)
+
+        # Email notification (fire-and-forget).
+        if email_service:
+            statuses = request.form.getlist('topic_status[]')
+            ach_count = sum(1 for s in statuses if s == 'achieved')
+            np_count = sum(1 for s in statuses if s == 'needs_practice')
+            rating_label = next((r[1] for r in RATINGS if r[0] == request.form.get('overall_rating','')), '-')
+            email_service.send_notification(
+                'training',
+                subject=f'Training: {request.form.get("trainee_name","-")} ({request.form.get("trainee_role","-")})',
+                lines=[
+                    f'Trainee: {request.form.get("trainee_name","-")}',
+                    f'Role: {request.form.get("trainee_role","-")}',
+                    f'Trainer: {request.form.get("trainer_name","-")}',
+                    f'Date: {request.form.get("session_date", datetime.now().strftime("%Y-%m-%d"))}',
+                    f'Shift: {request.form.get("shift","full")}',
+                    f'Overall rating: {rating_label}',
+                    f'Topics achieved: {ach_count}',
+                    f'Needs practice: {np_count}',
+                    f'Key achievements: {request.form.get("key_achievements","").strip() or "-"}',
+                    f'Next session focus: {request.form.get("next_session_focus","").strip() or "-"}',
+                ],
+                link_path=f'/training/{sid}',
+                actor=request.form.get('trainer_name','').strip() or session.get('role',''),
+            )
         return redirect(url_for('training.training_detail', session_id=sid))
 
     topics_json = {role: _build_topics(role) for role in roles}

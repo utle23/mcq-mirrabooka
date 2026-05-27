@@ -1,0 +1,322 @@
+{% extends "base.html" %}
+{% block title %}Email Notifications{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-envelope me-2" style="color:#1565C0"></i>Email Notifications</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.card-section {
+  background: #fff; border-radius: 10px; border: 1px solid #e8eaed;
+  box-shadow: 0 1px 4px rgba(0,0,0,.04); margin-bottom: 18px; overflow: hidden;
+}
+.card-section-head {
+  background: #1A1A2E; color: #fff; padding: 11px 18px;
+  display: flex; align-items: center; gap: 10px;
+}
+.card-section-body { padding: 18px 20px; }
+
+.event-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 6px 14px; margin-top: 6px;
+}
+.event-chip {
+  display: flex; align-items: center; gap: 6px; font-size: 0.78rem;
+  padding: 3px 0; cursor: pointer;
+}
+.event-chip input { margin: 0; }
+
+.recipient-row {
+  background: #fff; border: 1px solid #e8eaed; border-radius: 8px;
+  margin-bottom: 8px; padding: 12px 14px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.03);
+}
+.recipient-row.inactive { opacity: .5; }
+
+.tag-event {
+  display: inline-block; padding: 2px 9px; border-radius: 10px;
+  font-size: 0.7rem; font-weight: 600; margin-right: 4px; margin-bottom: 3px;
+}
+
+.log-row {
+  font-size: 0.78rem; padding: 6px 10px; border-bottom: 1px solid #f3f4f6;
+  display: flex; gap: 12px; align-items: center;
+}
+.log-row .status-pill {
+  display: inline-block; padding: 2px 8px; border-radius: 10px;
+  font-size: 0.68rem; font-weight: 700; min-width: 56px; text-align: center;
+}
+.log-row .status-pill.sent { background: #E8F5E9; color: #2E7D32; }
+.log-row .status-pill.failed { background: #FFEBEE; color: #C62828; }
+.log-row .status-pill.queue_failed { background: #FFF8E1; color: #F57C00; }
+
+.warn-banner {
+  background: #FFF8E1; border-left: 4px solid #FFA726; color: #6D4C00;
+  padding: 12px 16px; border-radius: 6px; margin-bottom: 16px;
+  font-size: 0.86rem; line-height: 1.5;
+}
+.success-banner {
+  background: #E8F5E9; border-left: 4px solid #43A047; color: #1B5E20;
+  padding: 10px 16px; border-radius: 6px; margin-bottom: 16px;
+  font-size: 0.86rem;
+}
+.error-banner {
+  background: #FFEBEE; border-left: 4px solid #E53935; color: #B71C1C;
+  padding: 10px 16px; border-radius: 6px; margin-bottom: 16px;
+  font-size: 0.86rem;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+
+{% if request.args.get('saved') %}
+<div class="success-banner"><i class="fas fa-check-circle me-1"></i>Settings saved.</div>
+{% endif %}
+{% if request.args.get('error') %}
+<div class="error-banner"><i class="fas fa-circle-exclamation me-1"></i>{{ request.args.get('error') }}</div>
+{% endif %}
+
+<div class="warn-banner">
+  <strong><i class="fas fa-shield-halved me-1"></i>Gmail setup tip:</strong> Gmail blocks login by your normal password. You must:
+  <ol class="mb-0 mt-1 ps-3">
+    <li>Turn on <strong>2-Step Verification</strong> at <a href="https://myaccount.google.com/security" target="_blank">myaccount.google.com/security</a>.</li>
+    <li>Generate a <strong>16-character App Password</strong> at <a href="https://myaccount.google.com/apppasswords" target="_blank">myaccount.google.com/apppasswords</a> (pick "Mail").</li>
+    <li>Paste the App Password (no spaces) below as the SMTP password. Use port <code>587</code> with TLS.</li>
+  </ol>
+</div>
+
+<!-- SMTP CONFIG -->
+<div class="card-section">
+  <div class="card-section-head">
+    <i class="fas fa-gear"></i>
+    <span class="fw-semibold">SMTP Configuration (sender account)</span>
+    <span class="ms-auto badge {% if settings.enabled %}bg-success{% else %}bg-secondary{% endif %}">
+      {% if settings.enabled %}Notifications ENABLED{% else %}Notifications DISABLED{% endif %}
+    </span>
+  </div>
+  <div class="card-section-body">
+    <form method="POST" action="/admin/email-settings/save">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label fw-semibold small">SMTP Host</label>
+          <input type="text" name="smtp_host" class="form-control form-control-sm"
+                 value="{{ settings.smtp_host or 'smtp.gmail.com' }}" placeholder="smtp.gmail.com">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label fw-semibold small">Port</label>
+          <input type="number" name="smtp_port" class="form-control form-control-sm"
+                 value="{{ settings.smtp_port or 587 }}" placeholder="587">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label fw-semibold small">From name</label>
+          <input type="text" name="from_name" class="form-control form-control-sm"
+                 value="{{ settings.from_name or 'MCQ Mirrabooka Notification' }}">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label fw-semibold small">
+            Sender Email <span class="text-danger">*</span>
+            <span class="text-muted small">(Gmail account that sends notifications)</span>
+          </label>
+          <input type="email" name="smtp_user" class="form-control form-control-sm"
+                 value="{{ settings.smtp_user or '' }}" placeholder="your-account@gmail.com">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label fw-semibold small">
+            App Password <span class="text-danger">*</span>
+            <span class="text-muted small">(16 chars, generated by Google)</span>
+          </label>
+          <input type="password" name="smtp_password" class="form-control form-control-sm"
+                 value="{{ settings.smtp_password or '' }}"
+                 placeholder="xxxx xxxx xxxx xxxx (App Password — NOT your Gmail password)"
+                 autocomplete="new-password">
+        </div>
+        <div class="col-md-9">
+          <label class="form-label fw-semibold small">
+            Base URL <span class="text-muted small">(used in email "View in app" buttons)</span>
+          </label>
+          <input type="url" name="base_url" class="form-control form-control-sm"
+                 value="{{ settings.base_url or '' }}"
+                 placeholder="https://yourname.pythonanywhere.com">
+        </div>
+        <div class="col-md-3 d-flex align-items-end">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" id="enabledToggle"
+                   name="enabled" {% if settings.enabled %}checked{% endif %}>
+            <label class="form-check-label fw-semibold small" for="enabledToggle">
+              Send notifications
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="d-flex gap-2 mt-3">
+        <button type="submit" class="btn btn-sm btn-primary">
+          <i class="fas fa-save me-1"></i>Save settings
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-success" onclick="sendTest()">
+          <i class="fas fa-paper-plane me-1"></i>Send test email
+        </button>
+        <input type="email" id="testTo" class="form-control form-control-sm" style="max-width:280px"
+               placeholder="test-recipient@example.com">
+      </div>
+      <div id="testResult" class="mt-2 small"></div>
+    </form>
+  </div>
+</div>
+
+<!-- RECIPIENTS -->
+<div class="card-section">
+  <div class="card-section-head">
+    <i class="fas fa-users"></i>
+    <span class="fw-semibold">Recipients</span>
+    <span class="ms-auto small text-white-50">{{ recipients|length }} total</span>
+  </div>
+  <div class="card-section-body">
+
+    <!-- Add form -->
+    <form method="POST" action="/admin/email-settings/recipients/add" class="mb-3">
+      <div class="row g-2">
+        <div class="col-md-4">
+          <input type="email" name="email" class="form-control form-control-sm"
+                 placeholder="someone@gmail.com" required>
+        </div>
+        <div class="col-md-3">
+          <input type="text" name="name" class="form-control form-control-sm"
+                 placeholder="Display name (optional)">
+        </div>
+        <div class="col-md-5 d-flex gap-2">
+          <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAddEvents()">
+            <i class="fas fa-sliders"></i> Choose events
+          </button>
+          <button type="submit" class="btn btn-sm btn-success">
+            <i class="fas fa-plus me-1"></i>Add recipient
+          </button>
+        </div>
+      </div>
+      <div id="addEventsBlock" class="d-none mt-3 p-3" style="background:#f7f9fb;border-radius:6px">
+        <div class="small text-muted mb-1">Tick events this recipient should receive:</div>
+        <div class="event-grid">
+          {% for ev, label, icon, color in event_types %}
+          <label class="event-chip">
+            <input type="checkbox" name="notify_{{ ev }}" {% if ev != 'jobs' %}checked{% endif %}>
+            <i class="fas {{ icon }}" style="color:{{ color }}"></i> {{ label }}
+          </label>
+          {% endfor %}
+        </div>
+        <div class="small text-muted mt-1">By default new recipients are subscribed to all events except Job Schedule.</div>
+      </div>
+    </form>
+
+    {% if not recipients %}
+    <div class="text-center text-muted py-3 small">No recipients yet. Add the first one above.</div>
+    {% endif %}
+
+    {% for r in recipients %}
+    <div class="recipient-row {% if not r.active %}inactive{% endif %}">
+      <form method="POST" action="/admin/email-settings/recipients/{{ r.id }}/update">
+        <div class="row g-2 align-items-center">
+          <div class="col-md-4">
+            <input type="email" name="email" class="form-control form-control-sm" value="{{ r.email }}" required>
+          </div>
+          <div class="col-md-3">
+            <input type="text" name="name" class="form-control form-control-sm"
+                   value="{{ r.name or '' }}" placeholder="(no name)">
+          </div>
+          <div class="col-md-5 d-flex gap-2 justify-content-end flex-wrap">
+            <div class="form-check form-switch d-flex align-items-center gap-2 m-0">
+              <input class="form-check-input" type="checkbox" name="active" id="active_{{ r.id }}"
+                     {% if r.active %}checked{% endif %}>
+              <label class="form-check-label small" for="active_{{ r.id }}">Active</label>
+            </div>
+            <button type="submit" class="btn btn-sm btn-success">
+              <i class="fas fa-save"></i>
+            </button>
+          </div>
+        </div>
+
+        <div class="event-grid mt-2">
+          {% for ev, label, icon, color in event_types %}
+          <label class="event-chip">
+            <input type="checkbox" name="notify_{{ ev }}"
+                   {% if r['notify_' + ev] %}checked{% endif %}>
+            <i class="fas {{ icon }}" style="color:{{ color }}"></i> {{ label }}
+          </label>
+          {% endfor %}
+        </div>
+      </form>
+
+      <div class="d-flex justify-content-end mt-2">
+        <form method="POST" action="/admin/email-settings/recipients/{{ r.id }}/delete" class="d-inline"
+              onsubmit="return confirm('Remove {{ r.email }} from notifications?')">
+          <button type="submit" class="btn btn-sm btn-outline-danger">
+            <i class="fas fa-trash me-1"></i>Remove
+          </button>
+        </form>
+      </div>
+    </div>
+    {% endfor %}
+
+  </div>
+</div>
+
+<!-- RECENT LOG -->
+{% if log %}
+<div class="card-section">
+  <div class="card-section-head">
+    <i class="fas fa-clock-rotate-left"></i>
+    <span class="fw-semibold">Recent notifications (last {{ log|length }})</span>
+  </div>
+  <div class="card-section-body p-0">
+    {% for l in log %}
+    <div class="log-row">
+      <span class="status-pill {{ l.status }}">{{ l.status }}</span>
+      <span class="text-muted" style="min-width:130px">{{ l.sent_at }}</span>
+      <span class="fw-semibold">[{{ l.event_type }}]</span>
+      <span class="flex-grow-1">{{ l.subject }}</span>
+      <span class="text-muted small">{{ l.recipients }}</span>
+      {% if l.error_detail %}
+      <span class="text-danger small" title="{{ l.error_detail }}"><i class="fas fa-circle-info"></i></span>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleAddEvents() {
+  document.getElementById('addEventsBlock').classList.toggle('d-none');
+}
+
+function sendTest() {
+  const to = document.getElementById('testTo').value.trim();
+  const result = document.getElementById('testResult');
+  if (!to) {
+    result.innerHTML = '<span class="text-danger">Enter a recipient email to test.</span>';
+    return;
+  }
+  result.innerHTML = '<span class="text-muted"><i class="fas fa-spinner fa-spin me-1"></i>Sending test email…</span>';
+  const fd = new FormData();
+  fd.append('test_to', to);
+  fetch('/admin/email-settings/test', { method: 'POST', body: fd })
+    .then(r => r.json())
+    .then(data => {
+      if (data.ok) {
+        result.innerHTML = '<span class="text-success"><i class="fas fa-check-circle me-1"></i>' + escapeHtml(data.message) + '</span>';
+      } else {
+        result.innerHTML = '<span class="text-danger"><i class="fas fa-circle-exclamation me-1"></i>' + escapeHtml(data.message) + '</span>';
+      }
+    })
+    .catch(err => {
+      result.innerHTML = '<span class="text-danger">Network error: ' + err + '</span>';
+    });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+}
+</script>
+{% endblock %}

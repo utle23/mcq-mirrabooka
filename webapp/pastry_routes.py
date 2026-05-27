@@ -1,4 +1,9 @@
 from flask import Blueprint, render_template, request, redirect, url_for, session, jsonify
+
+try:
+    import email_service
+except Exception:
+    email_service = None
 import sqlite3
 from datetime import datetime, date, timedelta
 from functools import wraps
@@ -240,6 +245,23 @@ def record_delivery(item_id):
             condition=excluded.condition,
             notes=excluded.notes''',
             (item_id, today, qty, received_by, now, condition, notes))
+        item_row = conn.execute('SELECT name FROM pastry_items WHERE id=?', (item_id,)).fetchone()
+
+    # Only notify when condition is not "good" — keep the inbox quiet.
+    if email_service and condition and condition.lower() != 'good':
+        email_service.send_notification(
+            'pastry',
+            subject=f'Pastry delivery condition: {condition.upper()} — {item_row["name"] if item_row else "item"}',
+            lines=[
+                f'Item: {item_row["name"] if item_row else item_id}',
+                f'Date: {today}',
+                f'Qty received: {qty}',
+                f'Condition: {condition}',
+                f'Notes: {notes or "-"}',
+            ],
+            link_path='/pastry/today',
+            actor=received_by,
+        )
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return jsonify({'ok': True, 'qty': qty})
     return redirect(url_for('pastry.pastry_today'))

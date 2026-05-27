@@ -14,6 +14,7 @@ from inventory_routes import inventory as inventory_bp, init_inventory_tables
 from job_routes       import jobs      as jobs_bp,      init_job_tables
 from rules_routes     import rules_bp,                  init_rules_tables
 from training_routes  import training_bp,               init_training_tables
+import email_service
 app.register_blueprint(prep_bp)
 app.register_blueprint(pastry_bp)
 app.register_blueprint(inventory_bp)
@@ -1311,6 +1312,24 @@ def checklist_save(chk_type):
 
         log_action('SAVE_CHECKLIST', 'checklist', sid, submitted_by,
                    f'{CHECKLISTS[chk_type]["title"]} / {section} / {chk_date}')
+
+    done_count = sum(1 for t in task_rows if t[2])
+    email_service.send_notification(
+        'checklist',
+        subject=f'{CHECKLISTS[chk_type]["title"]} {section} checklist submitted ({chk_date})',
+        lines=[
+            f'Type: {CHECKLISTS[chk_type]["title"]}',
+            f'Section: {section.title()}',
+            f'Date: {chk_date} ({day_name})',
+            f'Tasks completed: {done_count} / {len(task_rows)}',
+            f'Late submission: {"Yes" if is_late else "No"}',
+            f'Photos attached: {len(new_photos)}',
+            f'Responsible: {responsible or "-"}',
+            f'General note: {general_note or "-"}',
+        ],
+        link_path=f'/checklist/view/{sid}',
+        actor=submitted_by,
+    )
     return redirect(url_for('checklist_view', session_id=sid))
 
 @app.route('/checklist/view/<int:session_id>')
@@ -1459,6 +1478,32 @@ def temperature_save(temp_type):
                  r['c5_time'],r['c5_temp'],r['discarded']))
         log_action('SAVE_TEMP', 'temperature', sid, recorded_by,
                    f'{TEMPERATURES[temp_type]["title"]} / {temp_date}')
+
+    out_of_zone = []
+    discarded_items = []
+    for r in readings:
+        for n in range(1, 6):
+            tv = r.get(f'c{n}_temp')
+            if tv is not None and (tv < 5 or tv > 60):
+                out_of_zone.append(f'{r["food_name"]} check {n}: {tv}°C')
+        if (r.get('discarded') or '').upper() == 'Y':
+            discarded_items.append(r['food_name'])
+    email_service.send_notification(
+        'temperature',
+        subject=f'{TEMPERATURES[temp_type]["title"]} submitted ({temp_date})',
+        lines=[
+            f'Type: {TEMPERATURES[temp_type]["title"]}',
+            f'Date: {temp_date}',
+            f'Recorded by: {recorded_by or "-"}',
+            f'Checked by: {checked_by or "-"}',
+            f'Items recorded: {len(readings)}',
+            f'Out-of-zone readings: {len(out_of_zone)}' + (' — ' + '; '.join(out_of_zone[:5]) if out_of_zone else ''),
+            f'Discarded items: {", ".join(discarded_items) if discarded_items else "none"}',
+            f'Notes: {notes or "-"}',
+        ],
+        link_path=f'/temperature/view/{sid}',
+        actor=recorded_by,
+    )
     return redirect(url_for('temperature_view', session_id=sid))
 
 @app.route('/temperature/view/<int:session_id>')
@@ -2755,13 +2800,31 @@ def violation_rules():
                     severity = request.form.get('severity', '').strip() or rule['severity'] or 'minor'
                     if not action_taken:
                         action_taken = rule['default_action'] or ''
-                    conn.execute('''INSERT INTO staff_violations
+                    cur = conn.execute('''INSERT INTO staff_violations
                         (rule_id,staff_name,incident_date,incident_time,submitted_by,branch,
                          severity,description,action_taken,follow_up_date,status)
                         VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
                         (rule_id_int, staff_name, incident_date, incident_time, submitted_by,
                          session.get('branch', ''), severity, description, action_taken,
                          follow_up, 'open'))
+                    vid = cur.lastrowid
+                    email_service.send_notification(
+                        'violation',
+                        subject=f'Violation logged: {rule["title"]} — {staff_name}',
+                        lines=[
+                            f'Staff: {staff_name}',
+                            f'Rule: {rule["title"]}',
+                            f'Category: {rule["category"]}',
+                            f'Severity: {severity}',
+                            f'Date: {incident_date} {incident_time}',
+                            f'Branch: {session.get("branch", "-")}',
+                            f'Description: {description}',
+                            f'Action taken: {action_taken or "-"}',
+                            f'Follow-up date: {follow_up or "-"}',
+                        ],
+                        link_path='/admin/violations',
+                        actor=submitted_by,
+                    )
             return redirect(url_for('violation_rules'))
 
     status_filter = request.args.get('status', 'open')
@@ -3053,11 +3116,28 @@ def report_issue():
                     photo_fname = f'issue_{uuid.uuid4().hex[:12]}.{ext}'
                     f.save(os.path.join(UPLOAD_FOLDER, photo_fname))
             with get_db() as conn:
-                conn.execute('''
+                cur = conn.execute('''
                     INSERT INTO issue_reports (category,title,description,reported_by,branch,date,priority,photo)
                     VALUES (?,?,?,?,?,?,?,?)
                 ''', (category, title, description, reported_by,
                       session.get('branch',''), date.today().isoformat(), priority, photo_fname))
+                rid = cur.lastrowid
+            cat_label = ISSUE_CATEGORIES.get(category, {}).get('label', category)
+            email_service.send_notification(
+                'issue',
+                subject=f'[{priority.upper()}] Issue reported: {title}',
+                lines=[
+                    f'Category: {cat_label}',
+                    f'Priority: {priority}',
+                    f'Title: {title}',
+                    f'Branch: {session.get("branch", "-")}',
+                    f'Date: {date.today().isoformat()}',
+                    f'Photo attached: {"yes" if photo_fname else "no"}',
+                    f'Description: {description}',
+                ],
+                link_path='/admin/reports',
+                actor=reported_by,
+            )
             return redirect(url_for('report_issue', submitted=1))
     submitted = request.args.get('submitted')
     return render_template('report_issue.html', staff=STAFF, submitted=submitted)
@@ -3096,6 +3176,95 @@ def update_report(report_id):
         ''', (status, admin_notes, resolved_by, resolved_at, report_id))
     return redirect(url_for('admin_reports'))
 
+# ─── Email Notifications (admin) ───────────────────────────────────────────────
+
+@app.route('/admin/email-settings', methods=['GET'])
+@admin_required
+def email_settings():
+    settings = email_service.get_settings()
+    recipients = email_service.list_recipients()
+    log = email_service.get_recent_log(30)
+    return render_template('email_settings.html',
+        settings=settings, recipients=recipients, log=log,
+        event_types=email_service.EVENT_TYPES)
+
+
+@app.route('/admin/email-settings/save', methods=['POST'])
+@admin_required
+def email_settings_save():
+    try:
+        port = int(request.form.get('smtp_port', '587') or '587')
+    except ValueError:
+        port = 587
+    email_service.update_settings(
+        smtp_host=request.form.get('smtp_host', '').strip() or 'smtp.gmail.com',
+        smtp_port=port,
+        smtp_user=request.form.get('smtp_user', '').strip(),
+        smtp_password=request.form.get('smtp_password', ''),  # don't strip — preserve spaces
+        from_name=request.form.get('from_name', '').strip() or 'MCQ Mirrabooka Notification',
+        base_url=request.form.get('base_url', '').strip().rstrip('/'),
+        enabled=1 if request.form.get('enabled') else 0,
+        updated_by=session.get('role', 'admin'),
+    )
+    return redirect(url_for('email_settings', saved=1))
+
+
+@app.route('/admin/email-settings/test', methods=['POST'])
+@admin_required
+def email_settings_test():
+    to = request.form.get('test_to', '').strip()
+    ok, msg = email_service.send_test_email(to)
+    return jsonify({'ok': ok, 'message': msg})
+
+
+@app.route('/admin/email-settings/recipients/add', methods=['POST'])
+@admin_required
+def email_recipient_add():
+    try:
+        events = {ev: bool(request.form.get(f'notify_{ev}')) for ev, _, _, _ in email_service.EVENT_TYPES}
+        email_service.add_recipient(
+            email=request.form.get('email', '').strip(),
+            name=request.form.get('name', '').strip(),
+            events=events,
+        )
+    except ValueError as e:
+        return redirect(url_for('email_settings', error=str(e)))
+    except sqlite3.IntegrityError:
+        return redirect(url_for('email_settings', error='That email is already on the list.'))
+    return redirect(url_for('email_settings'))
+
+
+@app.route('/admin/email-settings/recipients/<int:rid>/update', methods=['POST'])
+@admin_required
+def email_recipient_update(rid):
+    try:
+        events = {ev: bool(request.form.get(f'notify_{ev}')) for ev, _, _, _ in email_service.EVENT_TYPES}
+        email_service.update_recipient(
+            rid,
+            email=request.form.get('email', '').strip(),
+            name=request.form.get('name', '').strip(),
+            active=bool(request.form.get('active')),
+            events=events,
+        )
+    except ValueError as e:
+        return redirect(url_for('email_settings', error=str(e)))
+    return redirect(url_for('email_settings'))
+
+
+@app.route('/admin/email-settings/recipients/<int:rid>/toggle', methods=['POST'])
+@admin_required
+def email_recipient_toggle(rid):
+    email_service.toggle_recipient(rid)
+    return redirect(url_for('email_settings'))
+
+
+@app.route('/admin/email-settings/recipients/<int:rid>/delete', methods=['POST'])
+@admin_required
+def email_recipient_delete(rid):
+    email_service.delete_recipient(rid)
+    return redirect(url_for('email_settings'))
+
+
 # ─── Main ──────────────────────────────────────────────────────────────────────
 
 init_db()
@@ -3105,6 +3274,7 @@ init_inventory_tables(DB_PATH)
 init_job_tables(DB_PATH)
 init_rules_tables(DB_PATH)
 init_training_tables(DB_PATH, CHECKLISTS)
+email_service.init_email_tables(DB_PATH)
 
 if __name__ == '__main__':
     print('\n' + '='*50)

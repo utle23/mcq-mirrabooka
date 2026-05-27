@@ -165,6 +165,9 @@
       <a href="/staff" class="nav-link-item {% if current_ep=='staff_page' %}active{% endif %}">
         <i class="fas fa-users fa-fw"></i><span>Staff</span>
       </a>
+      <a href="/admin/email-settings" class="nav-link-item {% if current_ep in ('email_settings','email_settings_save','email_settings_test','email_recipient_add','email_recipient_update','email_recipient_toggle','email_recipient_delete') %}active{% endif %}" style="border-left-color:#1565C0">
+        <i class="fas fa-envelope fa-fw"></i><span>Email Notifications</span>
+      </a>
       {% endif %}
 
       <div class="sidebar-footer">

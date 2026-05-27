@@ -4,6 +4,11 @@ from io import BytesIO
 from datetime import datetime, date, timedelta
 from functools import wraps
 
+try:
+    import email_service
+except Exception:
+    email_service = None
+
 prep = Blueprint('prep', __name__, url_prefix='/prep')
 DB_PATH    = None
 
@@ -344,6 +349,22 @@ def prep_weekly_view(week_start):
 def prep_create_schedule(week_start):
     with _get_db() as conn:
         _build_schedule(week_start, conn)
+        task_count = conn.execute(
+            'SELECT COUNT(*) c FROM prep_weekly_tasks WHERE schedule_id IN '
+            '(SELECT id FROM prep_weekly_schedules WHERE week_start=?)',
+            (week_start,)).fetchone()['c']
+    if email_service:
+        email_service.send_notification(
+            'prep',
+            subject=f'Weekly prep schedule created for {week_start}',
+            lines=[
+                f'Week start: {week_start}',
+                f'Tasks scheduled: {task_count}',
+                f'Created by: {session.get("role","admin")}',
+            ],
+            link_path=f'/prep/weekly/{week_start}',
+            actor=session.get('role','admin'),
+        )
     return redirect(url_for('prep.prep_weekly_view', week_start=week_start))
 
 @prep.route('/weekly/<week_start>/report')
@@ -558,6 +579,18 @@ def lock_week(week_start):
         conn.execute('''UPDATE prep_weekly_schedules
             SET locked=1,locked_by=?,locked_at=datetime('now','localtime') WHERE week_start=?''',
             (session.get('role','admin'), week_start))
+    if email_service:
+        email_service.send_notification(
+            'prep',
+            subject=f'Weekly prep schedule LOCKED ({week_start})',
+            lines=[
+                f'Week: {week_start}',
+                f'Locked by: {session.get("role","admin")}',
+                'Staff can no longer modify this week.',
+            ],
+            link_path=f'/prep/weekly/{week_start}',
+            actor=session.get('role','admin'),
+        )
     return redirect(url_for('prep.prep_weekly_view', week_start=week_start))
 
 @prep.route('/weekly/batch-save', methods=['POST'])
@@ -655,6 +688,23 @@ def toggle_issue(status_id):
         else:
             conn.execute('UPDATE prep_daily_status SET issue_flag=1, note=? WHERE id=?',
                          (note or None, status_id))
+        if flag == 1 and email_service:
+            ctx = conn.execute('''SELECT ds.date, ds.day_of_week, wt.task_name_en, wt.assigned_to
+                FROM prep_daily_status ds JOIN prep_weekly_tasks wt ON wt.id=ds.weekly_task_id
+                WHERE ds.id=?''', (status_id,)).fetchone()
+            if ctx:
+                email_service.send_notification(
+                    'prep',
+                    subject=f'Prep issue flagged: {ctx["task_name_en"]} ({ctx["date"]})',
+                    lines=[
+                        f'Task: {ctx["task_name_en"]}',
+                        f'Date: {ctx["date"]} ({ctx["day_of_week"]})',
+                        f'Assigned: {ctx["assigned_to"] or "-"}',
+                        f'Note: {note or "-"}',
+                    ],
+                    link_path=f'/prep/weekly/{(datetime.strptime(ctx["date"],"%Y-%m-%d").date() - timedelta(days=DAYS.index(ctx["day_of_week"]))).isoformat()}',
+                    actor=session.get('role',''),
+                )
     if request.headers.get('X-Requested-With')=='XMLHttpRequest':
         return jsonify({'issue_flag': flag})
     return redirect(request.referrer or url_for('prep.prep_today'))
