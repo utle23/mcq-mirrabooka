@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+{% block title %}Training — {{ s.trainee_name }}{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-graduation-cap me-2" style="color:#C0392B"></i>Training Report</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.report-cover {
+  background: linear-gradient(135deg, #1A1A2E 0%, #C0392B 100%);
+  border-radius: 12px; padding: 24px 28px; color: #fff; margin-bottom: 24px;
+  box-shadow: 0 4px 20px rgba(192,57,43,.25);
+}
+.report-meta { font-size: 0.82rem; opacity: .75; }
+.report-meta span { margin-right: 16px; }
+
+.stat-chip {
+  border-radius: 20px; padding: 5px 14px; font-size: 0.78rem; font-weight: 700;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+
+.cat-header {
+  background: #F4F6F9; border-left: 3px solid #C0392B;
+  padding: 7px 12px; border-radius: 0 4px 4px 0;
+  font-size: 0.82rem; font-weight: 700; color: #1A1A2E;
+  margin: 14px 0 6px;
+}
+.topic-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 10px; border-radius: 6px; margin-bottom: 4px;
+  font-size: 0.86rem;
+}
+.topic-item.achieved       { background: #F1F8E9; }
+.topic-item.needs_practice { background: #FFF8E1; }
+.topic-item.not_covered    { background: #fafafa; color: #999; }
+
+.topic-status-icon { width: 22px; height: 22px; border-radius: 5px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.7rem; flex-shrink: 0; }
+
+.summary-card {
+  border-radius: 8px; padding: 14px 16px; margin-bottom: 12px;
+  border-left: 4px solid;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Back + Actions -->
+<div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+  <a href="/training/" class="btn btn-sm btn-outline-secondary">
+    <i class="fas fa-arrow-left me-1"></i>All Sessions
+  </a>
+  {% if is_admin %}
+  <a href="/training/{{ s.id }}/edit" class="btn btn-sm btn-outline-primary">
+    <i class="fas fa-pen me-1"></i>Edit
+  </a>
+  <form method="POST" action="/training/{{ s.id }}/delete" class="d-inline"
+        onsubmit="return confirm('Delete this session?')">
+    <button type="submit" class="btn btn-sm btn-outline-danger">
+      <i class="fas fa-trash me-1"></i>Delete
+    </button>
+  </form>
+  {% endif %}
+</div>
+
+<!-- Cover -->
+<div class="report-cover">
+  <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
+    <div>
+      <div style="font-size:0.7rem;opacity:.55;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px">
+        Training Assessment Report
+      </div>
+      <h4 class="fw-bold mb-1">{{ s.trainee_name }}</h4>
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+        <span class="badge" style="background:rgba(255,255,255,.2);font-size:0.78rem">
+          <i class="fas fa-id-badge me-1"></i>{{ s.trainee_role }}
+        </span>
+        <span class="badge" style="background:rgba(255,255,255,.2);font-size:0.78rem">
+          <i class="fas fa-user me-1"></i>Trainer: {{ s.trainer_name }}
+        </span>
+      </div>
+      <div class="report-meta mt-2">
+        <span><i class="fas fa-calendar me-1"></i>{{ s.session_date }}</span>
+        <span><i class="fas fa-clock me-1"></i>
+          {% if s.shift=='morning' %}Morning{% elif s.shift=='afternoon' %}Afternoon{% else %}Full Day{% endif %}
+        </span>
+      </div>
+    </div>
+    {% if s.overall_rating %}
+    {% set ri = rating_info.get(s.overall_rating, ('—','#fff','#fff')) %}
+    <div style="background:rgba(255,255,255,.15);border-radius:10px;padding:12px 18px;text-align:center">
+      <div style="font-size:0.68rem;opacity:.7;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">Overall Rating</div>
+      <div class="fw-bold" style="font-size:1.2rem">{{ ri[0] }}</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="row g-4">
+
+  <!-- Left: Topics -->
+  <div class="col-12 col-lg-7">
+    <div class="card shadow-sm">
+      <div class="card-header d-flex align-items-center gap-2 py-2">
+        <i class="fas fa-list-check" style="color:#C0392B"></i>
+        <h6 class="mb-0 me-auto">Training Topics</h6>
+        <!-- Summary chips -->
+        <span class="stat-chip" style="background:#E8F5E9;color:#2E7D32">
+          <i class="fas fa-check"></i>{{ cnt.achieved }} achieved
+        </span>
+        <span class="stat-chip" style="background:#FFF8E1;color:#E65100">
+          <i class="fas fa-exclamation"></i>{{ cnt.needs_practice }} needs practice
+        </span>
+        {% if cnt.not_covered %}
+        <span class="stat-chip" style="background:#F5F5F5;color:#757575">
+          <i class="fas fa-minus"></i>{{ cnt.not_covered }} not covered
+        </span>
+        {% endif %}
+      </div>
+      <div class="card-body">
+
+        <!-- Progress bar -->
+        {% if total > 0 %}
+        <div class="mb-3">
+          <div class="d-flex justify-content-between small text-muted mb-1">
+            <span>Progress</span>
+            <span>{{ cnt.achieved }}/{{ total }} achieved ({{ (cnt.achieved/total*100)|round|int }}%)</span>
+          </div>
+          <div style="height:8px;border-radius:4px;overflow:hidden;background:#eee;display:flex">
+            <div style="width:{{ (cnt.achieved/total*100)|round|int }}%;background:#43A047;transition:width .5s"></div>
+            <div style="width:{{ (cnt.needs_practice/total*100)|round|int }}%;background:#FB8C00"></div>
+          </div>
+        </div>
+        {% endif %}
+
+        {% if by_cat %}
+          {% for cat, cat_items in by_cat.items() %}
+          <div class="cat-header">{{ cat }}</div>
+          {% for item in cat_items %}
+          <div class="topic-item {{ item.status }}">
+            {% if item.status == 'achieved' %}
+            <div class="topic-status-icon" style="background:#43A047">
+              <i class="fas fa-check" style="color:#fff"></i>
+            </div>
+            {% elif item.status == 'needs_practice' %}
+            <div class="topic-status-icon" style="background:#FB8C00">
+              <i class="fas fa-exclamation" style="color:#fff"></i>
+            </div>
+            {% else %}
+            <div class="topic-status-icon" style="background:#e0e0e0">
+              <i class="fas fa-minus" style="color:#999"></i>
+            </div>
+            {% endif %}
+            <span class="flex-grow-1">{{ item.item_name }}</span>
+            {% if item.notes %}
+            <span style="font-size:0.72rem;color:#888;font-style:italic">{{ item.notes }}</span>
+            {% endif %}
+          </div>
+          {% endfor %}
+          {% endfor %}
+        {% else %}
+        <div class="text-muted text-center py-3 small">No topics recorded.</div>
+        {% endif %}
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Right: Summary -->
+  <div class="col-12 col-lg-5">
+
+    {% if s.key_achievements %}
+    <div class="summary-card" style="background:#F1F8E9;border-color:#43A047">
+      <div class="fw-semibold small mb-2" style="color:#2E7D32">
+        <i class="fas fa-star me-1"></i>Key Achievements
+      </div>
+      <div style="font-size:0.86rem;color:#333;white-space:pre-wrap">{{ s.key_achievements }}</div>
+    </div>
+    {% endif %}
+
+    {% if s.needs_improvement %}
+    <div class="summary-card" style="background:#FFF8E1;border-color:#FB8C00">
+      <div class="fw-semibold small mb-2" style="color:#E65100">
+        <i class="fas fa-wrench me-1"></i>Needs More Practice
+      </div>
+      <div style="font-size:0.86rem;color:#333;white-space:pre-wrap">{{ s.needs_improvement }}</div>
+    </div>
+    {% endif %}
+
+    {% if s.next_session_focus %}
+    <div class="summary-card" style="background:#E3F2FD;border-color:#1565C0">
+      <div class="fw-semibold small mb-2" style="color:#1565C0">
+        <i class="fas fa-forward me-1"></i>Next Session Focus
+      </div>
+      <div style="font-size:0.86rem;color:#333;white-space:pre-wrap">{{ s.next_session_focus }}</div>
+    </div>
+    {% endif %}
+
+    {% if s.general_notes %}
+    <div class="summary-card" style="background:#F5F5F5;border-color:#9E9E9E">
+      <div class="fw-semibold small mb-2" style="color:#555">
+        <i class="fas fa-sticky-note me-1"></i>General Notes
+      </div>
+      <div style="font-size:0.86rem;color:#333;white-space:pre-wrap">{{ s.general_notes }}</div>
+    </div>
+    {% endif %}
+
+    {% if not s.key_achievements and not s.needs_improvement and not s.next_session_focus and not s.general_notes %}
+    <div class="text-muted text-center py-4 small">No summary notes recorded.</div>
+    {% endif %}
+
+    <!-- Meta -->
+    <div class="card shadow-sm mt-2">
+      <div class="card-body py-2 px-3" style="font-size:0.75rem;color:#888">
+        <div>Submitted: {{ s.created_at[:16] if s.created_at else '—' }}</div>
+        {% if s.updated_at and s.updated_at != s.created_at %}
+        <div>Last edited: {{ s.updated_at[:16] }}</div>
+        {% endif %}
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

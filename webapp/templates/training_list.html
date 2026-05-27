@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}Training Assessments{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-graduation-cap me-2" style="color:#C0392B"></i>Training Assessments</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.rating-badge { border-radius: 6px; padding: 3px 10px; font-size: 0.75rem; font-weight: 700; }
+.session-card {
+  border-radius: 10px; border: 1px solid #e8eaed;
+  box-shadow: 0 1px 6px rgba(0,0,0,.05);
+  transition: box-shadow .15s;
+}
+.session-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,.10); }
+.stat-box { border-radius: 8px; padding: 12px 16px; text-align: center; }
+.topic-bar { height: 6px; border-radius: 3px; overflow: hidden; background: #eee; }
+.topic-bar-fill { height: 100%; border-radius: 3px; transition: width .3s; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Header -->
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-3 mb-4">
+  <div>
+    <h5 class="mb-0 fw-bold">Training Assessments</h5>
+    <div class="text-muted small">Record and track staff training sessions</div>
+  </div>
+  <a href="/training/new" class="btn btn-danger fw-semibold">
+    <i class="fas fa-plus me-1"></i>New Training Session
+  </a>
+</div>
+
+<!-- Stats -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="stat-box" style="background:#E3F2FD">
+      <div class="fw-bold fs-4" style="color:#1565C0">{{ sessions|length }}</div>
+      <div class="text-muted small">Total Sessions</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="stat-box" style="background:#E8F5E9">
+      <div class="fw-bold fs-4" style="color:#2E7D32">
+        {{ sessions|selectattr('overall_rating','eq','excellent')|list|length +
+           sessions|selectattr('overall_rating','eq','good')|list|length }}
+      </div>
+      <div class="text-muted small">Excellent / Good</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="stat-box" style="background:#FFF3E0">
+      <div class="fw-bold fs-4" style="color:#E65100">
+        {{ sessions|map(attribute='trainee_name')|unique|list|length }}
+      </div>
+      <div class="text-muted small">Trainees</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="stat-box" style="background:#F3E5F5">
+      <div class="fw-bold fs-4" style="color:#6A1B9A">
+        {{ sessions|selectattr('session_date','ge', (sessions|map(attribute='session_date')|sort|last)[:7] if sessions else '')|list|length }}
+      </div>
+      <div class="text-muted small">This Month</div>
+    </div>
+  </div>
+</div>
+
+<!-- Filters -->
+<div class="card shadow-sm mb-4">
+  <div class="card-body py-2">
+    <form method="GET" class="d-flex flex-wrap gap-2 align-items-center">
+      <select name="trainee" class="form-select form-select-sm" style="max-width:200px">
+        <option value="">All Trainees</option>
+        {% for t in trainees %}
+        <option value="{{ t }}" {% if filter_trainee==t %}selected{% endif %}>{{ t }}</option>
+        {% endfor %}
+      </select>
+      <select name="role" class="form-select form-select-sm" style="max-width:160px">
+        <option value="">All Roles</option>
+        {% for r in roles %}
+        <option value="{{ r }}" {% if filter_role==r %}selected{% endif %}>{{ r }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn btn-sm btn-outline-secondary">
+        <i class="fas fa-filter me-1"></i>Filter
+      </button>
+      {% if filter_trainee or filter_role %}
+      <a href="/training/" class="btn btn-sm btn-outline-danger">
+        <i class="fas fa-times me-1"></i>Clear
+      </a>
+      {% endif %}
+    </form>
+  </div>
+</div>
+
+<!-- Sessions list -->
+{% if not sessions %}
+<div class="text-center py-5 text-muted">
+  <i class="fas fa-graduation-cap fa-3x mb-3 d-block opacity-25"></i>
+  <h6>No training sessions yet.</h6>
+  <a href="/training/new" class="btn btn-sm btn-danger mt-2">Record First Session</a>
+</div>
+{% else %}
+
+<div class="row g-3">
+  {% for s in sessions %}
+  {% set ri = ratings.get(s.overall_rating, ('—', '#aaa', '#fafafa')) %}
+  <div class="col-12 col-lg-6">
+    <div class="session-card bg-white p-3">
+      <div class="d-flex align-items-start gap-3">
+
+        <!-- Left: avatar -->
+        <div style="width:44px;height:44px;border-radius:10px;background:#1A1A2E;
+                    display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          <i class="fas fa-user-graduate" style="color:#fff;font-size:1.1rem"></i>
+        </div>
+
+        <!-- Middle: info -->
+        <div class="flex-grow-1 min-width-0">
+          <div class="d-flex align-items-center gap-2 flex-wrap">
+            <span class="fw-bold" style="font-size:0.95rem">{{ s.trainee_name }}</span>
+            <span class="badge" style="background:#1A1A2E;font-size:0.68rem">{{ s.trainee_role }}</span>
+            {% if s.overall_rating %}
+            <span class="rating-badge" style="background:{{ ri[2] }};color:{{ ri[1] }}">
+              {{ ri[0] }}
+            </span>
+            {% endif %}
+          </div>
+          <div class="text-muted small mt-1">
+            <i class="fas fa-user me-1"></i>Trainer: {{ s.trainer_name or '—' }}
+            <span class="ms-2"><i class="fas fa-calendar me-1"></i>{{ s.session_date }}</span>
+            <span class="ms-2"><i class="fas fa-clock me-1"></i>
+              {% if s.shift=='morning' %}Morning{% elif s.shift=='afternoon' %}Afternoon{% else %}Full Day{% endif %}
+            </span>
+          </div>
+
+          <!-- Topic progress bar -->
+          {% if s.cnt_total > 0 %}
+          <div class="mt-2">
+            <div class="topic-bar">
+              <div class="topic-bar-fill" style="width:{{ (s.cnt_achieved / s.cnt_total * 100)|round|int }}%;background:#43A047"></div>
+            </div>
+            <div class="d-flex gap-3 mt-1" style="font-size:0.7rem;color:#888">
+              <span><i class="fas fa-check-circle me-1" style="color:#43A047"></i>{{ s.cnt_achieved }} achieved</span>
+              <span><i class="fas fa-exclamation-circle me-1" style="color:#FB8C00"></i>{{ s.cnt_needs_practice }} needs practice</span>
+              <span class="text-muted">/ {{ s.cnt_total }} topics</span>
+            </div>
+          </div>
+          {% endif %}
+        </div>
+
+        <!-- Right: actions -->
+        <div class="d-flex flex-column gap-1 flex-shrink-0">
+          <a href="/training/{{ s.id }}" class="btn btn-sm btn-outline-primary" style="font-size:0.72rem">
+            <i class="fas fa-eye me-1"></i>View
+          </a>
+          {% if is_admin %}
+          <a href="/training/{{ s.id }}/edit" class="btn btn-sm btn-outline-secondary" style="font-size:0.72rem">
+            <i class="fas fa-pen me-1"></i>Edit
+          </a>
+          {% endif %}
+        </div>
+
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% endblock %}

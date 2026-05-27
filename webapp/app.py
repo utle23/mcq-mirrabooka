@@ -13,11 +13,13 @@ from pastry_routes    import pastry    as pastry_bp,    init_pastry_tables
 from inventory_routes import inventory as inventory_bp, init_inventory_tables
 from job_routes       import jobs      as jobs_bp,      init_job_tables
 from rules_routes     import rules_bp,                  init_rules_tables
+from training_routes  import training_bp,               init_training_tables
 app.register_blueprint(prep_bp)
 app.register_blueprint(pastry_bp)
 app.register_blueprint(inventory_bp)
 app.register_blueprint(jobs_bp)
 app.register_blueprint(rules_bp)
+app.register_blueprint(training_bp)
 DB_PATH      = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mcq_restaurant.db')
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -3102,6 +3104,7 @@ init_pastry_tables(DB_PATH)
 init_inventory_tables(DB_PATH)
 init_job_tables(DB_PATH)
 init_rules_tables(DB_PATH)
+init_training_tables(DB_PATH)
 
 if __name__ == '__main__':
     print('\n' + '='*50)

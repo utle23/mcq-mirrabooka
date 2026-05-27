@@ -1,0 +1,448 @@
+{% extends "base.html" %}
+{% block title %}{% if edit_mode %}Edit Training Session{% else %}New Training Session{% endif %}{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold">
+    <i class="fas fa-graduation-cap me-2" style="color:#C0392B"></i>
+    {% if edit_mode %}Edit Training Session{% else %}New Training Session{% endif %}
+  </span>
+{% endblock %}
+
+{% block head %}
+<style>
+.form-section {
+  background: #fff; border-radius: 10px; border: 1px solid #e8eaed;
+  box-shadow: 0 1px 6px rgba(0,0,0,.04); margin-bottom: 20px; overflow: hidden;
+}
+.form-section-header {
+  background: #1A1A2E; color: #fff; padding: 11px 18px;
+  display: flex; align-items: center; gap: 10px;
+}
+.form-section-header .sec-num {
+  background: #C0392B; color: #fff; width: 24px; height: 24px;
+  border-radius: 5px; display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 0.78rem; flex-shrink: 0;
+}
+.form-section-body { padding: 18px 20px; }
+
+/* ── Topic rows ── */
+.topic-category-header {
+  background: #F4F6F9; border-left: 3px solid #C0392B;
+  padding: 6px 12px; border-radius: 0 4px 4px 0;
+  font-size: 0.8rem; font-weight: 700; color: #1A1A2E;
+  margin: 14px 0 6px;
+}
+.topic-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px; border-radius: 6px; margin-bottom: 4px;
+  border: 1px solid #f0f0f0; background: #fafafa;
+  transition: background .15s;
+}
+.topic-row:hover { background: #f5f5f5; }
+.topic-row.status-achieved     { background: #F1F8E9; border-color: #C5E1A5; }
+.topic-row.status-needs_practice { background: #FFF8E1; border-color: #FFE082; }
+.topic-row.status-not_covered  { background: #fafafa; }
+
+.topic-name { flex-grow: 1; font-size: 0.85rem; color: #333; }
+.topic-name.custom-input input { font-size: 0.83rem; }
+
+/* Status toggle buttons */
+.status-btn-group { display: flex; gap: 3px; flex-shrink: 0; }
+.sbtn {
+  width: 28px; height: 28px; border-radius: 6px; border: 1.5px solid #ddd;
+  background: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  font-size: 0.72rem; transition: all .12s; flex-shrink: 0;
+}
+.sbtn:hover { opacity: .8; transform: scale(1.05); }
+.sbtn.active-achieved     { background: #43A047; border-color: #2E7D32; color: #fff; }
+.sbtn.active-needs_practice { background: #FB8C00; border-color: #E65100; color: #fff; }
+.sbtn.active-not_covered  { background: #9E9E9E; border-color: #757575; color: #fff; }
+
+/* Rating selector */
+.rating-opt {
+  border: 2px solid #e0e0e0; border-radius: 8px; padding: 8px 14px;
+  cursor: pointer; text-align: center; transition: all .15s;
+}
+.rating-opt:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,.1); }
+.rating-opt.selected { border-width: 2.5px; }
+.rating-opt input { display: none; }
+
+/* Empty state */
+.topics-placeholder {
+  text-align: center; padding: 30px; color: #aaa;
+  border: 2px dashed #e0e0e0; border-radius: 8px;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-2 mb-3">
+  <a href="/training/" class="btn btn-sm btn-outline-secondary">
+    <i class="fas fa-arrow-left me-1"></i>Back
+  </a>
+  {% if edit_mode and s %}
+  <span class="text-muted small">Editing session for <strong>{{ s.trainee_name }}</strong></span>
+  {% endif %}
+</div>
+
+<form method="POST" id="trainingForm">
+
+  <!-- ── Section 1: Session Info ── -->
+  <div class="form-section">
+    <div class="form-section-header">
+      <div class="sec-num">1</div>
+      <span class="fw-semibold" style="font-size:0.92rem">Session Information</span>
+    </div>
+    <div class="form-section-body">
+      <div class="row g-3">
+        <div class="col-12 col-md-5">
+          <label class="form-label fw-semibold small">Trainee Name <span class="text-danger">*</span></label>
+          <input type="text" name="trainee_name" class="form-control form-control-sm"
+                 list="staff-list" required
+                 value="{{ s.trainee_name if s else '' }}"
+                 placeholder="Select or type new name">
+          <datalist id="staff-list">
+            {% for st in staff_list %}
+            <option value="{{ st }}">
+            {% endfor %}
+          </datalist>
+          <div class="text-muted" style="font-size:0.7rem;margin-top:3px">Select existing staff or type a new name</div>
+        </div>
+        <div class="col-12 col-md-3">
+          <label class="form-label fw-semibold small">Role / Position <span class="text-danger">*</span></label>
+          <select name="trainee_role" id="roleSelect" class="form-select form-select-sm" required onchange="loadTopics(this.value)">
+            <option value="">— Select role —</option>
+            {% for r in roles %}
+            <option value="{{ r }}" {% if s and s.trainee_role==r %}selected{% endif %}>{{ r }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label fw-semibold small">Trainer Name <span class="text-danger">*</span></label>
+          <input type="text" name="trainer_name" class="form-control form-control-sm"
+                 list="staff-list" required
+                 value="{{ s.trainer_name if s else '' }}"
+                 placeholder="Who conducted this training?">
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label fw-semibold small">Session Date</label>
+          <input type="date" name="session_date" class="form-control form-control-sm"
+                 value="{{ s.session_date if s else today }}" required>
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label fw-semibold small">Shift</label>
+          <select name="shift" class="form-select form-select-sm">
+            {% for val, label in shifts %}
+            <option value="{{ val }}" {% if s and s.shift==val %}selected{% elif not s and val=='full' %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Section 2: Training Topics ── -->
+  <div class="form-section">
+    <div class="form-section-header">
+      <div class="sec-num">2</div>
+      <span class="fw-semibold" style="font-size:0.92rem">Training Topics</span>
+      <span class="ms-auto text-white-50" style="font-size:0.72rem">
+        <span id="achievedCount" class="me-2">0 achieved</span>
+        <span id="practiceCount">0 needs practice</span>
+      </span>
+    </div>
+    <div class="form-section-body">
+
+      <!-- Legend -->
+      <div class="d-flex gap-3 mb-3 flex-wrap" style="font-size:0.75rem">
+        <span><span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:#43A047;vertical-align:middle;margin-right:4px"></span>Achieved</span>
+        <span><span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:#FB8C00;vertical-align:middle;margin-right:4px"></span>Needs Practice</span>
+        <span><span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:#9E9E9E;vertical-align:middle;margin-right:4px"></span>Not Covered</span>
+      </div>
+
+      <div id="topicsContainer">
+        {% if edit_mode and items %}
+          {# Render existing items grouped by category #}
+          {% set ns = namespace(cur_cat='') %}
+          {% for item in items %}
+            {% if item.category != ns.cur_cat %}
+              {% set ns.cur_cat = item.category %}
+              <div class="topic-category-header">{{ item.category }}</div>
+            {% endif %}
+            <div class="topic-row status-{{ item.status }}" id="row-{{ loop.index }}">
+              <input type="hidden" name="topic_category[]" value="{{ item.category }}">
+              <input type="hidden" name="topic_name[]" value="{{ item.item_name }}">
+              <input type="hidden" name="topic_status[]" value="{{ item.status }}" class="status-val">
+              <input type="hidden" name="topic_notes[]" value="{{ item.notes }}">
+              <span class="topic-name">{{ item.item_name }}</span>
+              <div class="status-btn-group">
+                <button type="button" class="sbtn {% if item.status=='achieved' %}active-achieved{% endif %}"
+                        data-status="achieved" onclick="setStatus(this)" title="Achieved">
+                  <i class="fas fa-check"></i>
+                </button>
+                <button type="button" class="sbtn {% if item.status=='needs_practice' %}active-needs_practice{% endif %}"
+                        data-status="needs_practice" onclick="setStatus(this)" title="Needs Practice">
+                  <i class="fas fa-exclamation"></i>
+                </button>
+                <button type="button" class="sbtn {% if item.status=='not_covered' %}active-not_covered{% endif %}"
+                        data-status="not_covered" onclick="setStatus(this)" title="Not Covered">
+                  <i class="fas fa-minus"></i>
+                </button>
+              </div>
+            </div>
+          {% endfor %}
+        {% else %}
+          <div class="topics-placeholder" id="topicsPlaceholder">
+            <i class="fas fa-list-check fa-2x mb-2 d-block opacity-25"></i>
+            <div class="small">Select a role above to load training topics</div>
+          </div>
+        {% endif %}
+      </div>
+
+      <!-- Add custom item -->
+      <div class="mt-3 pt-2 border-top">
+        <div class="d-flex gap-2 align-items-end flex-wrap">
+          <div style="flex:0 0 180px">
+            <label class="form-label small text-muted mb-1">Category</label>
+            <input type="text" id="customCat" class="form-control form-control-sm" placeholder="e.g. Customer Service">
+          </div>
+          <div style="flex:1;min-width:200px">
+            <label class="form-label small text-muted mb-1">Custom Topic</label>
+            <input type="text" id="customItem" class="form-control form-control-sm" placeholder="e.g. Specific task or skill">
+          </div>
+          <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addCustomItem()" style="flex-shrink:0">
+            <i class="fas fa-plus me-1"></i>Add
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Section 3: Summary & Rating ── -->
+  <div class="form-section">
+    <div class="form-section-header">
+      <div class="sec-num">3</div>
+      <span class="fw-semibold" style="font-size:0.92rem">Summary & Overall Rating</span>
+    </div>
+    <div class="form-section-body">
+
+      <!-- Rating -->
+      <div class="mb-4">
+        <label class="form-label fw-semibold small">Overall Performance Rating</label>
+        <div class="d-flex gap-2 flex-wrap">
+          {% for val, label, color, bg in ratings %}
+          <label class="rating-opt {% if s and s.overall_rating==val %}selected{% endif %}"
+                 style="border-color:{{ color }};{% if s and s.overall_rating==val %}background:{{ bg }}{% endif %}"
+                 id="ropt-{{ val }}" onclick="selectRating('{{ val }}','{{ color }}','{{ bg }}')">
+            <input type="radio" name="overall_rating" value="{{ val }}" {% if s and s.overall_rating==val %}checked{% endif %}>
+            <div class="fw-bold" style="color:{{ color }};font-size:0.83rem">{{ label }}</div>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="row g-3">
+        <div class="col-12 col-md-6">
+          <label class="form-label fw-semibold small">
+            <i class="fas fa-star me-1" style="color:#43A047"></i>Key Achievements
+          </label>
+          <textarea name="key_achievements" class="form-control form-control-sm" rows="3"
+                    placeholder="What did the trainee do well today?">{{ s.key_achievements if s else '' }}</textarea>
+        </div>
+        <div class="col-12 col-md-6">
+          <label class="form-label fw-semibold small">
+            <i class="fas fa-wrench me-1" style="color:#FB8C00"></i>Needs More Practice
+          </label>
+          <textarea name="needs_improvement" class="form-control form-control-sm" rows="3"
+                    placeholder="What areas need more work or repetition?">{{ s.needs_improvement if s else '' }}</textarea>
+        </div>
+        <div class="col-12 col-md-6">
+          <label class="form-label fw-semibold small">
+            <i class="fas fa-forward me-1" style="color:#1565C0"></i>Next Session Focus
+          </label>
+          <textarea name="next_session_focus" class="form-control form-control-sm" rows="2"
+                    placeholder="What should be covered in the next training session?">{{ s.next_session_focus if s else '' }}</textarea>
+        </div>
+        <div class="col-12 col-md-6">
+          <label class="form-label fw-semibold small">
+            <i class="fas fa-sticky-note me-1" style="color:#888"></i>General Notes
+          </label>
+          <textarea name="general_notes" class="form-control form-control-sm" rows="2"
+                    placeholder="Any other observations or notes...">{{ s.general_notes if s else '' }}</textarea>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Submit -->
+  <div class="d-flex gap-2 align-items-center mb-4">
+    <button type="submit" class="btn btn-danger fw-semibold px-4">
+      <i class="fas fa-save me-2"></i>{% if edit_mode %}Save Changes{% else %}Submit Training Report{% endif %}
+    </button>
+    <a href="/training/" class="btn btn-outline-secondary">Cancel</a>
+    {% if edit_mode and is_admin %}
+    <form method="POST" action="/training/{{ s.id }}/delete" class="ms-auto d-inline"
+          onsubmit="return confirm('Delete this training session?')">
+      <button type="submit" class="btn btn-sm btn-outline-danger">
+        <i class="fas fa-trash me-1"></i>Delete
+      </button>
+    </form>
+    {% endif %}
+  </div>
+
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const TOPICS = {{ topics_json | safe }};
+const EDIT_MODE = {{ 'true' if edit_mode else 'false' }};
+
+{% if edit_mode and s %}
+// In edit mode, restore ratings display and counts on load
+window.addEventListener('DOMContentLoaded', () => {
+  updateCounts();
+});
+{% endif %}
+
+function loadTopics(role) {
+  const container = document.getElementById('topicsContainer');
+  const placeholder = document.getElementById('topicsPlaceholder');
+
+  // In edit mode, only load if container is empty (no existing items rendered)
+  if (EDIT_MODE && container.querySelectorAll('.topic-row').length > 0) {
+    if (!confirm('Loading new topics will replace current items. Continue?')) {
+      document.getElementById('roleSelect').value = '{{ s.trainee_role if s else "" }}';
+      return;
+    }
+  }
+
+  if (!role || !TOPICS[role]) {
+    container.innerHTML = `<div class="topics-placeholder" id="topicsPlaceholder">
+      <i class="fas fa-list-check fa-2x mb-2 d-block opacity-25"></i>
+      <div class="small">Select a role to load training topics</div>
+    </div>`;
+    updateCounts();
+    return;
+  }
+
+  const groups = TOPICS[role];
+  let html = '';
+  groups.forEach(group => {
+    html += `<div class="topic-category-header">${group.category}</div>`;
+    group.items.forEach(item => {
+      html += topicRowHTML(group.category, item, 'not_covered');
+    });
+  });
+
+  container.innerHTML = html;
+  updateCounts();
+}
+
+function topicRowHTML(category, name, status) {
+  return `<div class="topic-row status-${status}">
+    <input type="hidden" name="topic_category[]" value="${escHtml(category)}">
+    <input type="hidden" name="topic_name[]" value="${escHtml(name)}">
+    <input type="hidden" name="topic_status[]" value="${status}" class="status-val">
+    <input type="hidden" name="topic_notes[]" value="">
+    <span class="topic-name">${escHtml(name)}</span>
+    <div class="status-btn-group">
+      <button type="button" class="sbtn ${status==='achieved'?'active-achieved':''}"
+              data-status="achieved" onclick="setStatus(this)" title="Achieved">
+        <i class="fas fa-check"></i>
+      </button>
+      <button type="button" class="sbtn ${status==='needs_practice'?'active-needs_practice':''}"
+              data-status="needs_practice" onclick="setStatus(this)" title="Needs Practice">
+        <i class="fas fa-exclamation"></i>
+      </button>
+      <button type="button" class="sbtn ${status==='not_covered'?'active-not_covered':''}"
+              data-status="not_covered" onclick="setStatus(this)" title="Not Covered">
+        <i class="fas fa-minus"></i>
+      </button>
+    </div>
+  </div>`;
+}
+
+function setStatus(btn) {
+  const row    = btn.closest('.topic-row');
+  const newSt  = btn.dataset.status;
+  const hidden = row.querySelector('.status-val');
+
+  // Clear all active classes
+  row.querySelectorAll('.sbtn').forEach(b => {
+    b.className = 'sbtn';
+  });
+  // Set active
+  btn.className = `sbtn active-${newSt}`;
+  hidden.value = newSt;
+
+  // Update row background
+  row.className = `topic-row status-${newSt}`;
+  updateCounts();
+}
+
+function updateCounts() {
+  const rows = document.querySelectorAll('#topicsContainer .topic-row');
+  let achieved = 0, practice = 0;
+  rows.forEach(row => {
+    const v = row.querySelector('.status-val')?.value;
+    if (v === 'achieved') achieved++;
+    else if (v === 'needs_practice') practice++;
+  });
+  document.getElementById('achievedCount').textContent = achieved + ' achieved';
+  document.getElementById('practiceCount').textContent = practice + ' needs practice';
+}
+
+function addCustomItem() {
+  const cat  = document.getElementById('customCat').value.trim() || 'Custom';
+  const name = document.getElementById('customItem').value.trim();
+  if (!name) { alert('Please enter a topic name.'); return; }
+
+  const container = document.getElementById('topicsContainer');
+  const placeholder = document.getElementById('topicsPlaceholder');
+  if (placeholder) placeholder.remove();
+
+  // Check if category header exists, add if not
+  const existingHdrs = [...container.querySelectorAll('.topic-category-header')];
+  const catHdr = existingHdrs.find(h => h.textContent.trim() === cat);
+  if (!catHdr) {
+    container.insertAdjacentHTML('beforeend',
+      `<div class="topic-category-header">${escHtml(cat)}</div>`);
+  }
+  container.insertAdjacentHTML('beforeend', topicRowHTML(cat, name, 'not_covered'));
+
+  document.getElementById('customCat').value = '';
+  document.getElementById('customItem').value = '';
+  updateCounts();
+}
+
+const RATING_COLORS = {
+  {% for val, label, color, bg in ratings %}
+  '{{ val }}': { color: '{{ color }}', bg: '{{ bg }}' },
+  {% endfor %}
+};
+
+function selectRating(val, color, bg) {
+  document.querySelectorAll('.rating-opt').forEach(el => {
+    el.classList.remove('selected');
+    el.style.background = '';
+  });
+  const el = document.getElementById('ropt-' + val);
+  if (el) {
+    el.classList.add('selected');
+    el.style.background = bg;
+    el.querySelector('input').checked = true;
+  }
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Init edit mode
+{% if edit_mode and items %}
+document.addEventListener('DOMContentLoaded', updateCounts);
+{% endif %}
+</script>
+{% endblock %}
