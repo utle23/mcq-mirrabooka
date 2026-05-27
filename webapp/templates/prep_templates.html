@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}Task Templates{% endblock %}
+{% block topbar_title %}<span class="fw-bold"><i class="fas fa-tasks me-2"></i>Prep Task Templates</span>{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <span class="text-muted small">{{ templates|selectattr('active')|list|length }} active / {{ templates|length }} total tasks</span>
+  <button class="btn btn-success btn-sm" data-bs-toggle="modal" data-bs-target="#addModal">
+    <i class="fas fa-plus me-1"></i>Add Task
+  </button>
+</div>
+
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-sm table-hover mb-0 align-middle">
+      <thead class="table-dark">
+        <tr>
+          <th style="width:110px">Station</th>
+          <th>Task (EN / VI)</th>
+          <th style="width:80px">Time</th>
+          <th style="width:130px">Active Days</th>
+          <th style="width:150px">Default Staff</th>
+          <th style="width:80px" class="text-center">Supplier</th>
+          <th style="width:80px" class="text-center">Status</th>
+          <th style="width:80px" class="text-center">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% set ns = namespace(station='') %}
+        {% for t in templates %}
+        {% if t.station.name_en != ns.station %}
+        {% set ns.station = t.station.name_en %}
+        <tr>
+          <td colspan="8" class="fw-bold py-1 px-2" style="background:{{ t.station.color }}20;color:{{ t.station.color }};border-left:4px solid {{ t.station.color }}">
+            {{ t.station.name_en }} — {{ t.station.name_vi }}
+          </td>
+        </tr>
+        {% endif %}
+        <tr class="{% if not t.active %}table-secondary{% endif %}">
+          <td>
+            <span class="badge" style="background:{{ t.station.color }}">{{ t.station.name_en }}</span>
+          </td>
+          <td>
+            <div class="fw-semibold {% if not t.active %}text-decoration-line-through{% endif %}">{{ t.task_name_en }}</div>
+            <div class="text-muted small">{{ t.task_name_vi }}</div>
+          </td>
+          <td class="text-center fw-semibold" style="color:#1B4332">{{ t.default_time or '—' }}</td>
+          <td>
+            {% for d in (t.active_days or '').split(',') %}
+            <span class="badge bg-secondary me-1" style="font-size:0.65rem">{{ d }}</span>
+            {% endfor %}
+          </td>
+          <td class="small">{{ t.default_assignee or '—' }}</td>
+          <td class="text-center">
+            {% if t.is_supplier %}
+            <span class="badge bg-primary"><i class="fas fa-truck me-1"></i>{{ t.supplier_name or 'Yes' }}</span>
+            {% else %}
+            <span class="text-muted small">—</span>
+            {% endif %}
+          </td>
+          <td class="text-center">
+            {% if t.active %}
+            <span class="badge bg-success">Active</span>
+            {% else %}
+            <span class="badge bg-secondary">Archived</span>
+            {% endif %}
+          </td>
+          <td class="text-center">
+            <button class="btn btn-sm btn-outline-primary"
+                    data-id="{{ t.id }}"
+                    data-en="{{ t.task_name_en }}"
+                    data-vi="{{ t.task_name_vi }}"
+                    data-station="{{ t.station_id }}"
+                    data-time="{{ t.default_time or '' }}"
+                    data-days="{{ t.active_days or '' }}"
+                    data-assignee="{{ t.default_assignee or '' }}"
+                    data-supplier="{{ t.is_supplier }}"
+                    data-sname="{{ t.supplier_name or '' }}"
+                    onclick="openEdit(this.dataset)">
+              <i class="fas fa-edit"></i>
+            </button>
+            <form method="POST" action="/prep/templates/{{ t.id }}/toggle" class="d-inline">
+              <button type="submit" class="btn btn-sm {% if t.active %}btn-outline-secondary{% else %}btn-outline-success{% endif %}"
+                      title="{% if t.active %}Archive{% else %}Restore{% endif %}">
+                <i class="fas fa-{% if t.active %}archive{% else %}undo{% endif %}"></i>
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Add Modal -->
+<div class="modal fade" id="addModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="POST" action="/prep/templates/add">
+        <div class="modal-header"><h5 class="modal-title">Add New Task</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          {% set fid = 'add' %}
+          {% include 'prep_task_form.html' %}
+        </div>
+        <div class="modal-footer">
+          <button type="submit" class="btn btn-success">Add Task</button>
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Modal -->
+<div class="modal fade" id="editModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="POST" id="editForm">
+        <div class="modal-header"><h5 class="modal-title">Edit Task</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body" id="editBody">
+          {% set fid = 'edit' %}
+          {% include 'prep_task_form.html' %}
+        </div>
+        <div class="modal-footer">
+          <button type="submit" class="btn btn-success">Save Changes</button>
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const STATIONS = {{ stations|tojson }};
+const STAFF    = {{ staff_list|tojson }};
+const DAYS     = {{ days|tojson }};
+const DAY_LBL  = {{ day_labels|tojson }};
+
+function openEdit(d) {
+  document.getElementById('editForm').action = `/prep/templates/${d.id}/edit`;
+  const b = document.getElementById('editBody');
+  b.querySelector('[name=task_name_en]').value      = d.en      || '';
+  b.querySelector('[name=task_name_vi]').value       = d.vi      || '';
+  b.querySelector('[name=station_id]').value         = d.station || 1;
+  b.querySelector('[name=default_time]').value       = d.time    || '';
+  b.querySelector('[name=default_assignee]').value   = d.assignee|| '';
+  b.querySelector('[name=supplier_name]').value      = d.sname   || '';
+  const isSupplier = (d.supplier === '1');
+  b.querySelector('[name=is_supplier]').checked      = isSupplier;
+  const supRow = b.querySelector('.supplier-row');
+  if (supRow) supRow.classList.toggle('d-none', !isSupplier);
+  const active = (d.days || '').split(',').map(s => s.trim()).filter(Boolean);
+  b.querySelectorAll('[name=active_days]').forEach(cb => {
+    cb.checked = active.includes(cb.value);
+  });
+  new bootstrap.Modal(document.getElementById('editModal')).show();
+}
+</script>
+{% endblock %}

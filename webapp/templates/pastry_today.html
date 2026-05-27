@@ -1,0 +1,350 @@
+{% extends "base.html" %}
+{% block title %}Today's Pastry{% endblock %}
+{% block topbar_title %}
+<span class="fw-bold"><i class="fas fa-cookie-bite me-2" style="color:#FF7043"></i>Today's Pastry</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.supplier-block {
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.07);
+  margin-bottom: 18px;
+}
+.supplier-hdr {
+  background: linear-gradient(90deg, #1B4332, #2D6A4F);
+  color: #fff;
+  padding: 10px 16px;
+  display: flex; align-items: center; gap: 10px;
+  font-weight: 700; font-size: 0.9rem;
+}
+.supplier-hdr .phone-badge {
+  background: rgba(255,255,255,0.18);
+  border-radius: 20px;
+  padding: 3px 12px;
+  font-size: 0.78rem; font-weight: 500;
+}
+.item-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 11px 16px;
+  border-bottom: 1px solid #f0f0f0;
+  background: #fff;
+  font-size: 0.83rem;
+}
+.item-row:last-child { border-bottom: none; }
+.item-row.today-row { background: #FFFDE7; }
+.item-row.order-row { background: #FFF3E0; }
+
+.item-names { min-width: 160px; flex: 1 1 160px; }
+.item-name-en { font-weight: 700; color: #1B4332; font-size: 0.86rem; }
+.item-name-vi { color: #888; font-size: 0.74rem; }
+
+.days-wrap { display: flex; flex-wrap: wrap; gap: 3px; min-width: 200px; flex: 1 1 200px; }
+.day-badge {
+  padding: 2px 8px; border-radius: 20px; font-size: 0.68rem; font-weight: 700;
+  border: 1px solid #ddd; color: #888; background: #f5f5f5;
+}
+.day-badge.today { background: #FF7043; color: #fff; border-color: #FF7043; }
+.day-badge.scheduled { background: #E8F5E9; color: #2E7D32; border-color: #A5D6A7; }
+
+.price-grid {
+  display: flex; gap: 10px; flex-wrap: wrap;
+}
+.price-box {
+  text-align: center;
+  min-width: 64px;
+}
+.price-label { font-size: 0.64rem; color: #999; text-transform: uppercase; letter-spacing: .03em; }
+.price-value { font-size: 0.9rem; font-weight: 700; }
+.price-sell   { color: #1565C0; }
+.price-cost   { color: #555; }
+.price-margin-pos { color: #2E7D32; }
+.price-margin-neg { color: #C62828; }
+
+.badge-returnable {
+  background: #E8F5E9; color: #2E7D32; border: 1px solid #A5D6A7;
+  font-size: 0.66rem; padding: 2px 8px; border-radius: 20px;
+}
+.badge-order {
+  background: #FFF3E0; color: #E65100; border: 1px solid #FFCC80;
+  font-size: 0.66rem; padding: 2px 8px; border-radius: 20px;
+}
+
+.today-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: #FF7043; color: #fff;
+  border-radius: 20px; padding: 4px 14px;
+  font-size: 0.78rem; font-weight: 700;
+}
+.section-label {
+  font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .06em; color: #888;
+  margin: 16px 0 8px 2px;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Top bar -->
+<div class="d-flex flex-wrap align-items-center gap-3 mb-3">
+  <span class="today-pill">
+    <i class="fas fa-calendar-day"></i>
+    {{ today_day_label }}, {{ today }}
+  </span>
+  <span class="text-muted small">
+    <i class="fas fa-cookie-bite me-1" style="color:#FF7043"></i>
+    <strong>{{ today_count }}</strong> item{{ 's' if today_count != 1 }} delivering today
+  </span>
+  <div class="ms-auto">
+    <a href="/pastry/weekly" class="btn btn-sm btn-outline-secondary">
+      <i class="fas fa-calendar-week me-1"></i>Weekly Schedule
+    </a>
+    {% if is_admin %}
+    <a href="/pastry/items" class="btn btn-sm btn-outline-secondary ms-1">
+      <i class="fas fa-cog me-1"></i>Manage Items
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+{% if not items %}
+<div class="text-center py-5 text-muted">
+  <i class="fas fa-cookie fa-4x mb-3 d-block opacity-25"></i>
+  <h5>No pastry items found</h5>
+  <p class="small">Add items in <a href="/pastry/items">Manage Items</a>.</p>
+</div>
+{% else %}
+
+{% for supplier_name, supplier_data in by_supplier.items() %}
+
+{% set has_today = namespace(v=false) %}
+{% for item in supplier_data['items'] %}
+  {% if item.today_scheduled or item.on_order_only %}{% set has_today.v = true %}{% endif %}
+{% endfor %}
+
+<div class="supplier-block">
+  <div class="supplier-hdr">
+    <i class="fas fa-store"></i>
+    <span>{{ supplier_name }}</span>
+    {% if supplier_data['phone'] %}
+    <span class="phone-badge"><i class="fas fa-phone me-1"></i>{{ supplier_data['phone'] }}</span>
+    {% endif %}
+    {% if has_today.v %}
+    <span class="ms-auto" style="background:rgba(255,167,38,0.25);border-radius:20px;padding:2px 10px;font-size:0.72rem;color:#FFE082">
+      <i class="fas fa-truck me-1"></i>Delivering today
+    </span>
+    {% endif %}
+  </div>
+
+  {% for item in supplier_data['items'] %}
+  <div class="item-row {% if item.today_scheduled %}today-row{% elif item.on_order_only %}order-row{% endif %}">
+
+    <!-- Name -->
+    <div class="item-names">
+      <div class="item-name-en">{{ item.name_en }}</div>
+      <div class="item-name-vi">{{ item.name_vi }}</div>
+      <div class="d-flex gap-1 mt-1 flex-wrap">
+        {% if item.returnable %}
+        <span class="badge-returnable"><i class="fas fa-undo me-1"></i>Returnable</span>
+        {% endif %}
+        {% if item.on_order_only %}
+        <span class="badge-order"><i class="fas fa-clipboard-list me-1"></i>On Order Only</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Delivery days -->
+    <div class="days-wrap">
+      {% if item.on_order_only %}
+      <span class="day-badge badge-order" style="background:#FFF3E0;color:#E65100;border-color:#FFCC80">
+        <i class="fas fa-phone me-1"></i>Order Only
+      </span>
+      {% else %}
+        {% for i in range(7) %}
+        {% set dc = days[i] %}
+        <span class="day-badge {% if dc in item.days_list %}{% if dc == today_day %}today{% else %}scheduled{% endif %}{% endif %}">
+          {{ day_labels[i] }}
+        </span>
+        {% endfor %}
+      {% endif %}
+    </div>
+
+    <!-- Pricing -->
+    <div class="price-grid">
+      <div class="price-box">
+        <div class="price-label">Sell</div>
+        <div class="price-value price-sell">${{ "%.2f"|format(item.selling_price) }}</div>
+      </div>
+      <div class="price-box">
+        <div class="price-label">Cost</div>
+        <div class="price-value price-cost">${{ "%.2f"|format(item.cost_price) }}</div>
+      </div>
+      <div class="price-box">
+        <div class="price-label">Margin</div>
+        {% if item.margin >= 0 %}
+        <div class="price-value price-margin-pos">+${{ "%.2f"|format(item.margin) }}</div>
+        {% else %}
+        <div class="price-value price-margin-neg">-${{ "%.2f"|format(item.margin|abs) }}</div>
+        {% endif %}
+        <div style="font-size:0.65rem;color:#aaa">{{ item.margin_pct }}%</div>
+      </div>
+    </div>
+
+    {% if is_admin %}
+    <!-- Admin quick-edit button -->
+    <div class="ms-auto ps-2">
+      <button class="btn btn-sm btn-outline-secondary"
+              title="Edit item"
+              onclick="openQuickEdit(this.dataset)"
+              data-id="{{ item.id }}"
+              data-name-en="{{ item.name_en|e }}"
+              data-name-vi="{{ item.name_vi|e }}"
+              data-supplier="{{ item.supplier_id or '' }}"
+              data-sell="{{ item.selling_price }}"
+              data-cost="{{ item.cost_price }}"
+              data-days="{{ item.delivery_days or '' }}"
+              data-returnable="{{ '1' if item.returnable else '0' }}"
+              data-on-order="{{ '1' if item.on_order_only else '0' }}">
+        <i class="fas fa-pencil-alt"></i>
+      </button>
+    </div>
+    {% endif %}
+
+  </div>
+  {% endfor %}
+</div>
+
+{% endfor %}
+{% endif %}
+
+{% if is_admin %}
+<!-- ── Quick-edit item modal (admin only) ── -->
+<div class="modal fade" id="quickEditModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header py-2" style="background:#FFF3E0;border-bottom:1px solid #FFCC80">
+        <h6 class="modal-title" style="color:#E65100">
+          <i class="fas fa-pencil-alt me-1"></i>Edit Pastry Item
+        </h6>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="qe-id">
+        <input type="hidden" id="qe-supplier-id">
+        <div class="row g-2">
+          <div class="col-md-6">
+            <label class="form-label fw-semibold small">Name (English) <span class="text-danger">*</span></label>
+            <input type="text" class="form-control form-control-sm" id="qe-name-en" required>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label fw-semibold small">Name (Vietnamese)</label>
+            <input type="text" class="form-control form-control-sm" id="qe-name-vi">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label fw-semibold small">Selling Price ($)</label>
+            <input type="number" class="form-control form-control-sm" id="qe-sell" step="0.01" min="0">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label fw-semibold small">Cost Price ($)</label>
+            <input type="number" class="form-control form-control-sm" id="qe-cost" step="0.01" min="0">
+          </div>
+          <div class="col-12">
+            <label class="form-label fw-semibold small">Delivery Days</label>
+            <div class="d-flex flex-wrap gap-2 mt-1">
+              {% for i in range(7) %}
+              <div class="form-check form-check-inline">
+                <input class="form-check-input" type="checkbox" id="qe-day-{{ days[i] }}" value="{{ days[i] }}">
+                <label class="form-check-label small" for="qe-day-{{ days[i] }}">{{ day_labels[i] }}</label>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="col-12">
+            <div class="d-flex gap-4 mt-1">
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="qe-returnable">
+                <label class="form-check-label small" for="qe-returnable">Returnable</label>
+              </div>
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="qe-on-order">
+                <label class="form-check-label small" for="qe-on-order">On Order Only</label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer py-2">
+        <button class="btn btn-sm btn-warning" onclick="submitQuickEdit()">
+          <i class="fas fa-save me-1"></i>Save Changes
+        </button>
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+{% if is_admin %}
+<script>
+const QE_DAYS = {{ days|tojson }};
+
+function openQuickEdit(d) {
+  document.getElementById('qe-id').value          = d.id;
+  document.getElementById('qe-supplier-id').value = d.supplier || '';
+  document.getElementById('qe-name-en').value     = d.nameEn || '';
+  document.getElementById('qe-name-vi').value     = d.nameVi || '';
+  document.getElementById('qe-sell').value        = d.sell || '';
+  document.getElementById('qe-cost').value        = d.cost || '';
+  document.getElementById('qe-returnable').checked = (d.returnable === '1');
+  document.getElementById('qe-on-order').checked   = (d.onOrder === '1');
+
+  const activeDays = (d.days || '').split(',').map(s => s.trim()).filter(Boolean);
+  QE_DAYS.forEach(day => {
+    const cb = document.getElementById('qe-day-' + day);
+    if (cb) cb.checked = activeDays.includes(day);
+  });
+
+  new bootstrap.Modal(document.getElementById('quickEditModal')).show();
+}
+
+function submitQuickEdit() {
+  const id = document.getElementById('qe-id').value;
+  if (!id) return;
+
+  const activeDays = QE_DAYS.filter(d => {
+    const cb = document.getElementById('qe-day-' + d);
+    return cb && cb.checked;
+  });
+
+  const fd = new FormData();
+  fd.append('name_en',        document.getElementById('qe-name-en').value.trim());
+  fd.append('name_vi',        document.getElementById('qe-name-vi').value.trim());
+  fd.append('supplier_id',    document.getElementById('qe-supplier-id').value);
+  fd.append('selling_price',  document.getElementById('qe-sell').value);
+  fd.append('cost_price',     document.getElementById('qe-cost').value);
+  fd.append('delivery_days',  activeDays.join(','));
+  fd.append('returnable',     document.getElementById('qe-returnable').checked ? '1' : '0');
+  fd.append('on_order_only',  document.getElementById('qe-on-order').checked   ? '1' : '0');
+
+  if (!fd.get('name_en')) { alert('Item name is required.'); return; }
+
+  fetch(`/pastry/items/${id}/edit`, {
+    method: 'POST', body: fd,
+    headers: {'X-Requested-With': 'XMLHttpRequest'}
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.error) { alert('Error: ' + data.error); return; }
+    bootstrap.Modal.getInstance(document.getElementById('quickEditModal')).hide();
+    location.reload();
+  })
+  .catch(() => alert('Network error. Please try again.'));
+}
+</script>
+{% endif %}
+{% endblock %}

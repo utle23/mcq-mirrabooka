@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}MCQ Mirrabooka{% endblock %} — Restaurant Management</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
+<link href="/static/style.css" rel="stylesheet">
+{% block head %}{% endblock %}
+</head>
+<body>
+<div class="app-wrapper">
+  <!-- SIDEBAR -->
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      <img src="/static/logo.png" alt="MCQ Logo" class="logo-img" onerror="this.src='/static/logo.svg'">
+      <div class="logo-text">
+        <div class="logo-name">MCQ</div>
+        <div class="logo-sub">MIRRABOOKA CAFE</div>
+      </div>
+    </div>
+
+    <!-- Role badge -->
+    <div class="role-badge-wrap">
+      {% if is_admin %}
+      <span class="role-badge role-admin"><i class="fas fa-shield-alt me-1"></i>ADMIN MODE</span>
+      {% else %}
+      <span class="role-badge role-user"><i class="fas fa-user me-1"></i>STAFF MODE</span>
+      {% endif %}
+    </div>
+
+    <div class="sidebar-scroll">
+      {% if is_admin %}
+      <a href="/" class="nav-link-item {% if current_ep=='dashboard' %}active{% endif %}">
+        <i class="fas fa-tachometer-alt fa-fw"></i><span>Dashboard</span>
+      </a>
+      {% endif %}
+
+      <div class="nav-section-label">DAILY CHECKLIST</div>
+      {% for key, chk in checklists.items() %}
+      <a href="/checklist/{{ key }}" class="nav-link-item {% if current_ep in ('checklist_form','checklist_view') and request.view_args.get('chk_type')==key %}active{% endif %}" style="border-left-color:{{ chk.color }}">
+        <i class="fas fa-clipboard-check fa-fw"></i><span>{{ chk.short }}</span>
+      </a>
+      {% endfor %}
+
+      {% for key, temp in temperatures.items() %}
+      <a href="/temperature/{{ key }}" class="nav-link-item {% if current_ep in ('temperature_form','temperature_view') and request.view_args.get('temp_type')==key %}active{% endif %}" style="border-left-color:{{ temp.color }}">
+        <i class="fas fa-thermometer-half fa-fw"></i><span>{{ temp.short }}</span>
+      </a>
+      {% endfor %}
+      {% if is_admin %}
+      <a href="/history" class="nav-link-item {% if current_ep=='history' %}active{% endif %}" style="border-left-color:#607D8B">
+        <i class="fas fa-history fa-fw"></i><span>History</span>
+      </a>
+      {% endif %}
+
+      <div class="nav-section-label">PREP SCHEDULE</div>
+      {% if is_admin %}
+      <a href="/prep/dashboard" class="nav-link-item {% if 'prep_dashboard' in current_ep %}active{% endif %}" style="border-left-color:#4CAF50">
+        <i class="fas fa-chart-bar fa-fw"></i><span>Prep Dashboard</span>
+      </a>
+      {% endif %}
+      <a href="/prep/weekly/{{ week_start_nav }}" class="nav-link-item {% if 'prep_weekly' in current_ep or current_ep=='prep.prep_today' %}active{% endif %}" style="border-left-color:#2196F3">
+        <i class="fas fa-calendar-week fa-fw"></i><span>Weekly Prep Schedule</span>
+      </a>
+      {% if is_admin %}
+      <a href="/prep/templates" class="nav-link-item {% if 'prep_templates' in current_ep %}active{% endif %}" style="border-left-color:#607D8B">
+        <i class="fas fa-tasks fa-fw"></i><span>Task Templates</span>
+      </a>
+      {% endif %}
+
+      {% if is_admin %}<div class="nav-section-label">MANAGEMENT</div>{% endif %}
+
+      {% if is_admin %}
+      <a href="/manager" class="nav-link-item {% if current_ep=='manager' %}active{% endif %}">
+        <i class="fas fa-user-shield fa-fw"></i><span>Manager Panel</span>
+      </a>
+      <a href="/admin/photos" class="nav-link-item {% if current_ep=='photo_gallery' %}active{% endif %}">
+        <i class="fas fa-images fa-fw"></i><span>Photo Gallery</span>
+      </a>
+      <a href="/admin/compliance" class="nav-link-item {% if current_ep=='compliance_report' %}active{% endif %}">
+        <i class="fas fa-chart-pie fa-fw"></i><span>Compliance</span>
+      </a>
+      <a href="/analytics" class="nav-link-item {% if current_ep=='analytics' %}active{% endif %}">
+        <i class="fas fa-chart-line fa-fw"></i><span>Analytics</span>
+      </a>
+      {% endif %}
+
+      {% if is_admin %}
+      <div class="nav-section-label">VIOLATION RULES</div>
+      <a href="/admin/violations" class="nav-link-item {% if current_ep in ('violation_rules','update_violation','add_violation_rule','update_violation_rule','delete_violation_rule') %}active{% endif %}" style="border-left-color:#C62828">
+        <i class="fas fa-triangle-exclamation fa-fw"></i><span>Violation Rules</span>
+      </a>
+      {% endif %}
+
+      {% if is_admin %}
+      <div class="nav-section-label">MONTHLY REWARD</div>
+      <a href="/admin/monthly-rewards" class="nav-link-item {% if current_ep in ('monthly_rewards','monthly_reward_decision','monthly_reward_decision_delete','monthly_reward_adjustment','monthly_reward_adjustment_update','monthly_reward_adjustment_delete') %}active{% endif %}" style="border-left-color:#2E7D32">
+        <i class="fas fa-award fa-fw"></i><span>Monthly Rewards</span>
+      </a>
+      {% endif %}
+
+      {% if is_admin %}
+      <div class="nav-section-label">RAISE SALARY REVIEW</div>
+      <a href="/admin/raise-reviews" class="nav-link-item {% if current_ep in ('raise_reviews','raise_review_update','raise_review_delete') %}active{% endif %}" style="border-left-color:#6A1B9A">
+        <i class="fas fa-hand-holding-dollar fa-fw"></i><span>Raise Salary Review</span>
+      </a>
+      {% endif %}
+
+      {% if is_admin %}
+      <div class="nav-section-label">BIRTHDAY</div>
+      <a href="/admin/birthdays" class="nav-link-item {% if current_ep=='birthday_giveaways' %}active{% endif %}" style="border-left-color:#F9A825">
+        <i class="fas fa-cake-candles fa-fw"></i><span>Birthday Giveaways</span>
+      </a>
+      {% endif %}
+
+      <div class="nav-section-label">PASTRY DELIVERY</div>
+      <a href="/pastry/today" class="nav-link-item {% if 'pastry_today' in current_ep %}active{% endif %}" style="border-left-color:#FF7043">
+        <i class="fas fa-cookie-bite fa-fw"></i><span>Today's Pastry</span>
+      </a>
+      <a href="/pastry/weekly" class="nav-link-item {% if 'pastry_weekly' in current_ep %}active{% endif %}" style="border-left-color:#FFA726">
+        <i class="fas fa-calendar-week fa-fw"></i><span>Weekly Schedule</span>
+      </a>
+      {% if is_admin %}
+      <a href="/pastry/dashboard" class="nav-link-item {% if 'pastry_dashboard' in current_ep %}active{% endif %}" style="border-left-color:#AB47BC">
+        <i class="fas fa-chart-bar fa-fw"></i><span>Pastry Dashboard</span>
+      </a>
+      <a href="/pastry/items" class="nav-link-item {% if 'pastry_items' in current_ep %}active{% endif %}" style="border-left-color:#26A69A">
+        <i class="fas fa-list fa-fw"></i><span>Manage Items</span>
+      </a>
+      {% endif %}
+
+      <div class="nav-section-label">INVENTORY</div>
+      <a href="/inventory/" class="nav-link-item {% if 'inventory' in current_ep %}active{% endif %}" style="border-left-color:#26A69A">
+        <i class="fas fa-boxes-stacked fa-fw"></i><span>Item List</span>
+      </a>
+
+      <div class="nav-section-label">JOB DESCRIPTIONS</div>
+      <a href="/jobs/" class="nav-link-item {% if 'job' in current_ep %}active{% endif %}" style="border-left-color:#7B1FA2">
+        <i class="fas fa-id-badge fa-fw"></i><span>Job Schedule</span>
+      </a>
+
+      <div class="nav-section-label">REPORT</div>
+      <a href="/report" class="nav-link-item {% if current_ep=='report_issue' %}active{% endif %}" style="border-left-color:#e53935">
+        <i class="fas fa-flag fa-fw"></i><span>Report Issue</span>
+      </a>
+      {% if is_admin %}
+      <a href="/admin/reports" class="nav-link-item {% if current_ep=='admin_reports' %}active{% endif %}">
+        <i class="fas fa-flag fa-fw"></i><span>Issue Reports</span>
+      </a>
+      {% endif %}
+
+      <div class="nav-section-label">RESTAURANT RULES</div>
+      <a href="/rules" class="nav-link-item {% if current_ep in ('rules.rules_view','rules.rules_print') %}active{% endif %}" style="border-left-color:#C0392B">
+        <i class="fas fa-book-open fa-fw"></i><span>Restaurant Rules</span>
+      </a>
+
+      {% if is_admin %}
+      <a href="/staff" class="nav-link-item {% if current_ep=='staff_page' %}active{% endif %}">
+        <i class="fas fa-users fa-fw"></i><span>Staff</span>
+      </a>
+      {% endif %}
+
+      <div class="sidebar-footer">
+        <a href="/logout" class="nav-link-item logout-btn">
+          <i class="fas fa-sign-out-alt fa-fw"></i><span>Logout</span>
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- MAIN CONTENT -->
+  <div class="main-area" id="main-area">
+    <header class="topbar">
+      <button class="sidebar-toggle btn btn-sm" onclick="toggleSidebar()" title="Toggle menu">
+        <i class="fas fa-bars"></i>
+      </button>
+      <div class="topbar-center">{% block topbar_title %}{% endblock %}</div>
+      <div class="topbar-right">
+        <span class="topbar-badge"><i class="fas fa-store"></i> MCQ {{ branch or 'Mirrabooka' }}</span>
+        <span class="topbar-badge"><i class="fas fa-calendar-day"></i> {{ day_name }}, {{ today }}</span>
+        {% if is_admin %}
+        <span class="topbar-badge badge-admin"><i class="fas fa-shield-alt"></i> Admin</span>
+        {% endif %}
+      </div>
+    </header>
+
+    <main class="page-body">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for cat, msg in messages %}
+          <div class="alert alert-{{ cat }} alert-dismissible fade show mb-3" role="alert">
+            {{ msg }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+          </div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+
+<!-- Lightbox -->
+<div id="lightbox" class="lightbox-overlay" onclick="closeLightbox()">
+  <div class="lightbox-inner" onclick="event.stopPropagation()">
+    <button class="lightbox-close" onclick="closeLightbox()"><i class="fas fa-times"></i></button>
+    <img id="lightbox-img" src="" alt="">
+    <div id="lightbox-caption" class="lightbox-caption"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+function toggleSidebar(){
+  const sidebar = document.getElementById('sidebar');
+  const mainArea = document.getElementById('main-area');
+  if (window.innerWidth <= 768) {
+    sidebar.classList.toggle('show');
+  } else {
+    sidebar.classList.toggle('collapsed');
+    mainArea.classList.toggle('full');
+  }
+}
+document.addEventListener('click', function(e){
+  const sidebar = document.getElementById('sidebar');
+  const toggle = document.querySelector('.sidebar-toggle');
+  if (window.innerWidth <= 768 && sidebar.classList.contains('show')) {
+    if (!sidebar.contains(e.target) && !toggle.contains(e.target)) {
+      sidebar.classList.remove('show');
+    }
+  }
+});
+function openLightbox(src, caption){
+  document.getElementById('lightbox-img').src = src;
+  document.getElementById('lightbox-caption').textContent = caption || '';
+  document.getElementById('lightbox').style.display = 'flex';
+}
+function closeLightbox(){
+  document.getElementById('lightbox').style.display = 'none';
+  document.getElementById('lightbox-img').src = '';
+}
+document.addEventListener('keydown', e => { if(e.key==='Escape') closeLightbox(); });
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

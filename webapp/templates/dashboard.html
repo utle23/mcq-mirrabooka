@@ -1,0 +1,272 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block topbar_title %}<span class="fw-bold">Dashboard — Today's Overview</span>{% endblock %}
+
+{% block content %}
+{% if alerts %}
+<div class="mb-3">
+  {% for a in alerts %}
+  <div class="alert alert-{{ a.type }} py-2 mb-2 alert-sm">
+    <i class="fas fa-{% if a.type=='warning' %}exclamation-triangle{% else %}info-circle{% endif %} me-2"></i>{{ a.msg }}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<!-- Stats -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="stat-card stat-green">
+      <div class="stat-icon"><i class="fas fa-clipboard-check"></i></div>
+      <div class="stat-value">{{ chk_status.values()|selectattr('opening')|list|length + chk_status.values()|selectattr('closing')|list|length }}</div>
+      <div class="stat-label">Checklists Today</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="stat-card stat-blue">
+      <div class="stat-icon"><i class="fas fa-thermometer-half"></i></div>
+      <div class="stat-value">{{ temp_status.values()|select|list|length }}</div>
+      <div class="stat-label">Temp Records Today</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="stat-card stat-orange">
+      <div class="stat-icon"><i class="fas fa-clock"></i></div>
+      <div class="stat-value">{{ pending_count }}</div>
+      <div class="stat-label">Pending Verification</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="stat-card stat-purple">
+      <div class="stat-icon"><i class="fas fa-calendar-week"></i></div>
+      <div class="stat-value">{{ total_week_chk }}</div>
+      <div class="stat-label">This Week</div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+  <!-- Left: Checklists + Temps -->
+  <div class="col-12 col-xl-8">
+
+    <!-- Checklists -->
+    <h5 class="section-heading"><i class="fas fa-clipboard-check me-2 text-success"></i>Daily Checklist Status</h5>
+    <div class="row g-3 mb-4">
+      {% for key, chk in checklists.items() %}
+      {% set status = chk_status.get(key, {}) %}
+      {% set op = status.get('opening') %}
+      {% set cl = status.get('closing') %}
+      <div class="col-12 col-sm-6">
+        <div class="checklist-card">
+          <div class="cc-header" style="border-left:4px solid {{ chk.color }}">
+            <span class="cc-title">{{ chk.title }}</span>
+          </div>
+          <div class="cc-body">
+            <!-- Opening -->
+            <div class="cc-section">
+              <span class="cc-label"><i class="fas fa-sun text-warning me-1"></i>Open</span>
+              {% if op %}
+                <span class="badge bg-{% if op.verified %}success{% else %}warning text-dark{% endif %} me-1">
+                  {% if op.verified %}Verified{% else %}Submitted{% endif %}
+                </span>
+                <span class="cc-time text-muted small">
+                  {% if op.get('submitted_at') %}{{ op['submitted_at'][-8:-3] }}{% endif %}
+                </span>
+                <a href="/checklist/view/{{ op.id }}" class="btn btn-sm btn-outline-secondary ms-auto">View</a>
+              {% else %}
+                <span class="badge bg-secondary me-1">Pending</span>
+                <a href="/checklist/{{ key }}?section=opening" class="btn btn-sm btn-success ms-auto">
+                  <i class="fas fa-plus"></i> Fill
+                </a>
+              {% endif %}
+            </div>
+            <!-- Closing -->
+            <div class="cc-section mt-1">
+              <span class="cc-label"><i class="fas fa-moon text-info me-1"></i>Close</span>
+              {% if cl %}
+                <span class="badge bg-{% if cl.verified %}success{% else %}warning text-dark{% endif %} me-1">
+                  {% if cl.verified %}Verified{% else %}Submitted{% endif %}
+                </span>
+                <span class="cc-time text-muted small">
+                  {% if cl.get('submitted_at') %}{{ cl['submitted_at'][-8:-3] }}{% endif %}
+                </span>
+                <a href="/checklist/view/{{ cl.id }}" class="btn btn-sm btn-outline-secondary ms-auto">View</a>
+              {% else %}
+                <span class="badge bg-secondary me-1">Pending</span>
+                <a href="/checklist/{{ key }}?section=closing" class="btn btn-sm btn-success ms-auto">
+                  <i class="fas fa-plus"></i> Fill
+                </a>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <!-- Temperature -->
+    <h5 class="section-heading"><i class="fas fa-thermometer-half me-2 text-danger"></i>Temperature Records</h5>
+    <div class="row g-3 mb-4">
+      {% for key, temp in temperatures.items() %}
+      {% set ts = temp_status.get(key) %}
+      <div class="col-12 col-sm-4">
+        <div class="checklist-card">
+          <div class="cc-header" style="border-left:4px solid {{ temp.color }}">
+            <span class="cc-title small">{{ temp.title }}</span>
+          </div>
+          <div class="cc-body">
+            {% if ts %}
+              <span class="badge bg-success me-2"><i class="fas fa-check me-1"></i>Done</span>
+              <a href="/temperature/view/{{ ts.id }}" class="btn btn-sm btn-outline-secondary">View</a>
+              <a href="/temperature/{{ key }}" class="btn btn-sm btn-outline-primary ms-1">Edit</a>
+            {% else %}
+              <span class="badge bg-secondary me-2">Not done</span>
+              <a href="/temperature/{{ key }}" class="btn btn-sm btn-danger">
+                <i class="fas fa-plus"></i> Record
+              </a>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+  </div>
+
+  <!-- Right: Timeline (admin) or Activity -->
+  <div class="col-12 col-xl-4">
+    {% if is_admin %}
+    <!-- Today's Completion Timeline (Admin) -->
+    <h5 class="section-heading"><i class="fas fa-stream me-2 text-info"></i>Today's Timeline</h5>
+    <div class="card shadow-sm mb-4">
+      <div class="card-header py-2 d-flex align-items-center justify-content-between">
+        <span class="small fw-semibold">Completion Log — {{ today }}</span>
+        <input type="date" id="timeline-date" class="form-control form-control-sm" style="width:auto"
+               value="{{ today }}" onchange="loadTimeline(this.value)">
+      </div>
+      <div class="card-body p-0" id="timeline-body" style="max-height:420px;overflow-y:auto">
+        <div class="text-center py-3 text-muted small" id="timeline-loading">
+          <i class="fas fa-spinner fa-spin me-1"></i>Loading...
+        </div>
+      </div>
+    </div>
+    {% else %}
+    <!-- Recent Activity (user) -->
+    <h5 class="section-heading"><i class="fas fa-stream me-2 text-info"></i>Recent Activity</h5>
+    <div class="card shadow-sm">
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0">
+            <thead class="table-dark">
+              <tr><th>Time</th><th>Action</th><th>By</th></tr>
+            </thead>
+            <tbody>
+              {% for r in recent %}
+              <tr>
+                <td class="text-muted small">{{ r.timestamp[-8:-3] if r.timestamp else '' }}</td>
+                <td>
+                  <span class="badge {% if 'VERIFY' in r.action %}bg-success{% elif 'TEMP' in r.action %}bg-danger{% else %}bg-primary{% endif %} small">
+                    {{ r.action.replace('_',' ') }}
+                  </span>
+                </td>
+                <td class="small">{{ r.user_name or '—' }}</td>
+              </tr>
+              {% else %}
+              <tr><td colspan="3" class="text-center text-muted py-3 small">No activity yet</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Admin recent activity below timeline -->
+{% if is_admin %}
+<h5 class="section-heading mt-2"><i class="fas fa-history me-2 text-secondary"></i>Recent Activity Log</h5>
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-sm table-hover mb-0">
+      <thead class="table-dark">
+        <tr><th>Time</th><th>Action</th><th>By</th><th>Details</th></tr>
+      </thead>
+      <tbody>
+        {% for r in recent %}
+        <tr>
+          <td class="text-muted small">{{ r.timestamp or '' }}</td>
+          <td>
+            <span class="badge {% if 'VERIFY' in r.action %}bg-success{% elif 'TEMP' in r.action %}bg-danger{% else %}bg-primary{% endif %}">
+              {{ r.action.replace('_',' ') }}
+            </span>
+          </td>
+          <td class="small fw-semibold">{{ r.user_name or '—' }}</td>
+          <td class="small text-muted">{{ r.details or '' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="text-center text-muted py-3">No activity yet</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+{% if is_admin %}
+<script>
+async function loadTimeline(targetDate) {
+  document.getElementById('timeline-loading').style.display = 'block';
+  const res  = await fetch(`/api/today-timeline?date=${targetDate}`);
+  const data = await res.json();
+  const body = document.getElementById('timeline-body');
+  document.getElementById('timeline-loading').style.display = 'none';
+
+  if (!data.events || data.events.length === 0) {
+    body.innerHTML = '<div class="text-center py-4 text-muted small"><i class="fas fa-inbox fa-2x d-block mb-2 opacity-25"></i>No submissions for this date</div>';
+    return;
+  }
+
+  const chkLabels = {
+    take_order:'Counter',banh_mi:'Banh Mi',chef:'Chef',grill_beef:'Grill',serve_order:'Drinks'
+  };
+
+  let html = '<ul class="timeline-list">';
+  data.events.forEach(ev => {
+    const icon = ev.kind === 'temperature'
+      ? '<i class="fas fa-thermometer-half"></i>'
+      : (ev.section === 'opening' ? '<i class="fas fa-sun"></i>' : '<i class="fas fa-moon"></i>');
+    const verBadge = ev.verified
+      ? `<span class="badge bg-success ms-1" style="font-size:9px"><i class="fas fa-check"></i> Verified ${ev.verified_at}</span>`
+      : '';
+    const photoBadge = ev.kind === 'checklist'
+      ? `<span class="badge ${ev.photo_count>=4?'bg-success':'bg-warning text-dark'} ms-1" style="font-size:9px"><i class="fas fa-camera"></i> ${ev.photo_count}</span>`
+      : '';
+    html += `
+      <li class="timeline-item">
+        <div class="tl-dot" style="background:${ev.type_color}">${icon}</div>
+        <div class="tl-content">
+          <div class="tl-header">
+            <strong>${ev.type_label}</strong>
+            <span class="badge bg-secondary ms-1" style="font-size:9px">${ev.section}</span>
+            ${verBadge}${photoBadge}
+          </div>
+          <div class="tl-meta">
+            <i class="fas fa-clock me-1"></i>${ev.time} &nbsp;
+            <i class="fas fa-user me-1"></i>${ev.by}
+            ${ev.kind==='checklist' ? `&nbsp; <span class="text-muted">${ev.done_count}/${ev.total_count} tasks</span>` : ''}
+          </div>
+        </div>
+      </li>`;
+  });
+  html += '</ul>';
+  body.innerHTML = html;
+}
+
+document.addEventListener('DOMContentLoaded', () => loadTimeline('{{ today }}'));
+</script>
+{% endif %}
+{% endblock %}

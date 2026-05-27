@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}Compliance Report{% endblock %}
+{% block topbar_title %}<span class="fw-bold">Staff Compliance Report</span>{% endblock %}
+
+{% block content %}
+<!-- Period selector -->
+<div class="card shadow-sm mb-4">
+  <div class="card-body py-2">
+    <div class="d-flex gap-2 align-items-center flex-wrap">
+      <span class="fw-semibold small">Period:</span>
+      {% for d in [7,14,30,60,90] %}
+      <a href="/admin/compliance?days={{ d }}"
+         class="btn btn-sm {% if days==d %}btn-success{% else %}btn-outline-success{% endif %}">
+        {{ d }} days
+      </a>
+      {% endfor %}
+      <span class="ms-auto text-muted small">{{ start }} to {{ end }}</span>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+  <!-- Staff Activity -->
+  <div class="col-12 col-lg-7">
+    <h5 class="section-heading"><i class="fas fa-users me-2 text-info"></i>Staff Submission Activity</h5>
+    <div class="card shadow-sm">
+      <div class="table-responsive">
+        <table class="table table-hover table-sm mb-0 align-middle">
+          <thead class="table-dark">
+            <tr>
+              <th>#</th>
+              <th>Staff Name</th>
+              <th>Submissions</th>
+              <th>Verified</th>
+              <th>Issues</th>
+              <th>Compliance %</th>
+              <th>Last Active</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in per_staff %}
+            {% set cpct = ((r.verified / r.total * 100)|int) if r.total > 0 else 0 %}
+            <tr>
+              <td class="text-muted">{{ loop.index }}</td>
+              <td class="fw-semibold">{{ r.name }}</td>
+              <td>
+                <span class="badge bg-primary">{{ r.total }}</span>
+              </td>
+              <td>
+                <span class="badge bg-success">{{ r.verified }}</span>
+              </td>
+              <td>
+                <span class="badge {% if r.issues > 0 %}bg-danger{% else %}bg-secondary{% endif %}">{{ r.issues }}</span>
+              </td>
+              <td>
+                <div class="d-flex align-items-center gap-2">
+                  <div class="progress flex-grow-1" style="height:6px;min-width:60px">
+                    <div class="progress-bar bg-{% if cpct>=80 %}success{% elif cpct>=50 %}warning{% else %}danger{% endif %}"
+                         style="width:{{ cpct }}%"></div>
+                  </div>
+                  <small class="text-muted">{{ cpct }}%</small>
+                </div>
+              </td>
+              <td class="small text-muted">{{ r.last_submission[-8:-3] if r.last_submission else '—' }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7" class="text-center text-muted py-3">No data in this period</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- By Type + Photo stats -->
+  <div class="col-12 col-lg-5">
+    <h5 class="section-heading"><i class="fas fa-chart-pie me-2 text-success"></i>By Checklist Type</h5>
+    <div class="card shadow-sm mb-4">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0 align-middle">
+          <thead class="table-dark">
+            <tr><th>Type</th><th>Open</th><th>Close</th><th>Verified</th></tr>
+          </thead>
+          <tbody>
+            {% for r in per_type %}
+            {% set chk = checklists.get(r.type, {}) %}
+            <tr>
+              <td>
+                <span class="badge" style="background:{{ chk.color or '#888' }}">
+                  {{ chk.short or r.type }}
+                </span>
+              </td>
+              <td>{{ r.openings }}</td>
+              <td>{{ r.closings }}</td>
+              <td>
+                <span class="badge {% if r.verified == r.total %}bg-success{% elif r.verified > 0 %}bg-warning text-dark{% else %}bg-secondary{% endif %}">
+                  {{ r.verified }}/{{ r.total }}
+                </span>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <h5 class="section-heading"><i class="fas fa-camera me-2 text-warning"></i>Photo Upload Stats</h5>
+    <div class="card shadow-sm">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0 align-middle">
+          <thead class="table-dark">
+            <tr><th>Staff</th><th>Sessions</th><th>Total Photos</th></tr>
+          </thead>
+          <tbody>
+            {% for r in photo_stats %}
+            <tr>
+              <td class="small">{{ r.submitted_by }}</td>
+              <td>{{ r.sessions_with_photos }}</td>
+              <td>
+                <span class="badge {% if r.total_photos > 0 %}bg-success{% else %}bg-secondary{% endif %}">
+                  {{ r.total_photos }}
+                </span>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="3" class="text-center text-muted py-3">No photo data</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="mt-3 d-flex gap-2">
+  <a href="/export/bulk/excel" class="btn btn-outline-success">
+    <i class="fas fa-file-excel me-1"></i>Export Full Report
+  </a>
+  <a href="/analytics" class="btn btn-outline-primary">
+    <i class="fas fa-chart-line me-1"></i>View Analytics
+  </a>
+</div>
+{% endblock %}

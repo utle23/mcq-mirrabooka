@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Photo Gallery{% endblock %}
+{% block topbar_title %}<span class="fw-bold"><i class="fas fa-images me-2"></i>Photo Gallery</span>{% endblock %}
+
+{% block content %}
+<!-- Filter bar -->
+<div class="card shadow-sm mb-4">
+  <div class="card-body py-2">
+    <form method="GET" class="row g-2 align-items-end">
+      <div class="col-auto">
+        <label class="form-label small fw-semibold mb-1">Date</label>
+        <input type="date" name="date" class="form-control form-control-sm" value="{{ date_filter }}">
+      </div>
+      <div class="col-auto">
+        <label class="form-label small fw-semibold mb-1">Section Type</label>
+        <select name="type" class="form-select form-select-sm">
+          <option value="all" {% if chk_type=='all' %}selected{% endif %}>All Types</option>
+          {% for key, chk in checklists.items() %}
+          <option value="{{ key }}" {% if chk_type==key %}selected{% endif %}>{{ chk.title }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-auto">
+        <button type="submit" class="btn btn-success btn-sm"><i class="fas fa-search me-1"></i>Search</button>
+      </div>
+      <!-- Quick date navigation -->
+      <div class="col-auto ms-auto">
+        {% for d in dates_with_photos[:7] %}
+        <a href="/admin/photos?date={{ d.date }}" class="btn btn-sm {% if d.date==date_filter %}btn-success{% else %}btn-outline-secondary{% endif %} me-1">
+          {{ d.date[-5:] }}
+        </a>
+        {% endfor %}
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if sessions %}
+  <div class="mb-3 text-muted small">
+    <strong>{{ sessions|length }}</strong> checklist session(s) with
+    <strong>{{ sessions.values()|map(attribute='photos')|map('length')|sum }}</strong> photos
+    on {{ date_filter }}
+  </div>
+
+  {% for sid, data in sessions.items() %}
+  {% set info = data.info %}
+  {% set chk = checklists.get(info.type, {}) %}
+  <div class="card shadow-sm mb-4">
+    <div class="card-header py-2 d-flex align-items-center gap-2"
+         style="border-left:4px solid {{ chk.color or '#888' }}">
+      <span class="fw-bold">{{ chk.title or info.type }}</span>
+      <span class="badge bg-{% if info.section=='opening' %}warning text-dark{% else %}info text-dark{% endif %}">
+        {{ info.section|title }}
+      </span>
+      <span class="text-muted small ms-1">{{ info.date }} — {{ info.day_of_week or '' }}</span>
+      <span class="ms-auto">
+        <i class="fas fa-user me-1 text-muted"></i>
+        <span class="small">{{ info.submitted_by or '—' }}</span>
+        &nbsp;
+        <span class="badge {% if data.photos|length >= 4 %}bg-success{% else %}bg-warning text-dark{% endif %}">
+          <i class="fas fa-camera me-1"></i>{{ data.photos|length }} photos
+        </span>
+      </span>
+      <a href="/checklist/view/{{ sid }}" class="btn btn-sm btn-outline-primary ms-2">View Checklist</a>
+    </div>
+    <div class="card-body">
+      <div class="photo-gallery-grid">
+        {% for ph in data.photos %}
+        <div class="gallery-item" onclick="openLightbox('/photo/{{ ph.filename }}',
+          'Photo {{ ph.photo_number+1 }} | {{ info.type }} {{ info.section }} | {{ info.date }} | By: {{ ph.uploaded_by or info.submitted_by or "" }}')">
+          <img src="/photo/{{ ph.filename }}" alt="Photo {{ ph.photo_number+1 }}" class="gallery-thumb"
+               onerror="this.src='';this.closest('.gallery-item').style.background='#eee'">
+          <div class="gallery-label">
+            <i class="fas fa-image me-1"></i>Photo {{ ph.photo_number+1 }}
+            <div class="gallery-time">{{ ph.uploaded_at[-8:-3] if ph.uploaded_at else '' }}</div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+
+{% else %}
+<div class="text-center py-5 text-muted">
+  <i class="fas fa-camera fa-4x mb-3 d-block opacity-25"></i>
+  <h5>No photos found for {{ date_filter }}</h5>
+  <p class="small">Photos are uploaded by staff when submitting checklists.</p>
+  <a href="/admin/photos?date={{ today }}" class="btn btn-outline-success mt-2">View Today</a>
+</div>
+{% endif %}
+{% endblock %}

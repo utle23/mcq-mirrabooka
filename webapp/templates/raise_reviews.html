@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+{% block title %}Raise Salary Review{% endblock %}
+{% block topbar_title %}<span class="fw-bold"><i class="fas fa-hand-holding-dollar me-2" style="color:#6A1B9A"></i>Raise Salary Review</span>{% endblock %}
+
+{% block head %}
+<style>
+.rr-panel {
+  background:#fff; border:1px solid #e6e9ed; border-radius:8px;
+  box-shadow:0 1px 7px rgba(0,0,0,.05);
+}
+.rr-header {
+  background:#fbfafc; border-bottom:1px solid #e6e9ed; padding:13px 15px;
+}
+.rr-score {
+  border-left:4px solid var(--c); padding:13px 14px; border-radius:8px;
+  background:#fff; border-top:1px solid #edf0f2; border-right:1px solid #edf0f2; border-bottom:1px solid #edf0f2;
+}
+.rr-score-value { font-weight:800; font-size:1.65rem; line-height:1; color:var(--c); }
+.rr-score-label { font-size:.72rem; color:#66736c; text-transform:uppercase; font-weight:800; letter-spacing:.04em; }
+.rr-status {
+  border-radius:999px; padding:5px 10px; font-size:.78rem; font-weight:800;
+}
+.rr-timeline {
+  border-left:3px solid #e8eaef; padding-left:14px;
+}
+.rr-event {
+  position:relative; padding:0 0 12px 0;
+}
+.rr-event:before {
+  content:""; position:absolute; left:-21px; top:3px;
+  width:12px; height:12px; border-radius:50%; background:var(--c, #6A1B9A);
+  border:2px solid #fff; box-shadow:0 0 0 1px #e8eaef;
+}
+.rr-table th { font-size:.72rem; color:#66736c; text-transform:uppercase; letter-spacing:.04em; }
+.mini-line { height:7px; background:#edf1ef; border-radius:999px; overflow:hidden; }
+.mini-line span { display:block; height:100%; border-radius:999px; background:var(--c); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="rr-panel mb-4">
+  <div class="rr-header">
+    <form method="GET" class="row g-2 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label small fw-semibold">Staff</label>
+        <select name="staff" class="form-select form-select-sm">
+          {% for s in staff %}
+          <option value="{{ s.name }}" {% if selected_staff==s.name %}selected{% endif %}>{{ s.name }}{% if s.role %} - {{ s.role }}{% endif %}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small fw-semibold">Review Month</label>
+        <input type="month" name="month" value="{{ selected_month }}" class="form-control form-control-sm">
+      </div>
+      <div class="col-md-2">
+        <button class="btn btn-sm btn-primary w-100"><i class="fas fa-search me-1"></i>Review</button>
+      </div>
+      <div class="col-md-3 text-md-end">
+        {% if snapshot %}
+        <span class="rr-status bg-{{ snapshot.recommendation_class }} text-white">{{ snapshot.recommendation }}</span>
+        {% endif %}
+      </div>
+    </form>
+  </div>
+  {% if snapshot %}
+  <div class="p-3">
+    <div class="row g-3">
+      <div class="col-6 col-xl-3"><div class="rr-score" style="--c:#6A1B9A"><div class="rr-score-value">{{ snapshot.current.employee_score }}</div><div class="rr-score-label">Monthly Score</div></div></div>
+      <div class="col-6 col-xl-3"><div class="rr-score" style="--c:#1565C0"><div class="rr-score-value">{{ snapshot.avg_3m }}</div><div class="rr-score-label">3 Month Avg</div></div></div>
+      <div class="col-6 col-xl-3"><div class="rr-score" style="--c:#C62828"><div class="rr-score-value">{{ snapshot.violations|length }}</div><div class="rr-score-label">90 Day Violations</div></div></div>
+      <div class="col-6 col-xl-3"><div class="rr-score" style="--c:#2E7D32"><div class="rr-score-value">{{ snapshot.reward_history|length }}</div><div class="rr-score-label">Reward Wins</div></div></div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+{% if snapshot %}
+<div class="row g-3 mb-4">
+  <div class="col-12 col-xl-7">
+    <div class="rr-panel h-100">
+      <div class="rr-header"><h6 class="mb-0"><i class="fas fa-chart-line me-2 text-primary"></i>Performance Record</h6></div>
+      <div class="p-3">
+        <div class="table-responsive">
+          <table class="table table-sm align-middle rr-table">
+            <thead><tr><th>Month</th><th class="text-end">Employee</th><th class="text-end">Checklist</th><th class="text-end">Violations</th><th>Trend</th></tr></thead>
+            <tbody>
+              {% for row in snapshot.monthly %}
+              <tr>
+                <td class="fw-semibold">{{ row.month }}</td>
+                <td class="text-end">{{ row.employee_score }}</td>
+                <td class="text-end">{{ row.checklist_score }}%</td>
+                <td class="text-end">{{ row.violations_total }}</td>
+                {% set score_width = row.employee_score if row.employee_score > 0 else 0 %}
+                {% set score_width = score_width if score_width < 100 else 100 %}
+                <td style="min-width:150px"><div class="mini-line" style="--c:#6A1B9A"><span style="width:{{ score_width }}%"></span></div></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="row g-2 mt-2">
+          <div class="col-md-4"><span class="badge bg-light text-dark border w-100 py-2">Checklist Records: {{ snapshot.current.checklist_sessions }}</span></div>
+          <div class="col-md-4"><span class="badge bg-light text-dark border w-100 py-2">Temperature Records: {{ snapshot.current.temp_sessions }}</span></div>
+          <div class="col-md-4"><span class="badge bg-light text-dark border w-100 py-2">Reports Submitted: {{ snapshot.current.issue_reports }}</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-xl-5">
+    <div class="rr-panel h-100">
+      <div class="rr-header"><h6 class="mb-0"><i class="fas fa-file-signature me-2" style="color:#6A1B9A"></i>Create Raise Review</h6></div>
+      <div class="p-3">
+        <form method="POST" action="/admin/raise-reviews" class="row g-2">
+          <input type="hidden" name="staff_name" value="{{ selected_staff }}">
+          <input type="hidden" name="review_month" value="{{ selected_month }}">
+          <div class="col-md-6"><label class="form-label small fw-semibold">Current Rate</label><input name="current_rate" type="number" step="0.01" class="form-control form-control-sm"></div>
+          <div class="col-md-6"><label class="form-label small fw-semibold">Proposed Rate</label><input name="proposed_rate" type="number" step="0.01" class="form-control form-control-sm"></div>
+          <div class="col-md-6"><label class="form-label small fw-semibold">Effective Date</label><input name="effective_date" type="date" class="form-control form-control-sm"></div>
+          <div class="col-md-6">
+            <label class="form-label small fw-semibold">Status</label>
+            <select name="status" class="form-select form-select-sm">
+              <option value="draft">Draft</option>
+              <option value="recommended" {% if snapshot.recommendation=='Recommended' %}selected{% endif %}>Recommended</option>
+              <option value="approved">Approved</option>
+              <option value="on_hold">On Hold</option>
+              <option value="rejected">Rejected</option>
+            </select>
+          </div>
+          <div class="col-md-6"><label class="form-label small fw-semibold">Requested By</label><input name="requested_by" class="form-control form-control-sm"></div>
+          <div class="col-md-6"><label class="form-label small fw-semibold">Reviewed By</label><input name="reviewed_by" class="form-control form-control-sm"></div>
+          <div class="col-12"><label class="form-label small fw-semibold">Manager Notes</label><textarea name="manager_notes" rows="3" class="form-control form-control-sm">3 month average: {{ snapshot.avg_3m }}. Recommendation: {{ snapshot.recommendation }}.</textarea></div>
+          <div class="col-12"><label class="form-label small fw-semibold">Decision Reason</label><input name="decision_reason" class="form-control form-control-sm" placeholder="Reason for approving, holding, or rejecting"></div>
+          <div class="col-12"><button class="btn btn-sm btn-primary"><i class="fas fa-save me-1"></i>Save Review</button></div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-12 col-xl-6">
+    <div class="rr-panel h-100">
+      <div class="rr-header"><h6 class="mb-0"><i class="fas fa-triangle-exclamation me-2 text-danger"></i>Violation Record</h6></div>
+      <div class="p-3 rr-timeline">
+        {% for v in snapshot.violations %}
+        <div class="rr-event" style="--c:{{ v.rule_color or '#C62828' }}">
+          <div class="d-flex gap-2 align-items-center">
+            <strong>{{ v.rule_title or 'Rule removed' }}</strong>
+            <span class="badge bg-danger">{{ v.severity|title }}</span>
+            <span class="badge bg-secondary">{{ v.status.replace('_',' ')|title }}</span>
+          </div>
+          <div class="text-muted small">{{ v.incident_date }} {{ v.incident_time }}</div>
+          <div class="small">{{ v.description }}</div>
+        </div>
+        {% else %}
+        <div class="text-muted small">No violations in the last 90 days.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  <div class="col-12 col-xl-6">
+    <div class="rr-panel h-100">
+      <div class="rr-header"><h6 class="mb-0"><i class="fas fa-flag me-2 text-warning"></i>Issue Report Record</h6></div>
+      <div class="p-3">
+        <div class="fw-semibold small mb-2">Submitted by {{ selected_staff }}</div>
+        {% for r in snapshot.submitted_reports %}
+        <div class="border rounded p-2 mb-2 small">
+          <div class="fw-semibold">{{ r.title }}</div>
+          <div class="text-muted">{{ r.date }} | {{ r.category }} | {{ r.status|title }}</div>
+        </div>
+        {% else %}
+        <div class="text-muted small mb-3">No reports submitted in the last 90 days.</div>
+        {% endfor %}
+        <div class="fw-semibold small mb-2">Reports mentioning this staff</div>
+        {% for r in snapshot.related_reports %}
+        <div class="border rounded p-2 mb-2 small">
+          <div class="fw-semibold">{{ r.title }}</div>
+          <div class="text-muted">{{ r.date }} | {{ r.category }} | {{ r.status|title }}</div>
+        </div>
+        {% else %}
+        <div class="text-muted small">No related report mentions in the last 90 days.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="rr-panel">
+  <div class="rr-header"><h6 class="mb-0"><i class="fas fa-folder-open me-2 text-secondary"></i>Raise Review History</h6></div>
+  <div class="p-3 table-responsive">
+    <table class="table table-sm align-middle rr-table">
+      <thead><tr><th>Staff</th><th>Month</th><th>Rate</th><th>Status</th><th>Notes</th><th>Update</th></tr></thead>
+      <tbody>
+      {% for review in reviews %}
+      <tr>
+        <td class="fw-semibold">{{ review.staff_name }}</td>
+        <td>{{ review.review_month }}</td>
+        <td>${{ "%.2f"|format(review.current_rate or 0) }} -> ${{ "%.2f"|format(review.proposed_rate or 0) }}</td>
+        <td><span class="badge bg-secondary">{{ review.status.replace('_',' ')|title }}</span></td>
+        <td class="small text-muted">{{ review.manager_notes or review.decision_reason or '' }}</td>
+        <td>
+          <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#review-edit-{{ review.id }}">
+            <i class="fas fa-pen me-1"></i>Edit
+          </button>
+        </td>
+      </tr>
+      <tr>
+        <td colspan="6" class="p-0 border-0">
+          <div class="collapse" id="review-edit-{{ review.id }}">
+            <div class="border rounded p-3 my-2 bg-light">
+              <form method="POST" action="/admin/raise-reviews/{{ review.id }}/update" class="row g-2">
+                <div class="col-md-3">
+                  <label class="form-label small fw-semibold">Staff</label>
+                  <select name="staff_name" class="form-select form-select-sm">
+                    {% for s in staff %}
+                    <option value="{{ s.name }}" {% if review.staff_name==s.name %}selected{% endif %}>{{ s.name }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="col-md-2"><label class="form-label small fw-semibold">Month</label><input name="review_month" type="month" class="form-control form-control-sm" value="{{ review.review_month }}"></div>
+                <div class="col-md-2"><label class="form-label small fw-semibold">Current Rate</label><input name="current_rate" type="number" step="0.01" class="form-control form-control-sm" value="{{ review.current_rate or 0 }}"></div>
+                <div class="col-md-2"><label class="form-label small fw-semibold">Proposed Rate</label><input name="proposed_rate" type="number" step="0.01" class="form-control form-control-sm" value="{{ review.proposed_rate or 0 }}"></div>
+                <div class="col-md-3"><label class="form-label small fw-semibold">Effective Date</label><input name="effective_date" type="date" class="form-control form-control-sm" value="{{ review.effective_date or '' }}"></div>
+                <div class="col-md-3">
+                  <label class="form-label small fw-semibold">Status</label>
+                  <select name="status" class="form-select form-select-sm">
+                    {% for st in ['draft','recommended','approved','on_hold','rejected'] %}
+                    <option value="{{ st }}" {% if review.status==st %}selected{% endif %}>{{ st.replace('_',' ')|title }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="col-md-3"><label class="form-label small fw-semibold">Requested By</label><input name="requested_by" class="form-control form-control-sm" value="{{ review.requested_by or '' }}"></div>
+                <div class="col-md-3"><label class="form-label small fw-semibold">Reviewed By</label><input name="reviewed_by" class="form-control form-control-sm" value="{{ review.reviewed_by or '' }}"></div>
+                <div class="col-md-3"><label class="form-label small fw-semibold">Decision Reason</label><input name="decision_reason" class="form-control form-control-sm" value="{{ review.decision_reason or '' }}"></div>
+                <div class="col-12"><label class="form-label small fw-semibold">Manager Notes</label><textarea name="manager_notes" rows="2" class="form-control form-control-sm">{{ review.manager_notes or '' }}</textarea></div>
+                <div class="col-auto"><button class="btn btn-sm btn-success"><i class="fas fa-save me-1"></i>Save All</button></div>
+                <div class="col-auto"><button type="submit" formaction="/admin/raise-reviews/{{ review.id }}/delete" class="btn btn-sm btn-outline-danger"><i class="fas fa-trash me-1"></i>Delete</button></div>
+              </form>
+            </div>
+          </div>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="text-muted text-center py-4">No raise reviews yet.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

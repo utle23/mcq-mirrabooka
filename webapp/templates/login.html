@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MCQ Mirrabooka — Login</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
+<link href="/static/style.css" rel="stylesheet">
+</head>
+<body class="login-body">
+<div class="login-wrapper">
+  <div class="login-card">
+    <div class="login-header">
+      <img src="/static/logo.png" alt="MCQ Logo" class="login-logo" onerror="this.src='/static/logo.svg'">
+      <h2 class="login-title">MCQ MIRRABOOKA CAFE</h2>
+      <p class="login-subtitle">Restaurant Management System</p>
+    </div>
+
+    {% if error %}
+    <div class="alert alert-danger py-2 small">
+      <i class="fas fa-exclamation-circle me-1"></i>{{ error }}
+    </div>
+    {% endif %}
+
+    <!-- Mode selector -->
+    <div class="login-modes mb-4">
+      <button type="button" class="mode-btn active" id="btn-user" onclick="setMode('user')">
+        <i class="fas fa-user me-1"></i>Staff Login
+      </button>
+      <button type="button" class="mode-btn" id="btn-admin" onclick="setMode('admin')">
+        <i class="fas fa-user-shield me-1"></i>Admin Login
+      </button>
+    </div>
+
+    <!-- Mode info -->
+    <div id="mode-info-user" class="mode-info mode-info-user show">
+      <i class="fas fa-info-circle me-1"></i>
+      Staff: Fill checklists, upload photos, record temperatures
+    </div>
+    <div id="mode-info-admin" class="mode-info mode-info-admin" style="display:none">
+      <i class="fas fa-shield-alt me-1"></i>
+      Admin: Full access — verify, export, view photos & analytics
+    </div>
+
+    <form method="POST" action="/login" id="login-form">
+      <div class="mb-3">
+        <label class="form-label fw-semibold small">
+          <i class="fas fa-store text-success me-1"></i>Branch
+        </label>
+        <select name="branch" class="form-select" required>
+          <option value="">— Select your branch —</option>
+          {% for b in branches %}
+          <option value="{{ b }}">MCQ {{ b }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="mb-4">
+        <label class="form-label fw-semibold small">
+          <i class="fas fa-lock text-success me-1"></i>Password
+        </label>
+        <div class="input-group">
+          <input type="password" name="password" id="pw-input" class="form-control" placeholder="Enter password">
+          <button type="button" class="btn btn-outline-secondary" onclick="togglePw()">
+            <i class="fas fa-eye" id="pw-icon"></i>
+          </button>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-success btn-lg w-100 fw-bold">
+        <i class="fas fa-sign-in-alt me-2"></i>Sign In
+      </button>
+    </form>
+
+    <div class="login-footer mt-4">
+      <div class="row text-center g-2">
+        <div class="col-6">
+          <div class="feature-pill">
+            <i class="fas fa-camera text-success me-1"></i>Photo Proof
+          </div>
+        </div>
+        <div class="col-6">
+          <div class="feature-pill">
+            <i class="fas fa-thermometer-half text-danger me-1"></i>Temp Records
+          </div>
+        </div>
+        <div class="col-6">
+          <div class="feature-pill">
+            <i class="fas fa-clipboard-check text-primary me-1"></i>Checklists
+          </div>
+        </div>
+        <div class="col-6">
+          <div class="feature-pill">
+            <i class="fas fa-chart-line text-info me-1"></i>Analytics
+          </div>
+        </div>
+      </div>
+      <p class="text-muted text-center mt-3 mb-0" style="font-size:11px">MCQ Vietnamese Street Food &copy; 2024</p>
+    </div>
+  </div>
+</div>
+<script>
+function setMode(mode){
+  document.getElementById('btn-user').classList.toggle('active', mode==='user');
+  document.getElementById('btn-admin').classList.toggle('active', mode==='admin');
+  document.getElementById('mode-info-user').style.display = mode==='user' ? '' : 'none';
+  document.getElementById('mode-info-admin').style.display = mode==='admin' ? '' : 'none';
+}
+function togglePw(){
+  const pw = document.getElementById('pw-input');
+  const ic = document.getElementById('pw-icon');
+  if(pw.type==='password'){pw.type='text';ic.className='fas fa-eye-slash';}
+  else{pw.type='password';ic.className='fas fa-eye';}
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block title %}Weekly Pastry Schedule{% endblock %}
+{% block topbar_title %}
+<span class="fw-bold"><i class="fas fa-calendar-week me-2" style="color:#FFA726"></i>Weekly Pastry Schedule</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.pw-table {
+  font-size: 0.8rem;
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 860px;
+}
+.pw-table th, .pw-table td {
+  vertical-align: middle;
+  padding: 7px 10px !important;
+}
+
+/* Supplier group row */
+.pw-sup-row td {
+  background: linear-gradient(90deg, #1B4332, #2D6A4F) !important;
+  color: #fff !important;
+  font-weight: 700; font-size: 0.8rem;
+  padding: 7px 14px !important;
+}
+
+/* Item name column */
+.pw-item-col { min-width: 170px; }
+.pw-item-name { font-weight: 700; color: #1B4332; font-size: 0.83rem; }
+.pw-item-vi   { color: #999; font-size: 0.7rem; }
+
+/* Price columns */
+.pw-price { text-align: center; width: 68px; }
+.pw-sell  { color: #1565C0; font-weight: 700; }
+.pw-cost  { color: #555; font-weight: 600; }
+.pw-mgn   { font-weight: 700; }
+.pw-mgn-pos { color: #2E7D32; }
+.pw-mgn-neg { color: #C62828; }
+
+/* Day columns */
+.pw-day { width: 68px; text-align: center; }
+.pw-day-hdr { font-size: 0.72rem; }
+.pw-today-hdr { background: #FFF3E0 !important; color: #E65100 !important; }
+
+.pw-sched {
+  display: flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 50%;
+  background: #E8F5E9; color: #2E7D32;
+  margin: 0 auto;
+  font-size: 0.85rem; font-weight: 700;
+}
+.pw-sched-today {
+  background: #FF7043; color: #fff;
+}
+.pw-na { color: #ddd; text-align: center; }
+.pw-order { font-size: 0.65rem; color: #E65100; text-align: center; }
+
+.badge-ret {
+  background: #E8F5E9; color: #2E7D32;
+  border: 1px solid #A5D6A7;
+  font-size: 0.62rem; padding: 1px 6px; border-radius: 20px;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Nav bar -->
+<div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+  <a href="/pastry/today" class="btn btn-sm" style="background:#FF7043;color:#fff;border-color:#FF7043">
+    <i class="fas fa-cookie-bite me-1"></i>Today's Pastry
+  </a>
+  {% if is_admin %}
+  <a href="/pastry/dashboard" class="btn btn-sm btn-outline-secondary">
+    <i class="fas fa-chart-bar me-1"></i>Dashboard
+  </a>
+  <a href="/pastry/items" class="btn btn-sm btn-outline-secondary">
+    <i class="fas fa-cog me-1"></i>Manage Items
+  </a>
+  {% endif %}
+</div>
+
+{% if not items %}
+<div class="text-center py-5 text-muted">
+  <i class="fas fa-cookie fa-4x mb-3 d-block opacity-25"></i>
+  <h5>No pastry items found</h5>
+  <p class="small">Add items in <a href="/pastry/items">Manage Items</a>.</p>
+</div>
+{% else %}
+
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-bordered pw-table mb-0">
+      <thead class="table-dark">
+        <tr>
+          <th class="pw-item-col">Item</th>
+          {% for i in range(7) %}
+          <th class="pw-day pw-day-hdr {% if days[i] == today_day %}pw-today-hdr{% endif %}">
+            <div class="fw-bold">{{ day_labels[i] }}</div>
+            {% if days[i] == today_day %}
+            <div style="font-size:0.6rem;opacity:0.8">Today</div>
+            {% endif %}
+          </th>
+          {% endfor %}
+          <th class="pw-price">Sell $</th>
+          <th class="pw-price">Cost $</th>
+          <th class="pw-price">Margin</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% set ns = namespace(cur_sup='') %}
+        {% for item in items %}
+
+        {% if item.supplier_name != ns.cur_sup %}
+        {% set ns.cur_sup = item.supplier_name %}
+        <tr class="pw-sup-row">
+          <td colspan="{{ 7 + 4 }}">
+            <i class="fas fa-store me-2"></i>{{ item.supplier_name }}
+            {% if item.supplier_phone %}
+            <span class="ms-2" style="font-weight:400;opacity:0.85;font-size:0.75rem">
+              <i class="fas fa-phone me-1"></i>{{ item.supplier_phone }}
+            </span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endif %}
+
+        <tr>
+          <!-- Item name -->
+          <td class="pw-item-col">
+            <div class="pw-item-name">{{ item.name_en }}</div>
+            <div class="pw-item-vi">{{ item.name_vi }}</div>
+            {% if item.returnable %}
+            <span class="badge-ret mt-1 d-inline-block"><i class="fas fa-undo me-1"></i>Returnable</span>
+            {% endif %}
+          </td>
+
+          <!-- Day cells -->
+          {% for i in range(7) %}
+          {% set dc = days[i] %}
+          {% set is_tod = dc == today_day %}
+          <td class="pw-day {% if is_tod %}pw-today-hdr{% endif %}">
+            {% if item.on_order_only %}
+              <div class="pw-order" title="On Order Only"><i class="fas fa-phone"></i></div>
+            {% elif dc in item.days_list %}
+              <div class="pw-sched {% if is_tod %}pw-sched-today{% endif %}">✓</div>
+            {% else %}
+              <div class="pw-na">—</div>
+            {% endif %}
+          </td>
+          {% endfor %}
+
+          <!-- Pricing -->
+          <td class="pw-price pw-sell">${{ "%.2f"|format(item.selling_price) }}</td>
+          <td class="pw-price pw-cost">${{ "%.2f"|format(item.cost_price) }}</td>
+          <td class="pw-price">
+            <span class="pw-mgn {% if item.margin >= 0 %}pw-mgn-pos{% else %}pw-mgn-neg{% endif %}">
+              ${{ "%.2f"|format(item.margin|abs) }}
+            </span>
+            <div style="font-size:0.62rem;color:#aaa">{{ item.margin_pct }}%</div>
+          </td>
+        </tr>
+
+        {% else %}
+        <tr><td colspan="{{ 7+4 }}" class="text-center text-muted py-3">No items.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Legend -->
+<div class="d-flex flex-wrap gap-2 mt-2" style="font-size:0.74rem;color:#888">
+  <span><span class="pw-sched d-inline-flex" style="width:20px;height:20px;font-size:0.75rem">✓</span> Scheduled</span>
+  <span><span class="pw-sched pw-sched-today d-inline-flex" style="width:20px;height:20px;font-size:0.75rem">✓</span> Today</span>
+  <span style="color:#ddd">—</span><span>Not scheduled</span>
+  <span><i class="fas fa-phone" style="color:#E65100"></i> On Order Only</span>
+</div>
+
+{% endif %}
+
+{% endblock %}

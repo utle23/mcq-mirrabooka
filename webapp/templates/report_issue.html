@@ -1,0 +1,213 @@
+{% extends "base.html" %}
+{% block title %}Report an Issue{% endblock %}
+{% block topbar_title %}<span class="fw-bold"><i class="fas fa-flag me-2 text-danger"></i>Report an Issue</span>{% endblock %}
+
+{% block content %}
+{% if submitted %}
+<div class="alert alert-success d-flex align-items-center gap-3 mb-4">
+  <i class="fas fa-check-circle fa-2x text-success"></i>
+  <div>
+    <strong>Report submitted successfully!</strong><br>
+    <span class="small">Your report has been received. Management will review it shortly.</span>
+  </div>
+  <a href="/report" class="btn btn-outline-success btn-sm ms-auto">Submit Another</a>
+</div>
+{% endif %}
+
+<div class="row g-4">
+  <!-- Category cards -->
+  <div class="col-12">
+    <h6 class="text-muted fw-semibold mb-3">What would you like to report?</h6>
+    <div class="row g-2 mb-4" id="category-cards">
+      {% for key, cat in issue_categories.items() %}
+      <div class="col-6 col-md-4 col-lg-3">
+        <div class="category-card" data-value="{{ key }}" onclick="selectCategory('{{ key }}')"
+             style="border-color:{{ cat.color }}20">
+          <i class="fas {{ cat.icon }} category-icon" style="color:{{ cat.color }}"></i>
+          <div class="category-label">{{ cat.label }}</div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Form -->
+  <div class="col-12 col-lg-8">
+    <div class="card shadow-sm">
+      <div class="card-header py-2" id="form-header" style="background:#f8f9fa">
+        <h6 class="mb-0"><i class="fas fa-edit me-2"></i>Issue Details</h6>
+      </div>
+      <div class="card-body">
+        <form method="POST" action="/report" enctype="multipart/form-data">
+          <input type="hidden" name="category" id="category-input" required>
+
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Your Name</label>
+            <select name="reported_by" class="form-select" required>
+              <option value="">— Select your name —</option>
+              {% for s in staff %}
+              <option value="{{ s }}">{{ s }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Priority</label>
+            <div class="d-flex gap-2 flex-wrap">
+              {% for val, lbl, clr in [('low','Low','secondary'),('normal','Normal','primary'),('high','High','warning'),('urgent','Urgent','danger')] %}
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="priority" id="p-{{ val }}"
+                       value="{{ val }}" {% if val=='normal' %}checked{% endif %}>
+                <label class="form-check-label" for="p-{{ val }}">
+                  <span class="badge bg-{{ clr }}">{{ lbl }}</span>
+                </label>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Brief Title</label>
+            <input type="text" name="title" class="form-control" required
+                   placeholder="Short description of the issue..." maxlength="120">
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Full Description</label>
+            <textarea name="description" class="form-control" rows="4" required
+                      placeholder="Describe the issue in detail. Include dates, names, and any relevant information..."></textarea>
+            <div class="form-text">All reports are confidential and reviewed by management only.</div>
+          </div>
+
+          <div class="mb-4">
+            <label class="form-label fw-semibold">
+              Photo <span class="text-muted fw-normal">(optional)</span>
+            </label>
+            <div class="photo-upload-box" id="photo-box" onclick="document.getElementById('issue-photo').click()">
+              <input type="file" name="photo" id="issue-photo" accept="image/*" capture="environment"
+                     class="d-none" onchange="previewIssuePhoto(this)">
+              <div id="photo-placeholder">
+                <i class="fas fa-camera fa-2x text-muted mb-1 d-block"></i>
+                <div class="small text-muted">Tap to attach a photo</div>
+              </div>
+              <img id="issue-preview" src="" alt="" style="display:none;max-width:100%;max-height:200px;border-radius:8px">
+              <div id="photo-clear-btn" style="display:none" class="mt-2">
+                <button type="button" class="btn btn-sm btn-outline-danger" onclick="clearPhoto(event)">
+                  <i class="fas fa-times me-1"></i>Remove photo
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div id="no-category-msg" class="alert alert-warning py-2 small mb-3" style="display:none">
+            <i class="fas fa-exclamation-triangle me-1"></i>Please select a category above first.
+          </div>
+
+          <button type="button" class="btn btn-danger btn-lg w-100" onclick="submitReport()">
+            <i class="fas fa-paper-plane me-2"></i>Submit Report
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Info panel -->
+  <div class="col-12 col-lg-4">
+    <div class="card shadow-sm border-0 bg-light">
+      <div class="card-body">
+        <h6 class="fw-bold mb-3"><i class="fas fa-shield-alt me-2 text-success"></i>Your Report is Confidential</h6>
+        <ul class="small text-muted mb-0 ps-3">
+          <li class="mb-2">Only management can view submitted reports</li>
+          <li class="mb-2">Reports are taken seriously and reviewed promptly</li>
+          <li class="mb-2">For urgent issues, speak to your manager directly</li>
+          <li class="mb-2">Missed clock-in/out: management will adjust your timesheet</li>
+          <li>Suggestions are always welcome and encouraged</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card shadow-sm mt-3">
+      <div class="card-header py-2"><h6 class="mb-0 small">Categories</h6></div>
+      <div class="card-body py-2">
+        {% for key, cat in issue_categories.items() %}
+        <div class="d-flex align-items-center gap-2 py-1 border-bottom">
+          <i class="fas {{ cat.icon }} fa-fw" style="color:{{ cat.color }}"></i>
+          <span class="small">{{ cat.label }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+.category-card {
+  border: 2px solid #eee;
+  border-radius: 10px;
+  padding: 14px 8px;
+  text-align: center;
+  cursor: pointer;
+  transition: all .2s;
+  background: #fff;
+}
+.category-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,.1); }
+.category-card.selected { border-width: 2px; box-shadow: 0 0 0 3px rgba(0,0,0,.1); }
+.category-icon { font-size: 1.6rem; margin-bottom: 6px; display: block; }
+.category-label { font-size: 11px; font-weight: 600; color: #444; line-height: 1.3; }
+.photo-upload-box {
+  border: 2px dashed #ccc; border-radius: 10px; padding: 20px;
+  text-align: center; cursor: pointer; transition: border-color .2s;
+  background: #fafafa;
+}
+.photo-upload-box:hover { border-color: #4caf50; background: #f0fff4; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let selectedCategory = '';
+const categories = {{ issue_categories | tojson }};
+
+function selectCategory(key) {
+  selectedCategory = key;
+  document.getElementById('category-input').value = key;
+  document.querySelectorAll('.category-card').forEach(c => {
+    c.classList.toggle('selected', c.dataset.value === key);
+  });
+  const cat = categories[key];
+  const header = document.getElementById('form-header');
+  header.style.background = cat.color + '20';
+  header.innerHTML = `<h6 class="mb-0"><i class="fas ${cat.icon} me-2" style="color:${cat.color}"></i>${cat.label}</h6>`;
+  document.getElementById('no-category-msg').style.display = 'none';
+}
+
+function previewIssuePhoto(input) {
+  if (input.files && input.files[0]) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      document.getElementById('issue-preview').src = e.target.result;
+      document.getElementById('issue-preview').style.display = 'block';
+      document.getElementById('photo-placeholder').style.display = 'none';
+      document.getElementById('photo-clear-btn').style.display = 'block';
+    };
+    reader.readAsDataURL(input.files[0]);
+  }
+}
+function clearPhoto(e) {
+  e.stopPropagation();
+  document.getElementById('issue-photo').value = '';
+  document.getElementById('issue-preview').src = '';
+  document.getElementById('issue-preview').style.display = 'none';
+  document.getElementById('photo-placeholder').style.display = 'block';
+  document.getElementById('photo-clear-btn').style.display = 'none';
+}
+function submitReport() {
+  if (!selectedCategory) {
+    document.getElementById('no-category-msg').style.display = 'block';
+    document.getElementById('category-cards').scrollIntoView({behavior:'smooth'});
+    return;
+  }
+  document.querySelector('form').submit();
+}
+</script>
+{% endblock %}

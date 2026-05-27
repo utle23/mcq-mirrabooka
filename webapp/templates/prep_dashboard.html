@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}Prep Dashboard{% endblock %}
+{% block topbar_title %}<span class="fw-bold"><i class="fas fa-chart-bar me-2"></i>Weekly Prep Dashboard</span>{% endblock %}
+{% block content %}
+
+<!-- Stats cards -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="card shadow-sm text-center h-100">
+      <div class="card-body py-3">
+        <div style="font-size:2rem;font-weight:700;color:#1B4332">{{ total }}</div>
+        <div class="text-muted small">Total Tasks Today</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card shadow-sm text-center h-100" style="border-top:3px solid #4CAF50">
+      <div class="card-body py-3">
+        <div style="font-size:2rem;font-weight:700;color:#4CAF50">{{ done }}</div>
+        <div class="text-muted small">Completed</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card shadow-sm text-center h-100" style="border-top:3px solid #FF9800">
+      <div class="card-body py-3">
+        <div style="font-size:2rem;font-weight:700;color:#FF9800">{{ pending }}</div>
+        <div class="text-muted small">Pending</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card shadow-sm text-center h-100" style="border-top:3px solid #F44336">
+      <div class="card-body py-3">
+        <div style="font-size:2rem;font-weight:700;color:#F44336">{{ issues }}</div>
+        <div class="text-muted small">Issues</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Overall progress -->
+<div class="card shadow-sm mb-4">
+  <div class="card-body py-2">
+    <div class="d-flex justify-content-between mb-1">
+      <span class="fw-semibold">Overall Completion — {{ day_name }}, {{ today }}</span>
+      <span class="fw-bold text-success">{{ pct }}%</span>
+    </div>
+    <div class="progress" style="height:14px">
+      <div class="progress-bar bg-{% if pct==100 %}success{% elif pct>=50 %}warning{% else %}danger{% endif %} fw-bold"
+           style="width:{{ pct }}%">{{ pct }}%</div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+  <!-- Station breakdown -->
+  <div class="col-12 col-lg-6">
+    <h5 class="section-heading"><i class="fas fa-layer-group me-2 text-success"></i>By Station</h5>
+    <div class="card shadow-sm">
+      <div class="card-body">
+        {% for s in stations %}
+        {% set st = station_stats.get(s.id, {'total':0,'done':0,'pct':0}) %}
+        <div class="mb-3">
+          <div class="d-flex justify-content-between mb-1">
+            <span class="small fw-semibold" style="color:{{ s.color }}">
+              <span class="badge me-1" style="background:{{ s.color }}">{{ st.done }}/{{ st.total }}</span>
+              {{ s.name_en }}
+            </span>
+            <span class="small text-muted">{{ st.pct }}%</span>
+          </div>
+          <div class="progress" style="height:8px">
+            <div class="progress-bar" style="width:{{ st.pct }}%;background:{{ s.color }}"></div>
+          </div>
+          <div class="text-muted" style="font-size:0.75rem">{{ s.name_vi }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Staff breakdown -->
+  <div class="col-12 col-lg-6">
+    <h5 class="section-heading"><i class="fas fa-users me-2 text-info"></i>By Staff</h5>
+    <div class="card shadow-sm">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0 align-middle">
+          <thead class="table-dark">
+            <tr><th>Staff</th><th>Tasks</th><th>Done</th><th>Progress</th></tr>
+          </thead>
+          <tbody>
+            {% for s in staff_stats %}
+            <tr>
+              <td class="small fw-semibold">{{ s.name }}</td>
+              <td>{{ s.total }}</td>
+              <td><span class="badge bg-success">{{ s.done }}</span></td>
+              <td style="min-width:100px">
+                <div class="d-flex align-items-center gap-1">
+                  <div class="progress flex-grow-1" style="height:6px">
+                    <div class="progress-bar bg-{% if s.pct==100 %}success{% elif s.pct>=50 %}warning{% else %}danger{% endif %}"
+                         style="width:{{ s.pct }}%"></div>
+                  </div>
+                  <small class="text-muted">{{ s.pct }}%</small>
+                </div>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="text-center text-muted py-3">No data today</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Issues / Notes -->
+{% if recent_issues %}
+<h5 class="section-heading mt-4"><i class="fas fa-exclamation-triangle me-2 text-warning"></i>Issues & Notes Today</h5>
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-sm mb-0 align-middle">
+      <thead class="table-dark"><tr><th>Task</th><th>Station</th><th>Assigned</th><th>Note</th><th>Status</th></tr></thead>
+      <tbody>
+        {% for r in recent_issues %}
+        <tr>
+          <td class="small fw-semibold">{{ r.task_name_en }}</td>
+          <td><span class="badge" style="background:{{ r.station.color or '#888' }}">{{ r.station.name_en or '' }}</span></td>
+          <td class="small">{{ r.assigned_to or '—' }}</td>
+          <td class="small text-muted">{{ r.note or '' }}</td>
+          <td>
+            {% if r.issue_flag %}<span class="badge bg-danger"><i class="fas fa-exclamation-circle me-1"></i>Issue</span>{% endif %}
+            {% if r.status == 'done' %}<span class="badge bg-success">Done</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="mt-3 d-flex gap-2">
+  <a href="/prep/today" class="btn btn-success"><i class="fas fa-list-check me-1"></i>Today's Prep</a>
+  <a href="/prep/weekly/{{ today }}" class="btn btn-outline-primary"><i class="fas fa-calendar-week me-1"></i>Weekly Schedule</a>
+</div>
+{% endblock %}

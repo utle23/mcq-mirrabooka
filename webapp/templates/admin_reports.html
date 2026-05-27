@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}Issue Reports{% endblock %}
+{% block topbar_title %}<span class="fw-bold"><i class="fas fa-flag me-2 text-danger"></i>Issue Reports</span>{% endblock %}
+
+{% block content %}
+<!-- Stats bar -->
+<div class="row g-3 mb-4">
+  {% set open_c    = counts.get('open', 0) %}
+  {% set prog_c    = counts.get('in_progress', 0) %}
+  {% set done_c    = counts.get('resolved', 0) %}
+  <div class="col-4">
+    <div class="card shadow-sm text-center py-2" style="border-left:4px solid #e53935">
+      <div class="fs-3 fw-bold text-danger">{{ open_c }}</div>
+      <div class="small text-muted">Open</div>
+    </div>
+  </div>
+  <div class="col-4">
+    <div class="card shadow-sm text-center py-2" style="border-left:4px solid #f57c00">
+      <div class="fs-3 fw-bold text-warning">{{ prog_c }}</div>
+      <div class="small text-muted">In Progress</div>
+    </div>
+  </div>
+  <div class="col-4">
+    <div class="card shadow-sm text-center py-2" style="border-left:4px solid #2e7d32">
+      <div class="fs-3 fw-bold text-success">{{ done_c }}</div>
+      <div class="small text-muted">Resolved</div>
+    </div>
+  </div>
+</div>
+
+<!-- Filters -->
+<div class="card shadow-sm mb-4">
+  <div class="card-body py-2">
+    <form method="GET" class="row g-2 align-items-end">
+      <div class="col-auto">
+        <label class="form-label small fw-semibold mb-1">Status</label>
+        <select name="status" class="form-select form-select-sm">
+          <option value="all"        {% if status_filter=='all' %}selected{% endif %}>All</option>
+          <option value="open"       {% if status_filter=='open' %}selected{% endif %}>Open</option>
+          <option value="in_progress"{% if status_filter=='in_progress' %}selected{% endif %}>In Progress</option>
+          <option value="resolved"   {% if status_filter=='resolved' %}selected{% endif %}>Resolved</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <label class="form-label small fw-semibold mb-1">Category</label>
+        <select name="category" class="form-select form-select-sm">
+          <option value="">All Categories</option>
+          {% for key, cat in issue_categories.items() %}
+          <option value="{{ key }}" {% if category_filter==key %}selected{% endif %}>{{ cat.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-auto">
+        <button type="submit" class="btn btn-success btn-sm"><i class="fas fa-search me-1"></i>Filter</button>
+        <a href="/admin/reports" class="btn btn-outline-secondary btn-sm ms-1">Reset</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Reports list -->
+{% for r in reports %}
+{% set cat = issue_categories.get(r.category, {}) %}
+{% set p_color = {'low':'secondary','normal':'primary','high':'warning','urgent':'danger'}.get(r.priority,'secondary') %}
+<div class="card shadow-sm mb-3" style="border-left:4px solid {{ cat.color or '#888' }}">
+  <div class="card-header py-2 d-flex align-items-center flex-wrap gap-2">
+    <i class="fas {{ cat.icon or 'fa-flag' }} me-1" style="color:{{ cat.color or '#888' }}"></i>
+    <strong>{{ r.title }}</strong>
+    <span class="badge ms-1" style="background:{{ cat.color or '#888' }}">{{ cat.label or r.category }}</span>
+    <span class="badge bg-{{ p_color }} ms-1">{{ r.priority|title }}</span>
+    {% if r.status == 'open' %}
+    <span class="badge bg-danger ms-1">Open</span>
+    {% elif r.status == 'in_progress' %}
+    <span class="badge bg-warning text-dark ms-1">In Progress</span>
+    {% else %}
+    <span class="badge bg-success ms-1"><i class="fas fa-check me-1"></i>Resolved</span>
+    {% endif %}
+    <span class="ms-auto text-muted small">
+      <i class="fas fa-user me-1"></i>{{ r.reported_by }}
+      &nbsp;|&nbsp;
+      <i class="fas fa-store me-1"></i>{{ r.branch or '—' }}
+      &nbsp;|&nbsp;
+      <i class="fas fa-calendar me-1"></i>{{ r.date }}
+      &nbsp;|&nbsp;
+      <i class="fas fa-clock me-1"></i>{{ r.submitted_at[-8:-3] if r.submitted_at else '' }}
+    </span>
+  </div>
+  <div class="card-body">
+    <p class="mb-3">{{ r.description }}</p>
+    {% if r.photo %}
+    <div class="mb-3">
+      <img src="/photo/{{ r.photo }}" alt="Issue photo"
+           style="max-height:220px;border-radius:8px;cursor:pointer;border:1px solid #ddd"
+           onclick="openLightbox('/photo/{{ r.photo }}','{{ r.title }}')">
+    </div>
+    {% endif %}
+    {% if r.admin_notes %}
+    <div class="alert alert-info py-2 small mb-3">
+      <strong><i class="fas fa-user-shield me-1"></i>Admin notes:</strong> {{ r.admin_notes }}
+      {% if r.resolved_by %} — Resolved by {{ r.resolved_by }}{% endif %}
+    </div>
+    {% endif %}
+
+    <!-- Update form -->
+    <form method="POST" action="/admin/reports/{{ r.id }}/update" class="row g-2 align-items-end">
+      <div class="col-md-3">
+        <label class="form-label small fw-semibold mb-1">Update Status</label>
+        <select name="status" class="form-select form-select-sm">
+          <option value="open"        {% if r.status=='open' %}selected{% endif %}>Open</option>
+          <option value="in_progress" {% if r.status=='in_progress' %}selected{% endif %}>In Progress</option>
+          <option value="resolved"    {% if r.status=='resolved' %}selected{% endif %}>Resolved</option>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small fw-semibold mb-1">Resolved by</label>
+        <select name="resolved_by" class="form-select form-select-sm">
+          <option value="">— Manager —</option>
+          {% for m in ['MA, THANH PHUNG', 'Khoi'] %}
+          <option value="{{ m }}" {% if r.resolved_by==m %}selected{% endif %}>{{ m }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label small fw-semibold mb-1">Admin Notes</label>
+        <input type="text" name="admin_notes" class="form-control form-control-sm"
+               value="{{ r.admin_notes or '' }}" placeholder="Action taken...">
+      </div>
+      <div class="col-md-2">
+        <button type="submit" class="btn btn-success btn-sm w-100">
+          <i class="fas fa-save me-1"></i>Update
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+{% else %}
+<div class="text-center py-5 text-muted">
+  <i class="fas fa-flag fa-3x mb-3 d-block opacity-25"></i>
+  <h5>No reports found</h5>
+</div>
+{% endfor %}
+{% endblock %}

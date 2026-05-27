@@ -1,0 +1,56 @@
+<div class="row g-2">
+  <div class="col-12">
+    <label class="form-label fw-semibold mb-1">Task Name (English)</label>
+    <input type="text" name="task_name_en" class="form-control form-control-sm" required placeholder="e.g. Prepare ham / cha lua">
+  </div>
+  <div class="col-12">
+    <label class="form-label fw-semibold mb-1">Task Name (Vietnamese)</label>
+    <input type="text" name="task_name_vi" class="form-control form-control-sm" placeholder="e.g. Chuẩn bị ham / chả lụa">
+  </div>
+  <div class="col-6">
+    <label class="form-label fw-semibold mb-1">Station</label>
+    <select name="station_id" class="form-select form-select-sm" required>
+      {% for s in stations %}
+      <option value="{{ s.id }}">{{ s.name_en }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-6">
+    <label class="form-label fw-semibold mb-1">Default Time</label>
+    <input type="time" name="default_time" class="form-control form-control-sm">
+  </div>
+  <div class="col-12">
+    <label class="form-label fw-semibold mb-1">Default Assigned To</label>
+    <select name="default_assignee" class="form-select form-select-sm">
+      <option value="">— Unassigned —</option>
+      {% for s in staff_list %}
+      <option value="{{ s }}">{{ s }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-12">
+    <label class="form-label fw-semibold mb-1">Active Days</label>
+    <div class="d-flex flex-wrap gap-2 mt-1">
+      {% for i in range(days|length) %}
+      {% set day_id = fid ~ '_day_' ~ days[i] %}
+      <div class="form-check form-check-inline m-0">
+        <input class="form-check-input" type="checkbox" name="active_days"
+               value="{{ days[i] }}" id="{{ day_id }}" checked>
+        <label class="form-check-label small" for="{{ day_id }}">{{ day_labels[i] }}</label>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="col-12">
+    <div class="form-check form-switch mt-1">
+      <input class="form-check-input" type="checkbox" name="is_supplier"
+             id="{{ fid }}_is_supplier"
+             onchange="var r=this.closest('.row').querySelector('.supplier-row');r.classList.toggle('d-none',!this.checked)">
+      <label class="form-check-label small fw-semibold" for="{{ fid }}_is_supplier">Supplier delivery item?</label>
+    </div>
+  </div>
+  <div class="col-12 supplier-row d-none">
+    <label class="form-label fw-semibold mb-1">Supplier Name</label>
+    <input type="text" name="supplier_name" class="form-control form-control-sm" placeholder="e.g. Morley">
+  </div>
+</div>

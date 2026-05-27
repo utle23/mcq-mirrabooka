@@ -1,0 +1,235 @@
+{% extends "base.html" %}
+{% block title %}Restaurant Rules{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-book-open me-2" style="color:#C0392B"></i>Restaurant Rules</span>
+{% endblock %}
+
+{% block head %}
+<style>
+/* ── Layout ── */
+.rules-page { max-width: 860px; margin: 0 auto; }
+
+/* ── Cover card ── */
+.rules-cover {
+  background: linear-gradient(135deg, #1A1A2E 0%, #C0392B 100%);
+  border-radius: 12px; padding: 28px 32px; color: #fff; margin-bottom: 28px;
+  box-shadow: 0 4px 20px rgba(192,57,43,.25);
+}
+.rules-cover h2 { font-size: 1.5rem; font-weight: 800; letter-spacing: .03em; margin: 0; }
+.rules-cover p  { opacity: .8; margin: 4px 0 0; font-size: 0.85rem; }
+
+/* ── TOC ── */
+.rules-toc {
+  background: #fff; border: 1px solid #e8eaed; border-radius: 10px;
+  padding: 16px 20px; margin-bottom: 24px;
+  box-shadow: 0 1px 6px rgba(0,0,0,.04);
+}
+.rules-toc-title { font-size: .75rem; font-weight: 800; color: #888; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px; }
+.toc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 4px 12px; }
+.toc-item { font-size: .78rem; color: #C0392B; text-decoration: none; padding: 2px 0; }
+.toc-item:hover { text-decoration: underline; }
+.toc-num { color: #aaa; margin-right: 4px; font-weight: 600; }
+
+/* ── Section card ── */
+.rule-card {
+  background: #fff; border-radius: 10px; margin-bottom: 16px;
+  border: 1px solid #e8eaed;
+  box-shadow: 0 1px 6px rgba(0,0,0,.04);
+  overflow: hidden;
+}
+.rule-card-header {
+  display: flex; align-items: center; gap: 12px;
+  background: #1A1A2E; color: #fff; padding: 12px 18px;
+}
+.rule-num {
+  background: #C0392B; color: #fff;
+  width: 28px; height: 28px; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: .8rem; flex-shrink: 0;
+}
+.rule-title { font-weight: 700; font-size: .92rem; letter-spacing: .01em; flex-grow: 1; }
+.rule-body { padding: 14px 20px 10px; }
+
+/* ── Content rendering ── */
+.rule-body p { margin: 0 0 8px; font-size: .87rem; color: #333; line-height: 1.6; }
+.rule-body p:last-child { margin-bottom: 0; }
+.rule-list { margin: 2px 0 10px 0; padding: 0; list-style: none; }
+.rule-list li {
+  padding: 4px 0 4px 20px; position: relative;
+  font-size: .87rem; color: #333; line-height: 1.5;
+}
+.rule-list li::before {
+  content: ''; position: absolute; left: 6px; top: 11px;
+  width: 6px; height: 6px; border-radius: 50%; background: #C0392B;
+}
+.rule-sub-hdr {
+  font-weight: 700; font-size: .85rem; color: #1A1A2E;
+  background: #F4F6F9; border-left: 3px solid #C0392B;
+  padding: 5px 10px; border-radius: 0 4px 4px 0;
+  margin: 8px 0 6px;
+}
+.rule-kv { margin: 4px 0; font-size: .87rem; }
+.rule-k  { font-weight: 700; color: #1A1A2E; }
+
+/* ── Admin edit area ── */
+.rule-edit-area {
+  border-top: 1px dashed #dee2e6;
+  background: #f8f9fa; padding: 14px 18px;
+}
+.rule-edit-area textarea { font-size: .8rem; font-family: monospace; }
+
+/* ── Action bar ── */
+.rules-action-bar {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+/* ── Special: Warning table ── */
+.warn-table { width: 100%; border-collapse: collapse; font-size: .85rem; margin: 4px 0; }
+.warn-table th { background: #1A1A2E; color: #fff; padding: 7px 12px; text-align: left; font-weight: 600; }
+.warn-table td { padding: 7px 12px; border-bottom: 1px solid #eee; }
+.warn-table tr:nth-child(even) td { background: #fafafa; }
+.warn-table tr:last-child td { border-bottom: none; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="rules-page">
+
+  <!-- Cover -->
+  <div class="rules-cover">
+    <div class="d-flex align-items-start justify-content-between flex-wrap gap-3">
+      <div>
+        <div style="font-size:.7rem;opacity:.6;text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px">MCQ Mirrabooka</div>
+        <h2><i class="fas fa-book-open me-2"></i>Restaurant Rules</h2>
+        <p>Staff handbook — please read and follow all guidelines.</p>
+      </div>
+      <div class="d-flex gap-2 flex-wrap">
+        <a href="/rules/print" target="_blank" class="btn btn-sm btn-light fw-semibold">
+          <i class="fas fa-print me-1"></i>Print / PDF
+        </a>
+        {% if is_admin %}
+        <a href="/rules/export/excel" class="btn btn-sm btn-success fw-semibold">
+          <i class="fas fa-file-excel me-1"></i>Export Excel
+        </a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Table of Contents -->
+  <div class="rules-toc">
+    <div class="rules-toc-title"><i class="fas fa-list-ul me-1"></i>Contents</div>
+    <div class="toc-grid">
+      {% for s in sections %}
+      <a class="toc-item" href="#rule-{{ s.id }}">
+        <span class="toc-num">{{ s.section_num }}.</span>{{ s.title }}
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Sections -->
+  {% for s in sections %}
+  <div class="rule-card" id="rule-{{ s.id }}">
+    <div class="rule-card-header">
+      <div class="rule-num">{{ s.section_num }}</div>
+      <div class="rule-title">{{ s.title }}</div>
+      {% if is_admin %}
+      <button class="btn btn-sm btn-outline-light ms-auto" style="font-size:.72rem;padding:2px 8px"
+              type="button" data-bs-toggle="collapse" data-bs-target="#edit-{{ s.id }}">
+        <i class="fas fa-pen me-1"></i>Edit
+      </button>
+      {% endif %}
+    </div>
+
+    <div class="rule-body">
+      {{ s.html | safe }}
+    </div>
+
+    <!-- Admin edit form -->
+    {% if is_admin %}
+    <div class="collapse" id="edit-{{ s.id }}">
+      <div class="rule-edit-area">
+        <form method="POST" action="/rules/{{ s.id }}/update" class="row g-2">
+          <div class="col-md-2">
+            <label class="form-label small fw-semibold">Section #</label>
+            <input type="number" name="section_num" class="form-control form-control-sm"
+                   value="{{ s.section_num }}" min="1">
+          </div>
+          <div class="col-md-10">
+            <label class="form-label small fw-semibold">Title</label>
+            <input type="text" name="title" class="form-control form-control-sm"
+                   value="{{ s.title }}">
+          </div>
+          <div class="col-12">
+            <label class="form-label small fw-semibold">
+              Content
+              <span class="text-muted ms-1" style="font-size:.7rem;font-weight:400">
+                Use <code>- item</code> for bullets, <code>**Text**</code> for sub-headers, blank line for new paragraph
+              </span>
+            </label>
+            <textarea name="content" class="form-control form-control-sm" rows="10"
+                      style="font-family:monospace;font-size:.78rem">{{ s.content }}</textarea>
+          </div>
+          <div class="col-auto">
+            <button type="submit" class="btn btn-sm btn-primary">
+              <i class="fas fa-save me-1"></i>Save
+            </button>
+          </div>
+          <div class="col-auto">
+            <button type="submit" formaction="/rules/{{ s.id }}/delete"
+                    class="btn btn-sm btn-outline-danger"
+                    onclick="return confirm('Delete this section?')">
+              <i class="fas fa-trash me-1"></i>Delete
+            </button>
+          </div>
+          <div class="col-auto ms-auto">
+            <div class="text-muted small pt-1">
+              Last updated: {{ s.updated_at[:16] if s.updated_at else '—' }}
+              {% if s.updated_by %}by {{ s.updated_by }}{% endif %}
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  <!-- Admin: Add new section -->
+  {% if is_admin %}
+  <div class="card shadow-sm mt-2 mb-4">
+    <div class="card-header py-2">
+      <h6 class="mb-0"><i class="fas fa-plus-circle me-2 text-success"></i>Add New Section</h6>
+    </div>
+    <div class="card-body">
+      <form method="POST" action="/rules/add" class="row g-2">
+        <div class="col-md-2">
+          <label class="form-label small fw-semibold">Section #</label>
+          <input type="number" name="section_num" class="form-control form-control-sm"
+                 value="{{ sections[-1].section_num + 1 if sections else 1 }}" min="1">
+        </div>
+        <div class="col-md-10">
+          <label class="form-label small fw-semibold">Title</label>
+          <input type="text" name="title" class="form-control form-control-sm"
+                 placeholder="Section title" required>
+        </div>
+        <div class="col-12">
+          <label class="form-label small fw-semibold">Content</label>
+          <textarea name="content" class="form-control form-control-sm" rows="5"
+                    placeholder="Use - item for bullets, **Text** for sub-headers, blank line for paragraph break"
+                    style="font-family:monospace;font-size:.78rem"></textarea>
+        </div>
+        <div class="col-auto">
+          <button type="submit" class="btn btn-sm btn-success">
+            <i class="fas fa-plus me-1"></i>Add Section
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}

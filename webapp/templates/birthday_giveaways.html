@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}Birthday Giveaways{% endblock %}
+{% block topbar_title %}<span class="fw-bold"><i class="fas fa-cake-candles me-2" style="color:#F9A825"></i>Birthday Giveaways</span>{% endblock %}
+
+{% block head %}
+<style>
+.bd-panel {
+  background:#fff; border:1px solid #e6e9ed; border-radius:8px;
+  box-shadow:0 1px 7px rgba(0,0,0,.05);
+}
+.bd-hero {
+  background:linear-gradient(135deg, #fff8e1, #ffffff 62%, #eef7ef);
+  border:1px solid #eadfae; border-radius:8px; padding:18px;
+}
+.bd-count {
+  width:92px; height:92px; border-radius:12px; background:#F9A825; color:#1f1600;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  box-shadow:0 5px 18px rgba(249,168,37,.18);
+}
+.bd-count strong { font-size:2rem; line-height:1; }
+.bd-stat {
+  border-left:4px solid var(--c); border-radius:8px; padding:12px 14px; background:#fff;
+  border-top:1px solid #edf0f2; border-right:1px solid #edf0f2; border-bottom:1px solid #edf0f2;
+}
+.bd-stat-value { font-weight:800; font-size:1.55rem; color:var(--c); line-height:1; }
+.bd-stat-label { font-size:.72rem; color:#66736c; font-weight:800; text-transform:uppercase; letter-spacing:.04em; }
+.bd-row {
+  border-left:4px solid var(--c); border-radius:8px; padding:12px;
+  background:#fff; border-top:1px solid #edf0f2; border-right:1px solid #edf0f2; border-bottom:1px solid #edf0f2;
+}
+.bd-status {
+  border-radius:999px; padding:5px 9px; font-size:.76rem; font-weight:800;
+}
+.bd-table th { font-size:.72rem; color:#66736c; text-transform:uppercase; letter-spacing:.04em; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="bd-hero mb-4">
+  {% if next_birthday %}
+  <div class="d-flex flex-wrap gap-3 align-items-center">
+    <div class="bd-count">
+      <strong>{{ next_birthday.days_until }}</strong>
+      <span class="small fw-bold">days</span>
+    </div>
+    <div class="me-auto">
+      <div class="text-muted small fw-semibold">Next Birthday</div>
+      <h3 class="mb-1">{{ next_birthday.staff_name }}</h3>
+      <div class="d-flex flex-wrap gap-2 align-items-center">
+        <span class="badge bg-warning text-dark"><i class="fas fa-calendar me-1"></i>{{ next_birthday.birthday_label }}</span>
+        <span class="badge bg-light text-dark border"><i class="fas fa-gift me-1"></i>{{ next_birthday.favorite_gift or 'Gift not set' }}</span>
+        <span class="bd-status {% if next_birthday.gift_status=='given' %}bg-success text-white{% elif next_birthday.gift_status=='prepared' %}bg-primary text-white{% else %}bg-light text-dark border{% endif %}">{{ next_birthday.gift_status|title }}</span>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <h5 class="mb-0">No birthday data yet.</h5>
+  {% endif %}
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-xl-3"><div class="bd-stat" style="--c:#F9A825"><div class="bd-stat-value">{{ birthdays|length }}</div><div class="bd-stat-label">Staff Tracked</div></div></div>
+  <div class="col-6 col-xl-3"><div class="bd-stat" style="--c:#C62828"><div class="bd-stat-value">{{ next_30|length }}</div><div class="bd-stat-label">Next 30 Days</div></div></div>
+  <div class="col-6 col-xl-3"><div class="bd-stat" style="--c:#1565C0"><div class="bd-stat-value">{{ this_month|length }}</div><div class="bd-stat-label">This Month</div></div></div>
+  <div class="col-6 col-xl-3"><div class="bd-stat" style="--c:#2E7D32"><div class="bd-stat-value">{{ given_this_year|length }}</div><div class="bd-stat-label">Given This Year</div></div></div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-12 col-xl-5">
+    <div class="bd-panel h-100">
+      <div class="p-3 border-bottom">
+        <h6 class="mb-0"><i class="fas fa-calendar-days me-2 text-danger"></i>Upcoming Birthdays</h6>
+      </div>
+      <div class="p-3">
+        {% for row in next_30 %}
+        <div class="bd-row mb-2" style="--c:{% if row.days_until <= 7 %}#C62828{% else %}#F9A825{% endif %}">
+          <div class="d-flex align-items-center gap-2">
+            <div class="fw-bold me-auto">{{ row.staff_name }}</div>
+            <span class="badge bg-light text-dark border">{{ row.days_until }} days</span>
+          </div>
+          <div class="text-muted small">{{ row.birthday_label }} | {{ row.favorite_gift or 'Gift not set' }}</div>
+        </div>
+        {% else %}
+        <div class="text-muted small">No birthdays in the next 30 days.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-xl-7">
+    <div class="bd-panel h-100">
+      <div class="p-3 border-bottom">
+        <h6 class="mb-0"><i class="fas fa-pen-to-square me-2 text-primary"></i>Update Birthday Giveaway</h6>
+      </div>
+      <div class="p-3">
+        <form method="POST" action="/admin/birthdays" class="row g-2">
+          <div class="col-md-4">
+            <label class="form-label small fw-semibold">Staff</label>
+            <select name="staff_name" id="bd-staff" class="form-select form-select-sm" onchange="fillBirthdayForm()">
+              {% for row in birthdays %}
+              <option value="{{ row.staff_name }}"
+                      data-birthday="{{ row.birthday }}"
+                      data-gift="{{ row.favorite_gift or '' }}"
+                      data-status="{{ row.gift_status or 'planned' }}"
+                      data-year="{{ row.last_given_year or '' }}"
+                      data-notes="{{ row.notes or '' }}">
+                {{ row.staff_name }}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-3"><label class="form-label small fw-semibold">Birthday</label><input name="birthday" id="bd-date" type="date" class="form-control form-control-sm" required></div>
+          <div class="col-md-3">
+            <label class="form-label small fw-semibold">Status</label>
+            <select name="gift_status" id="bd-status" class="form-select form-select-sm">
+              <option value="planned">Planned</option>
+              <option value="prepared">Prepared</option>
+              <option value="given">Given</option>
+              <option value="skipped">Skipped</option>
+            </select>
+          </div>
+          <div class="col-md-2"><label class="form-label small fw-semibold">Given Year</label><input name="last_given_year" id="bd-year" type="number" min="2020" max="2100" class="form-control form-control-sm" placeholder="{{ current_year }}"></div>
+          <div class="col-md-6"><label class="form-label small fw-semibold">Gift</label><input name="favorite_gift" id="bd-gift" class="form-control form-control-sm"></div>
+          <div class="col-md-6"><label class="form-label small fw-semibold">Notes</label><input name="notes" id="bd-notes" class="form-control form-control-sm"></div>
+          <div class="col-12"><button class="btn btn-sm btn-warning"><i class="fas fa-save me-1"></i>Save Birthday</button></div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="bd-panel">
+  <div class="p-3 border-bottom d-flex align-items-center">
+    <h6 class="mb-0 me-auto"><i class="fas fa-users me-2 text-secondary"></i>Birthday Register</h6>
+    <span class="text-muted small">Temporary birthday data can be replaced with real dates.</span>
+  </div>
+  <div class="p-3 table-responsive">
+    <table class="table table-sm align-middle bd-table">
+      <thead><tr><th>Staff</th><th>Birthday</th><th class="text-end">Countdown</th><th>Gift</th><th>Status</th><th>Notes</th><th>Edit</th></tr></thead>
+      <tbody>
+      {% for row in birthdays %}
+      <tr>
+        <td class="fw-semibold">{{ row.staff_name }}<div class="text-muted small">{{ row.role or 'Staff' }}</div></td>
+        <td>{{ row.birthday_label }}</td>
+        <td class="text-end"><span class="badge {% if row.days_until <= 7 %}bg-danger{% elif row.days_until <= 30 %}bg-warning text-dark{% else %}bg-light text-dark border{% endif %}">{{ row.days_until }} days</span></td>
+        <td>{{ row.favorite_gift or '' }}</td>
+        <td><span class="bd-status {% if row.gift_status=='given' %}bg-success text-white{% elif row.gift_status=='prepared' %}bg-primary text-white{% elif row.gift_status=='skipped' %}bg-secondary text-white{% else %}bg-light text-dark border{% endif %}">{{ row.gift_status|title }}</span></td>
+        <td class="small text-muted">{{ row.notes or '' }}</td>
+        <td><button class="btn btn-sm btn-outline-primary" type="button" onclick='selectBirthdayStaff({{ row.staff_name|tojson }})'><i class="fas fa-pen"></i></button></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function fillBirthdayForm() {
+  const select = document.getElementById('bd-staff');
+  if (!select || !select.selectedOptions.length) return;
+  const opt = select.selectedOptions[0];
+  document.getElementById('bd-date').value = opt.dataset.birthday || '';
+  document.getElementById('bd-gift').value = opt.dataset.gift || '';
+  document.getElementById('bd-status').value = opt.dataset.status || 'planned';
+  document.getElementById('bd-year').value = opt.dataset.year || '';
+  document.getElementById('bd-notes').value = opt.dataset.notes || '';
+}
+document.addEventListener('DOMContentLoaded', fillBirthdayForm);
+function selectBirthdayStaff(name) {
+  const select = document.getElementById('bd-staff');
+  if (!select) return;
+  select.value = name;
+  fillBirthdayForm();
+  select.scrollIntoView({behavior:'smooth', block:'center'});
+}
+</script>
+{% endblock %}

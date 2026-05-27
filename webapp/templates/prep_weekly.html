@@ -1,0 +1,842 @@
+{% extends "base.html" %}
+{% block title %}Weekly Prep Schedule{% endblock %}
+{% block topbar_title %}<span class="fw-bold"><i class="fas fa-calendar-week me-2"></i>Weekly Prep Schedule</span>{% endblock %}
+
+{% block head %}
+<style>
+/* ── Layout ── */
+.weekly-table { min-width: 860px; font-size: 0.8rem; border-collapse: separate; border-spacing: 0; }
+.weekly-table th, .weekly-table td { vertical-align: middle; }
+.task-col  { min-width: 175px; }
+.time-col  { width: 62px; text-align: center; }
+.staff-col { width: 105px; }
+.day-col   { width: 82px; text-align: center; padding: 4px !important; }
+
+/* ── Station header row ── */
+.station-hdr td {
+  font-weight: 700; font-size: 0.8rem; padding: 5px 10px;
+  border-left-width: 5px !important;
+}
+
+/* ── Day column header ── */
+.day-hdr-today {
+  background: #FFF3E0 !important;
+  color: #E65100 !important;
+}
+
+/* ── Day cells ── */
+.cell-na        { color: #ccc; background: #fafafa; }
+.cell-req       { background: #F8FFF8; }
+.cell-req-today { background: #FFFBF0; }
+.cell-done      { background: #E8F5E9; }
+.cell-done-today{ background: #C8E6C9; }
+
+/* ── Custom round checkbox ── */
+.prep-cb, .prep-cb-today {
+  -webkit-appearance: none; appearance: none;
+  width: 1.45rem; height: 1.45rem;
+  border-radius: 50%;
+  background: #fff;
+  cursor: pointer;
+  display: block; margin: 0 auto;
+  flex-shrink: 0;
+  transition: border-color .12s, background .12s, box-shadow .12s;
+}
+.prep-cb       { border: 2.5px solid #66BB6A; }
+.prep-cb:hover { border-color: #2E7D32; background: #F1F8E9;
+                 box-shadow: 0 0 0 3px rgba(76,175,80,.15); }
+.prep-cb:checked {
+  background: #43A047; border-color: #2E7D32;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' d='M2.5 8l4 4 7-7'/%3E%3C/svg%3E");
+  background-size: 80%; background-repeat: no-repeat; background-position: center;
+}
+.prep-cb-today       { border: 2.5px solid #FFA726; }
+.prep-cb-today:hover { border-color: #E65100; background: #FFF3E0;
+                       box-shadow: 0 0 0 3px rgba(255,152,0,.18); }
+.prep-cb-today:checked {
+  background: #FB8C00; border-color: #E65100;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' d='M2.5 8l4 4 7-7'/%3E%3C/svg%3E");
+  background-size: 80%; background-repeat: no-repeat; background-position: center;
+}
+
+/* ── Done checkmark ── */
+.done-icon  { color: #43A047; font-size: 1.3rem; }
+.note-btn   { background: none; border: none; padding: 0 2px; cursor: pointer; font-size: 0.75rem; }
+.note-preview { font-size: 0.65rem; color: #888; max-width: 75px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+
+/* ── Today view cards ── */
+.today-info-card {
+  border-left: 4px solid var(--sc, #ccc);
+  transition: background .2s;
+}
+.today-info-card.done-card {
+  background: rgba(76,175,80,.06);
+  opacity: .8;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Week selector -->
+<div class="card shadow-sm mb-3">
+  <div class="card-body py-2">
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      <a href="/prep/weekly/{{ prev_week }}" class="btn btn-sm btn-outline-secondary">
+        <i class="fas fa-chevron-left"></i>
+      </a>
+      <span class="fw-semibold">{{ week_start }} — {{ week_end }}</span>
+      <a href="/prep/weekly/{{ next_week }}" class="btn btn-sm btn-outline-secondary">
+        <i class="fas fa-chevron-right"></i>
+      </a>
+      <a href="/prep/weekly/{{ week_start_nav }}" class="btn btn-sm btn-outline-success ms-1">This Week</a>
+
+      <div class="ms-auto d-flex gap-2 flex-wrap align-items-center">
+        {% for s in stations %}
+        <a href="?station={{ s.id if station_filter != s.id|string else '' }}"
+           class="btn btn-sm {% if station_filter==s.id|string %}btn-sm{% else %}btn-outline-secondary btn-sm{% endif %}"
+           style="{% if station_filter==s.id|string %}background:{{s.color}};color:#fff;border-color:{{s.color}}{% endif %}">
+          {{ s.name_en }}
+        </a>
+        {% endfor %}
+        {% if station_filter %}
+        <a href="?" class="btn btn-sm btn-outline-danger">✕ Clear</a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if not sched %}
+<div class="text-center py-5 text-muted">
+  <i class="fas fa-spinner fa-spin fa-2x mb-3 d-block"></i>
+  <p class="small">Loading schedule...</p>
+</div>
+
+{% else %}
+<!-- ── Status bar ── -->
+<div class="d-flex gap-2 mb-3 align-items-center flex-wrap">
+  <span class="badge bg-{% if sched.locked %}danger{% else %}success{% endif %} fs-6">
+    <i class="fas fa-{% if sched.locked %}lock{% else %}lock-open{% endif %} me-1"></i>
+    {% if sched.locked %}Locked{% else %}Active{% endif %}
+  </span>
+
+  {% if is_admin and not sched.locked %}
+  <form method="POST" action="/prep/weekly/{{ week_start }}/lock" class="d-inline">
+    <button type="submit" class="btn btn-sm btn-outline-danger"
+            onclick="return confirm('Lock this week? Staff cannot make further changes.')">
+      <i class="fas fa-lock me-1"></i>Lock Week
+    </button>
+  </form>
+  {% endif %}
+  {% if is_admin %}
+  <a href="/prep/weekly/{{ week_start }}/report" target="_blank" class="btn btn-sm btn-outline-success">
+    <i class="fas fa-file-alt me-1"></i>Export Report
+  </a>
+  {% endif %}
+
+  <!-- Week stats -->
+  {% set total_req = [] %}{% set total_done = [] %}
+  {% for t in tasks %}{% for d in days %}{% set ds = t.days.get(d) %}
+    {% if ds and ds.is_required and ds.status != 'moved' %}{% if total_req.append(1) %}{% endif %}
+    {% if ds.status=='done' %}{% if total_done.append(1) %}{% endif %}{% endif %}
+    {% endif %}{% endfor %}{% endfor %}
+  <span class="badge bg-success ms-1">{{ total_done|length }} Done</span>
+  <span class="badge bg-secondary">{{ total_req|length - total_done|length }} Pending</span>
+  <span class="text-muted small">/ {{ tasks|length }} tasks</span>
+
+  <!-- View toggle -->
+  <div class="ms-auto btn-group" role="group">
+    <button class="btn btn-sm" id="btnToday" onclick="switchView('today')">
+      <i class="fas fa-list-check me-1"></i>Today
+    </button>
+    <button class="btn btn-sm" id="btnWeek" onclick="switchView('week')">
+      <i class="fas fa-table me-1"></i>Full Week
+    </button>
+  </div>
+</div>
+
+<!-- Unsaved changes bar -->
+<div id="save-bar" class="d-none mb-3 px-3 py-2 d-flex align-items-center gap-3 rounded"
+     style="background:#FFF3E0;border:1px solid #FFB74D">
+  <i class="fas fa-circle-dot" style="color:#FF9800"></i>
+  <span style="font-size:0.87rem"><strong id="save-count">0</strong> unsaved change(s)</span>
+  <div class="ms-auto d-flex gap-2">
+    <button class="btn btn-sm btn-outline-secondary" onclick="resetChanges()">
+      <i class="fas fa-rotate-left me-1"></i>Undo
+    </button>
+    <button class="btn btn-sm btn-success fw-semibold" onclick="saveAll()">
+      <i class="fas fa-save me-1"></i>Save Changes
+    </button>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════════
+     TODAY VIEW — read-only overview
+══════════════════════════════════════════ -->
+<div id="view-today">
+  {% set today_tasks = [] %}
+  {% for task in tasks %}{% set ds = task.days.get(today_day_code) %}
+    {% if ds and ds.is_required %}{% if today_tasks.append((task, ds)) %}{% endif %}{% endif %}
+  {% endfor %}
+
+  {% if not today_tasks %}
+  <div class="text-center py-5 text-muted">
+    <i class="fas fa-coffee fa-3x mb-3 d-block opacity-25"></i>
+    <h6>No tasks scheduled for today ({{ today_day_label }})</h6>
+  </div>
+  {% else %}
+
+  <!-- Progress summary -->
+  {% set td_done = today_tasks | selectattr('1.status', 'eq', 'done') | list %}
+  {% set td_pct = (td_done|length / today_tasks|length * 100)|round|int %}
+  <div class="card shadow-sm mb-3">
+    <div class="card-body py-2">
+      <div class="d-flex justify-content-between align-items-center mb-1">
+        <span class="fw-semibold small"><i class="fas fa-calendar-day me-1 text-warning"></i>{{ today_day_label }}'s Prep — {{ today }}</span>
+        <span class="fw-bold {% if td_pct==100 %}text-success{% elif td_pct>0 %}text-warning{% else %}text-danger{% endif %}">
+          {{ td_done|length }}/{{ today_tasks|length }} done
+        </span>
+      </div>
+      <div class="progress" style="height:8px">
+        <div class="progress-bar bg-{% if td_pct==100 %}success{% elif td_pct>0 %}warning{% else %}danger{% endif %}"
+             style="width:{{ td_pct }}%"></div>
+      </div>
+    </div>
+  </div>
+
+  {% set ns2 = namespace(cur_st='') %}
+  {% for task, ds in today_tasks %}
+  {% if task.station.name_en != ns2.cur_st %}
+  {% set ns2.cur_st = task.station.name_en %}
+  <div class="d-flex align-items-center gap-2 mt-3 mb-1">
+    <span class="badge px-3 py-2 fs-6" style="background:{{ task.station.color }}">{{ task.station.name_en }}</span>
+    <span class="text-muted small">{{ task.station.name_vi }}</span>
+  </div>
+  {% endif %}
+
+  <div class="card shadow-sm mb-2 today-info-card {% if ds.status=='done' %}done-card{% endif %}"
+       style="--sc:{{ task.station.color }}">
+    <div class="card-body py-2 px-3 d-flex align-items-center gap-3">
+      <!-- Done indicator -->
+      <div style="width:1.4rem;text-align:center">
+        {% if ds.status=='done' %}
+        <i class="fas fa-check-circle text-success fs-5"></i>
+        {% else %}
+        <i class="far fa-circle text-muted" style="font-size:1.1rem"></i>
+        {% endif %}
+      </div>
+      <!-- Task info -->
+      <div class="flex-grow-1">
+        <div class="fw-semibold {% if ds.status=='done' %}text-decoration-line-through text-muted{% endif %}">
+          {{ task.task_name_en }}
+        </div>
+        <div class="text-muted small">{{ task.task_name_vi }}</div>
+        <div class="d-flex flex-wrap gap-2 mt-1 align-items-center">
+          {% if task.fmt_time %}
+          <span class="badge bg-secondary" style="font-size:0.68rem">{{ task.fmt_time }}</span>
+          {% endif %}
+          {% if task.assigned_to %}
+          <span style="font-size:0.75rem;color:#666">
+            <i class="fas fa-user me-1"></i>{{ task.assigned_to }}
+          </span>
+          {% endif %}
+          {% if task.is_supplier %}
+          <span class="badge bg-primary" style="font-size:0.68rem">
+            <i class="fas fa-truck me-1"></i>{{ task.supplier_name or 'Supplier' }}
+          </span>
+          {% endif %}
+          {% if ds.status=='done' and ds.done_by %}
+          <span class="text-success" style="font-size:0.73rem">
+            <i class="fas fa-user-check me-1"></i>{{ ds.done_by }}
+          </span>
+          {% endif %}
+        </div>
+        {% if ds.note %}
+        <div class="mt-1 px-2 py-1 rounded small" style="background:#FFF8E1;color:#795548;font-size:0.75rem">
+          <i class="fas fa-sticky-note me-1" style="color:#FF9800"></i>{{ ds.note }}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+  {% endif %}
+</div><!-- /view-today -->
+
+
+<!-- ══════════════════════════════════════════
+     FULL WEEK TABLE VIEW — interactive
+══════════════════════════════════════════ -->
+<div id="view-week" class="d-none">
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-bordered weekly-table mb-0">
+      <thead class="table-dark">
+        <tr>
+          <th class="time-col">Time</th>
+          <th class="task-col">Task</th>
+          <th class="staff-col">Staff</th>
+          {% for i in range(7) %}
+          {% set is_today_hdr = week_dates[i]==today %}
+          <th class="day-col {% if is_today_hdr %}day-hdr-today{% endif %}">
+            <div class="fw-bold">{{ day_labels[i] }}</div>
+            <div style="font-size:0.68rem;opacity:0.75;font-weight:400">{{ week_dates[i][-5:] }}</div>
+            {% set dhreq = [] %}{% set hhdone = [] %}
+            {% for t in tasks %}{% set ds = t.days.get(days[i]) %}
+              {% if ds and ds.is_required %}{% if dhreq.append(1) %}{% endif %}
+              {% if ds.status=='done' %}{% if hhdone.append(1) %}{% endif %}{% endif %}{% endif %}
+            {% endfor %}
+            {% if dhreq %}
+            <div class="mt-1" style="font-size:0.65rem;opacity:0.9">
+              <span class="badge {% if hhdone|length==dhreq|length %}bg-success{% elif hhdone %}bg-warning text-dark{% else %}bg-secondary{% endif %}" style="font-size:0.6rem">
+                {{ hhdone|length }}/{{ dhreq|length }}
+              </span>
+            </div>
+            {% endif %}
+          </th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% set ns = namespace(station='') %}
+        {% for task in tasks %}
+
+        {% if task.station.name_en != ns.station %}
+        {% set ns.station = task.station.name_en %}
+        <tr class="station-hdr">
+          <td colspan="10"
+              style="background:{{ task.station.color }}15;color:{{ task.station.color }};border-left:5px solid {{ task.station.color }}">
+            <i class="fas fa-layer-group me-2"></i>{{ task.station.name_en }}
+            <span class="ms-2 fw-normal" style="font-size:0.73rem;opacity:0.75">{{ task.station.name_vi }}</span>
+          </td>
+        </tr>
+        {% endif %}
+
+        <tr>
+          <!-- Time (admin: clickable) -->
+          <td class="time-col fw-semibold" style="color:#1B4332;font-size:0.78rem">
+            {% if is_admin %}
+            <span style="cursor:pointer;text-decoration:underline dotted"
+                  onclick="editTime({{ task.id }}, '{{ task.scheduled_time or '' }}')" title="Edit time">
+              {{ task.fmt_time or '<span class=\'text-muted\'>—</span>'|safe }}
+            </span>
+            {% else %}
+            {{ task.fmt_time or '—' }}
+            {% endif %}
+          </td>
+
+          <!-- Task name -->
+          <td class="task-col">
+            <div class="d-flex align-items-start gap-1">
+              <div class="flex-grow-1">
+                <div class="fw-semibold" style="font-size:0.82rem">{{ task.task_name_en }}</div>
+                <div class="text-muted" style="font-size:0.7rem">{{ task.task_name_vi }}</div>
+                {% if task.is_supplier %}
+                <span class="badge bg-primary mt-1" style="font-size:0.6rem">
+                  <i class="fas fa-truck me-1"></i>{{ task.supplier_name or 'Supplier' }}
+                </span>
+                {% endif %}
+              </div>
+              {% if is_admin and not sched.locked %}
+              <div class="dropdown">
+                <button class="btn btn-link p-0 text-muted" style="font-size:0.7rem;line-height:1"
+                        data-bs-toggle="dropdown" title="More actions">
+                  <i class="fas fa-ellipsis-v"></i>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end shadow-sm" style="font-size:0.8rem;min-width:170px">
+                  <li>
+                    <a class="dropdown-item" href="#"
+                       onclick="openMovePrep({{ task.id }});return false">
+                      <i class="fas fa-arrow-left me-2 text-purple" style="color:#7B1FA2"></i>Move Prep Earlier
+                    </a>
+                  </li>
+                </ul>
+              </div>
+              {% endif %}
+            </div>
+          </td>
+
+          <!-- Staff (admin: dropdown; staff: label) -->
+          <td class="staff-col">
+            {% if is_admin %}
+            <select class="form-select form-select-sm py-0" style="font-size:0.7rem"
+                    onchange="assignTask({{ task.id }}, this.value)">
+              <option value="">—</option>
+              {% for s in staff_list %}
+              <option value="{{ s }}" {% if task.assigned_to==s %}selected{% endif %}>
+                {{ s }}
+              </option>
+              {% endfor %}
+            </select>
+            {% else %}
+            <span class="small text-muted">
+              {{ task.assigned_to or '—' }}
+            </span>
+            {% endif %}
+          </td>
+
+          <!-- Day cells Mon–Sun -->
+          {% for i in range(7) %}
+          {% set day = days[i] %}
+          {% set ds  = task.days.get(day) %}
+          {% set is_today_col = week_dates[i]==today %}
+
+          {% if ds and ds.status == 'moved' %}
+            <!-- MOVED cell — original day, task was moved earlier -->
+            <td class="day-col" style="background:#F3E5F5" title="Moved to {{ ds.moved_to_day|upper }}{% if ds.moved_reason %} — {{ ds.moved_reason }}{% endif %}">
+              <div class="d-flex flex-column align-items-center gap-1 py-1">
+                <i class="fas fa-arrow-left" style="color:#7B1FA2;font-size:0.95rem"></i>
+                <span style="font-size:0.62rem;color:#6A1B9A;font-weight:700;letter-spacing:.3px">
+                  → {{ ds.moved_to_day|upper if ds.moved_to_day else '?' }}
+                </span>
+                {% if ds.moved_reason %}
+                <span style="font-size:0.55rem;color:#AB47BC;max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;text-align:center">{{ ds.moved_reason }}</span>
+                {% endif %}
+              </div>
+            </td>
+          {% elif ds and ds.is_required %}
+            {% if ds.issue_flag %}
+              <!-- ISSUE cell — click anywhere to view/edit -->
+              <td class="day-col" style="background:rgba(244,67,54,.10);cursor:pointer"
+                  data-sid="{{ ds.id }}" data-note="{{ ds.note|e }}"
+                  onclick="flagIssue(parseInt(this.dataset.sid), 1, this.dataset.note)">
+                <div class="d-flex flex-column align-items-center gap-1 py-1">
+                  <i class="fas fa-exclamation-circle" style="color:#E53935;font-size:1.2rem"></i>
+                  {% if ds.note %}
+                  <span style="font-size:0.65rem;color:#c62828;max-width:74px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;text-align:center;line-height:1.2">{{ ds.note }}</span>
+                  {% else %}
+                  <span style="font-size:0.6rem;color:#e57373">issue</span>
+                  {% endif %}
+                </div>
+              </td>
+            {% elif ds.status == 'done' %}
+              <!-- DONE cell -->
+              <td class="day-col {% if is_today_col %}cell-done-today{% else %}cell-done{% endif %}"
+                  data-today="{{ 'true' if is_today_col else 'false' }}">
+                <div class="d-flex flex-column align-items-center gap-1">
+                  <input type="checkbox"
+                         class="{% if is_today_col %}prep-cb-today{% else %}prep-cb{% endif %} prep-track"
+                         data-sid="{{ ds.id }}" data-orig="done" checked
+                         onchange="markDirty(this)"
+                         {% if sched.locked and not is_admin %}disabled{% endif %}>
+                  {% if ds.moved_from_day %}
+                  <span style="font-size:0.58rem;color:#7B1FA2;background:#F3E5F5;border-radius:3px;padding:1px 4px">from {{ ds.moved_from_day|upper }}</span>
+                  {% endif %}
+                  <button class="note-btn" onclick="flagIssue({{ ds.id }}, 0, '')" title="Flag issue" style="color:#F44336">
+                    <i class="fas fa-exclamation-triangle" style="font-size:0.62rem"></i>
+                  </button>
+                </div>
+              </td>
+            {% else %}
+              <!-- PENDING cell -->
+              <td class="day-col {% if is_today_col %}cell-req-today{% else %}cell-req{% endif %}"
+                  data-today="{{ 'true' if is_today_col else 'false' }}">
+                <div class="d-flex flex-column align-items-center gap-1">
+                  <input type="checkbox"
+                         class="{% if is_today_col %}prep-cb-today{% else %}prep-cb{% endif %} prep-track"
+                         data-sid="{{ ds.id }}" data-orig="pending"
+                         onchange="markDirty(this)"
+                         {% if sched.locked and not is_admin %}disabled{% endif %}>
+                  {% if ds.moved_from_day %}
+                  <span style="font-size:0.58rem;color:#7B1FA2;background:#F3E5F5;border-radius:3px;padding:1px 4px">from {{ ds.moved_from_day|upper }}</span>
+                  {% endif %}
+                  <button class="note-btn" onclick="flagIssue({{ ds.id }}, 0, '')" title="Flag issue" style="color:#F44336">
+                    <i class="fas fa-exclamation-triangle" style="font-size:0.62rem"></i>
+                  </button>
+                </div>
+              </td>
+            {% endif %}
+          {% else %}
+            <!-- N/A cell -->
+            <td class="day-col cell-na">—</td>
+          {% endif %}
+          {% endfor %}
+
+        </tr>
+        {% else %}
+        <tr><td colspan="10" class="text-center text-muted py-3">No tasks found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+</div><!-- /view-week -->
+{% endif %}
+
+
+<!-- ── Issue / Note modal ── -->
+<div class="modal fade" id="issueModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header py-2" id="issueModalHeader" style="background:#FFEBEE;border-bottom:1px solid #FFCDD2">
+        <h6 class="modal-title" id="issueModalTitle" style="color:#c62828">
+          <i class="fas fa-exclamation-triangle me-1"></i>Flag Issue
+        </h6>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body pb-2">
+        <textarea id="issueText" class="form-control" rows="3"
+                  placeholder="Describe the issue or note (e.g. out of stock, moved to tomorrow...)"
+                  style="resize:none;border-color:#FFCDD2"></textarea>
+        <div class="text-muted mt-1" style="font-size:0.7rem">
+          <i class="fas fa-eye me-1"></i>Visible to all staff & admin
+        </div>
+      </div>
+      <div class="modal-footer py-2 gap-1">
+        <button id="issueSaveBtn" class="btn btn-sm btn-danger" onclick="saveIssue()">
+          <i class="fas fa-flag me-1"></i>Flag Issue
+        </button>
+        <button id="issueResolveBtn" class="btn btn-sm btn-success d-none" onclick="resolveIssue()">
+          <i class="fas fa-check me-1"></i>Resolve
+        </button>
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Move Prep Earlier modal (admin only) ── -->
+<div class="modal fade" id="moveModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header py-2" style="background:#F3E5F5;border-bottom:1px solid #CE93D8">
+        <h6 class="modal-title" style="color:#6A1B9A">
+          <i class="fas fa-arrow-left me-1"></i>Move Prep Earlier
+        </h6>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body pb-2">
+        <div class="fw-semibold mb-1" id="moveTaskName" style="font-size:0.85rem"></div>
+        <div class="text-muted mb-3" style="font-size:0.75rem">
+          <i class="fas fa-calendar-day me-1"></i>Original day: <span id="moveFromLabel" class="fw-semibold"></span>
+        </div>
+
+        <div id="moveFromWrap" class="mb-3 d-none">
+          <div class="form-label small fw-semibold mb-1">Move which day?</div>
+          <div id="moveFromOptions"></div>
+        </div>
+
+        <div class="mb-3">
+          <div class="form-label small fw-semibold mb-1">Move to:</div>
+          <div id="moveToOptions"></div>
+        </div>
+
+        <div>
+          <label class="form-label small fw-semibold mb-1">Reason:</label>
+          <select class="form-select form-select-sm" id="moveReason">
+            <option value="Stock running low">Stock running low</option>
+            <option value="Busy day expected">Busy day expected</option>
+            <option value="Supplier delay">Supplier delay</option>
+            <option value="Staff availability">Staff availability</option>
+            <option value="Other reason">Other reason</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer py-2">
+        <button class="btn btn-sm btn-primary" style="background:#7B1FA2;border-color:#7B1FA2" onclick="saveMovePrep()">
+          <i class="fas fa-arrow-left me-1"></i>Move Prep
+        </button>
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Time edit modal (admin only) ── -->
+<div class="modal fade" id="timeModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title"><i class="fas fa-clock me-1"></i>Edit Scheduled Time</h6>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="time" id="timeInput" class="form-control mb-3">
+        <div class="fw-semibold small mb-2">Apply to:</div>
+        <div class="form-check">
+          <input class="form-check-input" type="radio" name="updateType" id="updWeek" value="week" checked>
+          <label class="form-check-label small" for="updWeek">This week only</label>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" type="radio" name="updateType" id="updAll" value="all">
+          <label class="form-check-label small" for="updAll">This week + update default template</label>
+        </div>
+      </div>
+      <div class="modal-footer py-2">
+        <button class="btn btn-sm btn-success" onclick="saveTime()">Save</button>
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Move-prep data (admin only) ──
+const MOVE_DATA = {};
+{% if is_admin %}
+{% for task in tasks %}
+MOVE_DATA[{{ task.id }}] = {
+  name: {{ task.task_name_en|tojson }},
+  movable: [
+    {% for i in range(7) %}
+    {% set ds = task.days.get(days[i]) %}
+    {% if ds and ds.is_required and ds.status == 'pending' %}
+    {sid:{{ ds.id }}, day:{{ days[i]|tojson }}, label:{{ day_labels[i]|tojson }}, idx:{{ i }}},
+    {% endif %}
+    {% endfor %}
+  ]
+};
+{% endfor %}
+{% endif %}
+const _DAYS      = {{ days|tojson }};
+const _DAY_LBLS  = {{ day_labels|tojson }};
+let _moveSid     = null;
+let _moveTaskId  = null;
+
+function openMovePrep(taskId) {
+  const t = MOVE_DATA[taskId];
+  if (!t) return;
+  _moveTaskId = taskId;
+  document.getElementById('moveTaskName').textContent = t.name;
+
+  const fromWrap = document.getElementById('moveFromWrap');
+  const fromOpts = document.getElementById('moveFromOptions');
+
+  if (t.movable.length === 0) {
+    alert('No pending days to move for this task.');
+    return;
+  }
+  if (t.movable.length === 1) {
+    // Only one pending day — skip FROM selector
+    fromWrap.classList.add('d-none');
+    document.getElementById('moveFromLabel').textContent = t.movable[0].label;
+    _moveSid = t.movable[0].sid;
+    _renderMoveTo(t.movable[0].idx);
+  } else {
+    fromWrap.classList.remove('d-none');
+    fromOpts.innerHTML = '';
+    t.movable.forEach((m, i) => {
+      fromOpts.innerHTML += `
+        <div class="form-check form-check-inline">
+          <input class="form-check-input" type="radio" name="moveFrom"
+                 value="${i}" id="mf_${i}" ${i===0?'checked':''}
+                 onchange="onFromChange()">
+          <label class="form-check-label small" for="mf_${i}">${m.label}</label>
+        </div>`;
+    });
+    document.getElementById('moveFromLabel').textContent = t.movable[0].label;
+    _moveSid = t.movable[0].sid;
+    _renderMoveTo(t.movable[0].idx);
+  }
+  new bootstrap.Modal(document.getElementById('moveModal')).show();
+}
+
+function onFromChange() {
+  const t   = MOVE_DATA[_moveTaskId];
+  const idx = parseInt(document.querySelector('input[name=moveFrom]:checked').value);
+  const m   = t.movable[idx];
+  _moveSid  = m.sid;
+  document.getElementById('moveFromLabel').textContent = m.label;
+  _renderMoveTo(m.idx);
+}
+
+function _renderMoveTo(fromIdx) {
+  const div = document.getElementById('moveToOptions');
+  div.innerHTML = '';
+  let first = true;
+  for (let i = 0; i < fromIdx; i++) {
+    div.innerHTML += `
+      <div class="form-check form-check-inline">
+        <input class="form-check-input" type="radio" name="moveTo"
+               value="${_DAYS[i]}" id="mt_${i}" ${first?'checked':''}>
+        <label class="form-check-label small" for="mt_${i}">${_DAY_LBLS[i]}</label>
+      </div>`;
+    first = false;
+  }
+  if (first) div.innerHTML = '<span class="text-muted small">No earlier days available</span>';
+}
+
+function saveMovePrep() {
+  const toDay  = document.querySelector('input[name=moveTo]:checked')?.value;
+  const reason = document.getElementById('moveReason').value;
+  if (!toDay) { alert('Please select a target day.'); return; }
+  const fd = new FormData();
+  fd.append('to_day', toDay);
+  fd.append('reason', reason);
+  fetch(`/prep/daily/${_moveSid}/move`, {
+    method: 'POST', body: fd,
+    headers: {'X-Requested-With': 'XMLHttpRequest'}
+  }).then(r => r.json()).then(d => {
+    if (d.error) { alert(d.error); return; }
+    bootstrap.Modal.getInstance(document.getElementById('moveModal')).hide();
+    location.reload();
+  });
+}
+
+let _timeTaskId  = null;
+let _issueStatusId  = null;
+let _issueClearMode = false;
+
+// ── Track & save changes ──
+const _dirty = {};
+
+function markDirty(cb) {
+  const sid    = parseInt(cb.dataset.sid);
+  const orig   = cb.dataset.orig;   // 'done' or 'pending'
+  const isDone = cb.checked;
+  const cell   = cb.closest('td');
+  const isToday = cell.dataset.today === 'true';
+
+  // Update cell background immediately
+  if (isDone) {
+    cell.className = 'day-col ' + (isToday ? 'cell-done-today' : 'cell-done');
+  } else {
+    cell.className = 'day-col ' + (isToday ? 'cell-req-today' : 'cell-req');
+  }
+  cell.dataset.today = isToday ? 'true' : 'false';
+
+  // Track delta vs original
+  if (isDone === (orig === 'done')) {
+    delete _dirty[sid];
+  } else {
+    _dirty[sid] = isDone;
+  }
+
+  const count = Object.keys(_dirty).length;
+  const bar   = document.getElementById('save-bar');
+  if (count > 0) {
+    bar.classList.remove('d-none');
+    document.getElementById('save-count').textContent = count;
+  } else {
+    bar.classList.add('d-none');
+  }
+}
+
+function saveAll() {
+  const items = Object.entries(_dirty).map(([id, done]) => ({id: parseInt(id), done}));
+  if (!items.length) return;
+  const btn = document.querySelector('#save-bar .btn-success');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Saving...';
+  fetch('/prep/weekly/batch-save', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+    body: JSON.stringify(items)
+  }).then(r => r.json()).then(d => {
+    if (d.ok) location.reload();
+    else { alert('Save failed. Please try again.'); btn.disabled = false; btn.innerHTML = '<i class="fas fa-save me-1"></i>Save Changes'; }
+  }).catch(() => { alert('Network error.'); btn.disabled = false; btn.innerHTML = '<i class="fas fa-save me-1"></i>Save Changes'; });
+}
+
+function resetChanges() {
+  location.reload();
+}
+
+// ── Issue / Note ──
+function flagIssue(statusId, currentFlag, existingNote) {
+  _issueStatusId  = statusId;
+  _issueClearMode = (currentFlag === 1);
+  document.getElementById('issueText').value = existingNote || '';
+  const hdr = document.getElementById('issueModalHeader');
+  const ttl = document.getElementById('issueModalTitle');
+  const saveBtn    = document.getElementById('issueSaveBtn');
+  const resolveBtn = document.getElementById('issueResolveBtn');
+  if (_issueClearMode) {
+    hdr.style.background    = '#FFF8E1';
+    hdr.style.borderBottom  = '1px solid #FFE082';
+    ttl.style.color         = '#E65100';
+    ttl.innerHTML = '<i class="fas fa-exclamation-circle me-1"></i>View / Edit Issue';
+    saveBtn.className = 'btn btn-sm btn-warning';
+    saveBtn.innerHTML = '<i class="fas fa-pencil-alt me-1"></i>Update Issue';
+    resolveBtn.classList.remove('d-none');
+  } else {
+    hdr.style.background    = '#FFEBEE';
+    hdr.style.borderBottom  = '1px solid #FFCDD2';
+    ttl.style.color         = '#c62828';
+    ttl.innerHTML = '<i class="fas fa-exclamation-triangle me-1"></i>Flag Issue';
+    saveBtn.className = 'btn btn-sm btn-danger';
+    saveBtn.innerHTML = '<i class="fas fa-flag me-1"></i>Flag Issue';
+    resolveBtn.classList.add('d-none');
+  }
+  new bootstrap.Modal(document.getElementById('issueModal')).show();
+}
+function saveIssue() {
+  const note = document.getElementById('issueText').value.trim();
+  const fd   = new FormData();
+  fd.append('note', note);
+  fd.append('flag', '1');
+  fetch(`/prep/daily/${_issueStatusId}/issue`, {
+    method: 'POST', body: fd,
+    headers: {'X-Requested-With': 'XMLHttpRequest'}
+  }).then(() => {
+    bootstrap.Modal.getInstance(document.getElementById('issueModal')).hide();
+    location.reload();
+  });
+}
+function resolveIssue() {
+  const fd = new FormData();
+  fd.append('flag', '0');
+  fetch(`/prep/daily/${_issueStatusId}/issue`, {
+    method: 'POST', body: fd,
+    headers: {'X-Requested-With': 'XMLHttpRequest'}
+  }).then(() => {
+    bootstrap.Modal.getInstance(document.getElementById('issueModal')).hide();
+    location.reload();
+  });
+}
+
+// ── Assign staff (admin) ──
+function assignTask(id, staff) {
+  const fd = new FormData();
+  fd.append('assigned_to', staff);
+  fetch(`/prep/weekly-task/${id}/assign`, {
+    method: 'POST', body: fd,
+    headers: {'X-Requested-With': 'XMLHttpRequest'}
+  });
+}
+
+// ── Edit time (admin) ──
+function editTime(id, current) {
+  _timeTaskId = id;
+  document.getElementById('timeInput').value = current || '';
+  new bootstrap.Modal(document.getElementById('timeModal')).show();
+}
+function saveTime() {
+  const t  = document.getElementById('timeInput').value;
+  const ut = document.querySelector('input[name="updateType"]:checked').value;
+  const fd = new FormData();
+  fd.append('scheduled_time', t);
+  fd.append('update_type', ut);
+  fetch(`/prep/weekly-task/${_timeTaskId}/time`, {
+    method: 'POST', body: fd,
+    headers: {'X-Requested-With': 'XMLHttpRequest'}
+  }).then(r => r.json()).then(() => {
+    bootstrap.Modal.getInstance(document.getElementById('timeModal')).hide();
+    location.reload();
+  });
+}
+
+
+// ── View toggle ──
+function switchView(v) {
+  const isToday = (v === 'today');
+  document.getElementById('view-today').classList.toggle('d-none', !isToday);
+  document.getElementById('view-week').classList.toggle('d-none', isToday);
+  document.getElementById('btnToday').className = isToday
+    ? 'btn btn-sm btn-warning text-white fw-semibold'
+    : 'btn btn-sm btn-outline-secondary';
+  document.getElementById('btnWeek').className = isToday
+    ? 'btn btn-sm btn-outline-secondary'
+    : 'btn btn-sm btn-primary fw-semibold';
+  localStorage.setItem('prepView', v);
+}
+
+(function () {
+  const saved = localStorage.getItem('prepView') || 'today';
+  switchView(saved);
+})();
+</script>
+{% endblock %}

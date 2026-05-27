@@ -1,0 +1,665 @@
+{% extends "base.html" %}
+{% block title %}Manage Pastry Items{% endblock %}
+{% block topbar_title %}
+<span class="fw-bold"><i class="fas fa-list me-2" style="color:#26A69A"></i>Manage Pastry Items</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.pi-table { font-size: 0.8rem; }
+.pi-table th { font-size: 0.74rem; white-space: nowrap; background: #1B3A2D !important; color: #fff; }
+.pi-table td { vertical-align: middle; }
+
+.supplier-row-hdr td {
+  background: linear-gradient(90deg, #1B4332 0%, #2D6A4F 100%) !important;
+  color: #fff !important; font-weight: 700; font-size: 0.78rem;
+  padding: 6px 12px !important;
+  border-left: 4px solid #4CAF50 !important;
+}
+
+.item-inactive td { opacity: 0.55; }
+.item-inactive .fw-semibold { text-decoration: line-through; }
+
+.day-badge {
+  display: inline-block;
+  padding: 2px 7px; border-radius: 12px;
+  font-size: 0.66rem; font-weight: 700;
+  background: #E8F5E9; color: #2E7D32;
+  border: 1px solid #A5D6A7;
+  margin: 1px;
+}
+
+.section-heading-pi {
+  color: #1B4332;
+  font-weight: 700;
+  border-bottom: 2px solid #4CAF50;
+  padding-bottom: 5px;
+  margin-bottom: 14px;
+  font-size: 0.95rem;
+}
+
+/* Day checkboxes in modals */
+.day-check-group {
+  display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px;
+}
+.day-check-item {
+  display: flex; align-items: center; gap: 4px;
+}
+.day-check-item input { accent-color: #2D6A4F; }
+.day-check-item label { font-size: 0.8rem; cursor: pointer; }
+
+.suppliers-table { font-size: 0.8rem; }
+.suppliers-table th { font-size: 0.74rem; background: #1B3A2D !important; color: #fff; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Tab nav -->
+<ul class="nav nav-tabs mb-3" id="piTabs">
+  <li class="nav-item">
+    <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-items">
+      <i class="fas fa-cookie-bite me-1"></i>Items
+    </button>
+  </li>
+  <li class="nav-item">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-suppliers">
+      <i class="fas fa-store me-1"></i>Suppliers
+    </button>
+  </li>
+</ul>
+
+<div class="tab-content">
+
+<!-- ═══════════════════════════════════════════
+     ITEMS TAB
+═══════════════════════════════════════════ -->
+<div class="tab-pane fade show active" id="tab-items">
+
+  <!-- Top actions bar -->
+  <div class="d-flex align-items-center gap-2 mb-3">
+    <h5 class="section-heading-pi mb-0 flex-grow-1">
+      <i class="fas fa-cookie-bite me-2"></i>Pastry Items
+    </h5>
+    <button class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#addItemModal">
+      <i class="fas fa-plus me-1"></i>Add Item
+    </button>
+  </div>
+
+  <div class="card shadow-sm">
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0 pi-table align-middle">
+        <thead>
+          <tr>
+            <th>Item (EN / VI)</th>
+            <th>Supplier</th>
+            <th class="text-end">Sell $</th>
+            <th class="text-end">Cost $</th>
+            <th class="text-center">Margin</th>
+            <th>Delivery Days</th>
+            <th class="text-center">Ret.</th>
+            <th class="text-center">Status</th>
+            <th class="text-center">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% set ns_sup = namespace(current='') %}
+          {% for item in items %}
+
+          {% if item.supplier_name != ns_sup.current %}
+          {% set ns_sup.current = item.supplier_name %}
+          <tr class="supplier-row-hdr">
+            <td colspan="9">
+              <i class="fas fa-store me-2"></i>{{ item.supplier_name }}
+            </td>
+          </tr>
+          {% endif %}
+
+          <tr class="{% if not item.active %}item-inactive{% endif %}">
+            <!-- Name -->
+            <td style="min-width:140px">
+              <div class="fw-semibold" style="color:#1B4332;font-size:0.82rem">{{ item.name_en }}</div>
+              <div class="text-muted" style="font-size:0.71rem">{{ item.name_vi }}</div>
+            </td>
+
+            <!-- Supplier -->
+            <td>
+              <span class="text-muted" style="font-size:0.75rem">{{ item.supplier_name }}</span>
+            </td>
+
+            <!-- Sell $ -->
+            <td class="text-end fw-semibold">${{ "%.2f"|format(item.selling_price) }}</td>
+
+            <!-- Cost $ -->
+            <td class="text-end text-muted">${{ "%.2f"|format(item.cost_price) }}</td>
+
+            <!-- Margin -->
+            <td class="text-center">
+              {% set mpct = item.margin_pct or 0 %}
+              <span class="fw-bold {% if mpct > 40 %}text-success{% elif mpct >= 20 %}text-warning{% else %}text-danger{% endif %}">
+                {{ "%.1f"|format(mpct) }}%
+              </span>
+              <div class="text-muted" style="font-size:0.68rem">${{ "%.2f"|format(item.margin or 0) }}</div>
+            </td>
+
+            <!-- Days -->
+            <td style="min-width:130px">
+              {% for d in item.days_list %}
+              <span class="day-badge">{{ d|upper }}</span>
+              {% else %}
+              <span class="text-muted" style="font-size:0.73rem">—</span>
+              {% endfor %}
+            </td>
+
+            <!-- Returnable -->
+            <td class="text-center">
+              {% if item.returnable %}
+              <i class="fas fa-check-circle text-success" title="Returnable"></i>
+              {% else %}
+              <i class="fas fa-times-circle text-muted" title="Not returnable"></i>
+              {% endif %}
+            </td>
+
+            <!-- Status -->
+            <td class="text-center">
+              {% if item.active %}
+              <span class="badge bg-success" style="font-size:0.7rem">Active</span>
+              {% else %}
+              <span class="badge bg-secondary" style="font-size:0.7rem">Archived</span>
+              {% endif %}
+              {% if item.on_order_only %}
+              <span class="badge mt-1" style="background:#FFF3E0;color:#E65100;font-size:0.66rem;display:block">On Order</span>
+              {% endif %}
+            </td>
+
+            <!-- Actions -->
+            <td class="text-center" style="white-space:nowrap">
+              <button class="btn btn-sm btn-outline-secondary me-1"
+                      onclick="openEdit(this.dataset)"
+                      data-id="{{ item.id }}"
+                      data-name-en="{{ item.name_en|e }}"
+                      data-name-vi="{{ item.name_vi|e }}"
+                      data-supplier="{{ item.supplier_id }}"
+                      data-sell="{{ item.selling_price }}"
+                      data-cost="{{ item.cost_price }}"
+                      data-days="{{ item.delivery_days or '' }}"
+                      data-returnable="{{ '1' if item.returnable else '0' }}"
+                      data-on-order="{{ '1' if item.on_order_only else '0' }}"
+                      title="Edit item">
+                <i class="fas fa-pencil-alt"></i>
+              </button>
+              <button class="btn btn-sm {% if item.active %}btn-outline-warning{% else %}btn-outline-success{% endif %}"
+                      onclick="toggleArchive({{ item.id }}, {{ '0' if item.active else '1' }}, '{{ item.name_en|e }}')"
+                      title="{{ 'Archive' if item.active else 'Restore' }}">
+                <i class="fas fa-{% if item.active %}archive{% else %}undo{% endif %}"></i>
+              </button>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="9" class="text-center text-muted py-4">No items found.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div><!-- /tab-items -->
+
+
+<!-- ═══════════════════════════════════════════
+     SUPPLIERS TAB
+═══════════════════════════════════════════ -->
+<div class="tab-pane fade" id="tab-suppliers">
+  <div class="d-flex align-items-center gap-2 mb-3">
+    <h5 class="section-heading-pi mb-0 flex-grow-1">
+      <i class="fas fa-store me-2"></i>Suppliers
+    </h5>
+    <button class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#addSupplierModal">
+      <i class="fas fa-plus me-1"></i>Add Supplier
+    </button>
+  </div>
+
+  <div class="card shadow-sm">
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0 suppliers-table align-middle">
+        <thead>
+          <tr>
+            <th>Supplier Name</th>
+            <th>Phone</th>
+            <th>Items</th>
+            <th class="text-center">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for sup in suppliers %}
+          <tr>
+            <td class="fw-semibold" style="color:#1B4332">{{ sup.name }}</td>
+            <td class="text-muted">
+              {% if sup.phone %}
+              <i class="fas fa-phone me-1"></i>{{ sup.phone }}
+              {% else %}
+              <span class="text-muted">—</span>
+              {% endif %}
+            </td>
+            <td>
+              {% set item_count = items | selectattr('supplier_id', 'eq', sup.id) | list | length %}
+              <span class="badge bg-light text-dark border" style="font-size:0.72rem">{{ item_count }}</span>
+            </td>
+            <td class="text-center">
+              <button class="btn btn-sm btn-outline-secondary"
+                      onclick="openEditSupplier({{ sup.id }}, '{{ sup.name|e }}', '{{ sup.phone or '' }}')"
+                      title="Edit supplier">
+                <i class="fas fa-pencil-alt"></i>
+              </button>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="4" class="text-center text-muted py-4">No suppliers found.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div><!-- /tab-suppliers -->
+
+</div><!-- /tab-content -->
+
+
+<!-- ═══════════════════════════════════════════
+     ADD ITEM MODAL
+═══════════════════════════════════════════ -->
+<div class="modal fade" id="addItemModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header py-2" style="background:#E8F5E9;border-bottom:1px solid #A5D6A7">
+        <h6 class="modal-title" style="color:#1B4332">
+          <i class="fas fa-plus-circle me-1"></i>Add New Pastry Item
+        </h6>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <form id="addItemForm" onsubmit="submitAddItem(event)">
+          <div class="row g-2">
+            <div class="col-md-6">
+              <label class="form-label fw-semibold small">Item Name (English) <span class="text-danger">*</span></label>
+              <input type="text" class="form-control form-control-sm" name="name_en" id="add-name-en" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label fw-semibold small">Item Name (Vietnamese)</label>
+              <input type="text" class="form-control form-control-sm" name="name_vi" id="add-name-vi">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label fw-semibold small">Supplier <span class="text-danger">*</span></label>
+              <select class="form-select form-select-sm" name="supplier_id" id="add-supplier" required>
+                <option value="">— Select supplier —</option>
+                {% for sup in suppliers %}
+                <option value="{{ sup.id }}">{{ sup.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-semibold small">Selling Price ($) <span class="text-danger">*</span></label>
+              <input type="number" class="form-control form-control-sm" name="selling_price" id="add-sell"
+                     step="0.01" min="0" required placeholder="0.00">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-semibold small">Cost Price ($) <span class="text-danger">*</span></label>
+              <input type="number" class="form-control form-control-sm" name="cost_price" id="add-cost"
+                     step="0.01" min="0" required placeholder="0.00">
+            </div>
+            <div class="col-12">
+              <label class="form-label fw-semibold small">Delivery Days</label>
+              <div class="day-check-group">
+                {% for i in range(7) %}
+                <div class="day-check-item">
+                  <input type="checkbox" class="form-check-input" id="add-day-{{ days[i] }}" name="delivery_days" value="{{ days[i] }}">
+                  <label for="add-day-{{ days[i] }}">{{ day_labels[i] }}</label>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+            <div class="col-md-6">
+              <div class="d-flex gap-4 mt-1">
+                <div class="form-check form-switch">
+                  <input class="form-check-input" type="checkbox" id="add-returnable" name="returnable" value="1">
+                  <label class="form-check-label small" for="add-returnable">Returnable</label>
+                </div>
+                <div class="form-check form-switch">
+                  <input class="form-check-input" type="checkbox" id="add-on-order" name="on_order_only" value="1">
+                  <label class="form-check-label small" for="add-on-order">On Order Only</label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer py-2">
+        <button class="btn btn-sm btn-success" onclick="submitAddItem()">
+          <i class="fas fa-plus me-1"></i>Add Item
+        </button>
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════
+     EDIT ITEM MODAL
+═══════════════════════════════════════════ -->
+<div class="modal fade" id="editItemModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header py-2" style="background:#FFF3E0;border-bottom:1px solid #FFCC80">
+        <h6 class="modal-title" style="color:#E65100">
+          <i class="fas fa-pencil-alt me-1"></i>Edit Pastry Item
+        </h6>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="edit-item-id">
+        <div class="row g-2">
+          <div class="col-md-6">
+            <label class="form-label fw-semibold small">Item Name (English) <span class="text-danger">*</span></label>
+            <input type="text" class="form-control form-control-sm" id="edit-name-en" required>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label fw-semibold small">Item Name (Vietnamese)</label>
+            <input type="text" class="form-control form-control-sm" id="edit-name-vi">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label fw-semibold small">Supplier <span class="text-danger">*</span></label>
+            <select class="form-select form-select-sm" id="edit-supplier" required>
+              <option value="">— Select supplier —</option>
+              {% for sup in suppliers %}
+              <option value="{{ sup.id }}">{{ sup.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label fw-semibold small">Selling Price ($)</label>
+            <input type="number" class="form-control form-control-sm" id="edit-sell" step="0.01" min="0">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label fw-semibold small">Cost Price ($)</label>
+            <input type="number" class="form-control form-control-sm" id="edit-cost" step="0.01" min="0">
+          </div>
+          <div class="col-12">
+            <label class="form-label fw-semibold small">Delivery Days</label>
+            <div class="day-check-group">
+              {% for i in range(7) %}
+              <div class="day-check-item">
+                <input type="checkbox" class="form-check-input" id="edit-day-{{ days[i] }}" value="{{ days[i] }}">
+                <label for="edit-day-{{ days[i] }}">{{ day_labels[i] }}</label>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="col-md-6">
+            <div class="d-flex gap-4 mt-1">
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="edit-returnable">
+                <label class="form-check-label small" for="edit-returnable">Returnable</label>
+              </div>
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="edit-on-order">
+                <label class="form-check-label small" for="edit-on-order">On Order Only</label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer py-2">
+        <button class="btn btn-sm btn-warning" onclick="submitEditItem()">
+          <i class="fas fa-save me-1"></i>Save Changes
+        </button>
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════
+     ADD SUPPLIER MODAL
+═══════════════════════════════════════════ -->
+<div class="modal fade" id="addSupplierModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header py-2" style="background:#E8F5E9;border-bottom:1px solid #A5D6A7">
+        <h6 class="modal-title" style="color:#1B4332">
+          <i class="fas fa-store me-1"></i>Add Supplier
+        </h6>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-2">
+          <label class="form-label fw-semibold small">Supplier Name <span class="text-danger">*</span></label>
+          <input type="text" class="form-control form-control-sm" id="add-sup-name" required placeholder="e.g. Bakers Delight">
+        </div>
+        <div class="mb-2">
+          <label class="form-label fw-semibold small">Phone</label>
+          <input type="text" class="form-control form-control-sm" id="add-sup-phone" placeholder="e.g. 08 9999 0000">
+        </div>
+      </div>
+      <div class="modal-footer py-2">
+        <button class="btn btn-sm btn-success" onclick="submitAddSupplier()">
+          <i class="fas fa-plus me-1"></i>Add Supplier
+        </button>
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════
+     EDIT SUPPLIER MODAL
+═══════════════════════════════════════════ -->
+<div class="modal fade" id="editSupplierModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header py-2" style="background:#FFF3E0;border-bottom:1px solid #FFCC80">
+        <h6 class="modal-title" style="color:#E65100">
+          <i class="fas fa-pencil-alt me-1"></i>Edit Supplier
+        </h6>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="edit-sup-id">
+        <div class="mb-2">
+          <label class="form-label fw-semibold small">Supplier Name <span class="text-danger">*</span></label>
+          <input type="text" class="form-control form-control-sm" id="edit-sup-name" required>
+        </div>
+        <div class="mb-2">
+          <label class="form-label fw-semibold small">Phone</label>
+          <input type="text" class="form-control form-control-sm" id="edit-sup-phone">
+        </div>
+      </div>
+      <div class="modal-footer py-2">
+        <button class="btn btn-sm btn-warning" onclick="submitEditSupplier()">
+          <i class="fas fa-save me-1"></i>Save Changes
+        </button>
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const DAYS = {{ days|tojson }};
+
+// ── Open edit item modal ──
+// Called with this.dataset from the Edit button
+function openEdit(d) {
+  document.getElementById('edit-item-id').value  = d.id;
+  document.getElementById('edit-name-en').value  = d.nameEn || '';
+  document.getElementById('edit-name-vi').value  = d.nameVi || '';
+  document.getElementById('edit-supplier').value = d.supplier || '';
+  document.getElementById('edit-sell').value     = d.sell || '';
+  document.getElementById('edit-cost').value     = d.cost || '';
+  document.getElementById('edit-returnable').checked = (d.returnable === '1');
+  document.getElementById('edit-on-order').checked   = (d.onOrder   === '1');
+
+  // Delivery days — stored as comma-separated day codes e.g. "mon,wed,fri"
+  const activeDays = (d.days || '').split(',').map(s => s.trim()).filter(Boolean);
+  DAYS.forEach(day => {
+    const cb = document.getElementById('edit-day-' + day);
+    if (cb) cb.checked = activeDays.includes(day);
+  });
+
+  new bootstrap.Modal(document.getElementById('editItemModal')).show();
+}
+
+// ── Submit edit item ──
+function submitEditItem() {
+  const id = document.getElementById('edit-item-id').value;
+  if (!id) return;
+
+  const days = DAYS.filter(d => {
+    const cb = document.getElementById('edit-day-' + d);
+    return cb && cb.checked;
+  });
+
+  const fd = new FormData();
+  fd.append('name_en',       document.getElementById('edit-name-en').value.trim());
+  fd.append('name_vi',       document.getElementById('edit-name-vi').value.trim());
+  fd.append('supplier_id',   document.getElementById('edit-supplier').value);
+  fd.append('selling_price', document.getElementById('edit-sell').value);
+  fd.append('cost_price',    document.getElementById('edit-cost').value);
+  fd.append('delivery_days', days.join(','));
+  fd.append('returnable',    document.getElementById('edit-returnable').checked ? '1' : '0');
+  fd.append('on_order_only', document.getElementById('edit-on-order').checked   ? '1' : '0');
+
+  if (!fd.get('name_en')) { alert('Item name is required.'); return; }
+  if (!fd.get('supplier_id')) { alert('Please select a supplier.'); return; }
+
+  fetch(`/pastry/items/${id}/edit`, {
+    method: 'POST', body: fd,
+    headers: {'X-Requested-With': 'XMLHttpRequest'}
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.error) { alert('Error: ' + data.error); return; }
+    bootstrap.Modal.getInstance(document.getElementById('editItemModal')).hide();
+    location.reload();
+  })
+  .catch(() => { alert('Network error. Please try again.'); });
+}
+
+// ── Submit add item ──
+function submitAddItem(e) {
+  if (e) e.preventDefault();
+
+  const nameEn = document.getElementById('add-name-en').value.trim();
+  const sup    = document.getElementById('add-supplier').value;
+  if (!nameEn) { alert('Item name is required.'); return; }
+  if (!sup)    { alert('Please select a supplier.'); return; }
+
+  const days = DAYS.filter(d => {
+    const cb = document.getElementById('add-day-' + d);
+    return cb && cb.checked;
+  });
+
+  const fd = new FormData();
+  fd.append('name_en',       nameEn);
+  fd.append('name_vi',       document.getElementById('add-name-vi').value.trim());
+  fd.append('supplier_id',   sup);
+  fd.append('selling_price', document.getElementById('add-sell').value);
+  fd.append('cost_price',    document.getElementById('add-cost').value);
+  fd.append('delivery_days', days.join(','));
+  fd.append('returnable',    document.getElementById('add-returnable').checked ? '1' : '0');
+  fd.append('on_order_only', document.getElementById('add-on-order').checked   ? '1' : '0');
+
+  fetch('/pastry/items/add', {
+    method: 'POST', body: fd,
+    headers: {'X-Requested-With': 'XMLHttpRequest'}
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.error) { alert('Error: ' + data.error); return; }
+    bootstrap.Modal.getInstance(document.getElementById('addItemModal')).hide();
+    location.reload();
+  })
+  .catch(() => { alert('Network error. Please try again.'); });
+}
+
+// ── Archive / Restore item ──
+function toggleArchive(id, newActive, name) {
+  const action = newActive === 0 ? 'archive' : 'restore';
+  if (!confirm(`${action.charAt(0).toUpperCase() + action.slice(1)} "${name}"?`)) return;
+
+  const fd = new FormData();
+  fd.append('active', newActive);
+  fetch(`/pastry/items/${id}/toggle`, {
+    method: 'POST', body: fd,
+    headers: {'X-Requested-With': 'XMLHttpRequest'}
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.error) { alert('Error: ' + data.error); return; }
+    location.reload();
+  })
+  .catch(() => { alert('Network error. Please try again.'); });
+}
+
+// ── Add supplier ──
+function submitAddSupplier() {
+  const name  = document.getElementById('add-sup-name').value.trim();
+  const phone = document.getElementById('add-sup-phone').value.trim();
+  if (!name) { alert('Supplier name is required.'); return; }
+
+  const fd = new FormData();
+  fd.append('name', name);
+  fd.append('phone', phone);
+
+  fetch('/pastry/suppliers/add', {
+    method: 'POST', body: fd,
+    headers: {'X-Requested-With': 'XMLHttpRequest'}
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.error) { alert('Error: ' + data.error); return; }
+    bootstrap.Modal.getInstance(document.getElementById('addSupplierModal')).hide();
+    location.reload();
+  })
+  .catch(() => { alert('Network error. Please try again.'); });
+}
+
+// ── Open edit supplier modal ──
+function openEditSupplier(id, name, phone) {
+  document.getElementById('edit-sup-id').value    = id;
+  document.getElementById('edit-sup-name').value  = name;
+  document.getElementById('edit-sup-phone').value = phone || '';
+  new bootstrap.Modal(document.getElementById('editSupplierModal')).show();
+}
+
+// ── Submit edit supplier ──
+function submitEditSupplier() {
+  const id    = document.getElementById('edit-sup-id').value;
+  const name  = document.getElementById('edit-sup-name').value.trim();
+  const phone = document.getElementById('edit-sup-phone').value.trim();
+  if (!name) { alert('Supplier name is required.'); return; }
+
+  const fd = new FormData();
+  fd.append('name', name);
+  fd.append('phone', phone);
+
+  fetch(`/pastry/suppliers/${id}/edit`, {
+    method: 'POST', body: fd,
+    headers: {'X-Requested-With': 'XMLHttpRequest'}
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.error) { alert('Error: ' + data.error); return; }
+    bootstrap.Modal.getInstance(document.getElementById('editSupplierModal')).hide();
+    location.reload();
+  })
+  .catch(() => { alert('Network error. Please try again.'); });
+}
+</script>
+{% endblock %}

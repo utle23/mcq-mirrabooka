@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}Manager Panel{% endblock %}
+{% block topbar_title %}<span class="fw-bold">Manager Panel — Verification</span>{% endblock %}
+
+{% block content %}
+<!-- Stats -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="stat-card stat-orange">
+      <div class="stat-icon"><i class="fas fa-clock"></i></div>
+      <div class="stat-value">{{ pending|length }}</div>
+      <div class="stat-label">Awaiting Verification</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="stat-card stat-green">
+      <div class="stat-icon"><i class="fas fa-check-double"></i></div>
+      <div class="stat-value">{{ verified_today }}</div>
+      <div class="stat-label">Verified Today</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="stat-card stat-red">
+      <div class="stat-icon"><i class="fas fa-exclamation-triangle"></i></div>
+      <div class="stat-value">{{ issues|length }}</div>
+      <div class="stat-label">Records with Issues</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="stat-card stat-blue">
+      <div class="stat-icon"><i class="fas fa-list"></i></div>
+      <div class="stat-value">{{ recent_log|length }}</div>
+      <div class="stat-label">Recent Actions</div>
+    </div>
+  </div>
+</div>
+
+<!-- Pending Verification -->
+<h5 class="section-heading"><i class="fas fa-clock me-2 text-warning"></i>Pending Verification</h5>
+{% if pending %}
+<div class="row g-3 mb-4">
+  {% for r in pending %}
+  {% set chk = checklists.get(r.type, {}) %}
+  {% set pct = (r.done_count / r.total_count * 100)|int if r.total_count > 0 else 0 %}
+  <div class="col-12 col-md-6 col-xl-4">
+    <div class="card shadow-sm h-100">
+      <div class="card-header py-2 d-flex align-items-center gap-2"
+           style="border-left:3px solid {{ chk.color or '#888' }}">
+        <span class="fw-bold small flex-grow-1">{{ chk.title or r.type }}</span>
+        <span class="badge bg-{% if r.section=='opening' %}warning text-dark{% else %}info text-dark{% endif %}">
+          {{ r.section|title }}
+        </span>
+      </div>
+      <div class="card-body py-2">
+        <div class="small text-muted mb-1">
+          <i class="fas fa-calendar me-1"></i>{{ r.date }}
+          {% if r.day_of_week %} — {{ r.day_of_week }}{% endif %}
+        </div>
+        <div class="small mb-1">
+          <i class="fas fa-user me-1"></i>By: <strong>{{ r.submitted_by or '—' }}</strong>
+        </div>
+        <div class="d-flex align-items-center gap-2 mb-2">
+          <div class="progress flex-grow-1" style="height:6px">
+            <div class="progress-bar bg-{% if pct==100 %}success{% elif pct>50 %}warning{% else %}danger{% endif %}"
+                 style="width:{{ pct }}%"></div>
+          </div>
+          <small class="text-muted">{{ r.done_count }}/{{ r.total_count }}</small>
+        </div>
+        <a href="/checklist/view/{{ r.id }}" class="btn btn-sm btn-success w-100">
+          <i class="fas fa-user-check me-1"></i>Review & Verify
+        </a>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="alert alert-success mb-4">
+  <i class="fas fa-check-circle me-2"></i>All checklists have been verified. Great work!
+</div>
+{% endif %}
+
+<!-- Records with Issues -->
+{% if issues %}
+<h5 class="section-heading"><i class="fas fa-exclamation-triangle me-2 text-danger"></i>Records with Issues Found</h5>
+<div class="card shadow-sm mb-4">
+  <div class="table-responsive">
+    <table class="table table-hover table-sm mb-0 align-middle">
+      <thead class="table-dark">
+        <tr>
+          <th>Date</th>
+          <th>Type</th>
+          <th>Section</th>
+          <th>Verified by</th>
+          <th>Issues Found</th>
+          <th>Action</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in issues %}
+        {% set chk = checklists.get(r.type, {}) %}
+        <tr>
+          <td>{{ r.date }}</td>
+          <td><span class="badge" style="background:{{ chk.color or '#888' }}">{{ chk.short or r.type }}</span></td>
+          <td><span class="badge bg-secondary">{{ r.section|title }}</span></td>
+          <td class="small">{{ r.verified_by or '—' }}</td>
+          <td class="small text-danger">{{ r.issues_found or '—' }}</td>
+          <td class="small">{{ r.action_responsible or '—' }}</td>
+          <td>
+            <a href="/checklist/view/{{ r.id }}" class="btn btn-sm btn-outline-primary">View</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- Recent Activity Log -->
+<h5 class="section-heading"><i class="fas fa-stream me-2 text-info"></i>Recent Activity Log</h5>
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-sm table-hover mb-0 align-middle">
+      <thead class="table-dark">
+        <tr><th>Timestamp</th><th>Action</th><th>Type</th><th>By</th><th>Details</th></tr>
+      </thead>
+      <tbody>
+        {% for r in recent_log %}
+        <tr>
+          <td class="text-muted small">{{ r.timestamp or '' }}</td>
+          <td>
+            <span class="badge {% if 'VERIFY' in r.action %}bg-success{% elif 'TEMP' in r.action %}bg-danger{% else %}bg-primary{% endif %}">
+              {{ r.action.replace('_',' ') }}
+            </span>
+          </td>
+          <td class="small">{{ r.record_type or '—' }}</td>
+          <td class="small fw-semibold">{{ r.user_name or '—' }}</td>
+          <td class="small text-muted">{{ r.details or '' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="text-center text-muted py-3">No activity logged yet</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% block title %}History{% endblock %}
+{% block topbar_title %}<span class="fw-bold">Record History</span>{% endblock %}
+
+{% block content %}
+<!-- Filter Bar -->
+<div class="card shadow-sm mb-4">
+  <div class="card-body py-2">
+    <form method="GET" class="row g-2 align-items-end">
+      <div class="col-auto">
+        <label class="form-label small fw-semibold mb-1">From</label>
+        <input type="date" name="date_from" class="form-control form-control-sm" value="{{ date_from }}">
+      </div>
+      <div class="col-auto">
+        <label class="form-label small fw-semibold mb-1">To</label>
+        <input type="date" name="date_to" class="form-control form-control-sm" value="{{ date_to }}">
+      </div>
+      <div class="col-auto">
+        <label class="form-label small fw-semibold mb-1">Type</label>
+        <select name="type" class="form-select form-select-sm">
+          <option value="all" {% if rec_type=='all' %}selected{% endif %}>All Records</option>
+          <option value="checklist" {% if rec_type=='checklist' %}selected{% endif %}>Checklists Only</option>
+          <option value="temperature" {% if rec_type=='temperature' %}selected{% endif %}>Temperature Only</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <label class="form-label small fw-semibold mb-1">Staff</label>
+        <select name="staff" class="form-select form-select-sm">
+          <option value="">All Staff</option>
+          {% for s in staff %}
+          <option value="{{ s }}" {% if staff_filter==s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-auto d-flex gap-2">
+        <button type="submit" class="btn btn-success btn-sm">
+          <i class="fas fa-search me-1"></i>Filter
+        </button>
+        <a href="/history" class="btn btn-outline-secondary btn-sm">Reset</a>
+        {% if is_admin %}
+        <a href="/export/bulk/excel?date_from={{ date_from }}&date_to={{ date_to }}"
+           class="btn btn-outline-success btn-sm">
+          <i class="fas fa-file-excel me-1"></i>Export Excel
+        </a>
+        <a href="/export/bulk/pdf?date_from={{ date_from }}&date_to={{ date_to }}"
+           class="btn btn-outline-danger btn-sm">
+          <i class="fas fa-file-pdf me-1"></i>Export PDF
+        </a>
+        {% endif %}
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Results summary -->
+<div class="mb-3 text-muted small">
+  Found <strong>{{ chk_records|length }}</strong> checklist record(s) and
+  <strong>{{ temp_records|length }}</strong> temperature record(s)
+  between {{ date_from }} and {{ date_to }}
+</div>
+
+<!-- Checklist Records -->
+{% if rec_type in ('all','checklist') %}
+<h5 class="section-heading"><i class="fas fa-clipboard-check me-2 text-success"></i>Checklist Records</h5>
+<div class="card shadow-sm mb-4">
+  <div class="table-responsive">
+    <table class="table table-hover table-sm mb-0 align-middle">
+      <thead class="table-dark">
+        <tr>
+          <th>Date</th>
+          <th>Day</th>
+          <th>Type</th>
+          <th>Section</th>
+          <th>Responsible</th>
+          <th>Submitted by</th>
+          <th>Progress</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in chk_records %}
+        {% set pct = (r.done_count / r.total_count * 100)|int if r.total_count > 0 else 0 %}
+        {% set chk = checklists.get(r.type, {}) %}
+        <tr>
+          <td>{{ r.date }}</td>
+          <td class="text-muted small">{{ r.day_of_week or '' }}</td>
+          <td>
+            <span class="badge" style="background:{{ chk.color or '#888' }}">{{ chk.short or r.type }}</span>
+          </td>
+          <td>
+            <span class="badge bg-{% if r.section=='opening' %}warning text-dark{% else %}info text-dark{% endif %}">
+              {{ r.section|title }}
+            </span>
+          </td>
+          <td class="small">{{ r.responsible or '—' }}</td>
+          <td class="small">{{ r.submitted_by or '—' }}</td>
+          <td style="min-width:120px">
+            <div class="d-flex align-items-center gap-1">
+              <div class="progress flex-grow-1" style="height:6px">
+                <div class="progress-bar bg-{% if pct==100 %}success{% elif pct>50 %}warning{% else %}danger{% endif %}"
+                     style="width:{{ pct }}%"></div>
+              </div>
+              <small class="text-muted">{{ pct }}%</small>
+            </div>
+          </td>
+          <td>
+            {% if r.is_late %}
+            <span class="badge bg-danger me-1"><i class="fas fa-exclamation-circle me-1"></i>LATE</span>
+            {% endif %}
+            {% if r.verified %}
+            <span class="badge bg-success"><i class="fas fa-check-double me-1"></i>Verified</span>
+            {% else %}
+            <span class="badge bg-warning text-dark">Pending</span>
+            {% endif %}
+          </td>
+          <td>
+            <a href="/checklist/view/{{ r.id }}" class="btn btn-sm btn-outline-primary">View</a>
+            {% if is_admin %}
+            <a href="/export/checklist/{{ r.id }}/excel" class="btn btn-sm btn-outline-success" title="Excel">
+              <i class="fas fa-file-excel"></i>
+            </a>
+            <a href="/export/checklist/{{ r.id }}/pdf" class="btn btn-sm btn-outline-danger" title="PDF">
+              <i class="fas fa-file-pdf"></i>
+            </a>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="text-center text-muted py-3">No checklist records found</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- Temperature Records -->
+{% if rec_type in ('all','temperature') %}
+<h5 class="section-heading"><i class="fas fa-thermometer-half me-2 text-danger"></i>Temperature Records</h5>
+<div class="card shadow-sm mb-4">
+  <div class="table-responsive">
+    <table class="table table-hover table-sm mb-0 align-middle">
+      <thead class="table-dark">
+        <tr>
+          <th>Date</th>
+          <th>Type</th>
+          <th>Recorded by</th>
+          <th>Checked by</th>
+          <th>Submitted at</th>
+          <th>Notes</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in temp_records %}
+        {% set temp = temperatures.get(r.type, {}) %}
+        <tr>
+          <td>{{ r.date }}</td>
+          <td>
+            <span class="badge" style="background:{{ temp.color or '#888' }}">{{ temp.short or r.type }}</span>
+          </td>
+          <td class="small">{{ r.recorded_by or '—' }}</td>
+          <td class="small">{{ r.checked_by or '—' }}</td>
+          <td class="small text-muted">{{ r.submitted_at or '—' }}</td>
+          <td class="small text-muted">{{ r.notes or '' }}</td>
+          <td>
+            <a href="/temperature/view/{{ r.id }}" class="btn btn-sm btn-outline-primary">View</a>
+            {% if is_admin %}
+            <a href="/export/temperature/{{ r.id }}/excel" class="btn btn-sm btn-outline-success" title="Excel">
+              <i class="fas fa-file-excel"></i>
+            </a>
+            <a href="/export/temperature/{{ r.id }}/pdf" class="btn btn-sm btn-outline-danger" title="PDF">
+              <i class="fas fa-file-pdf"></i>
+            </a>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="text-center text-muted py-3">No temperature records found</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

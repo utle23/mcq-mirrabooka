@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}View Temperature Record{% endblock %}
+{% block topbar_title %}<span class="fw-bold">{{ temp_data.title }}</span>{% endblock %}
+
+{% block content %}
+<div class="card shadow-sm mb-4">
+  <div class="card-header py-2 d-flex flex-wrap gap-2 align-items-center"
+       style="background:{{ temp_data.color }}15;border-left:4px solid {{ temp_data.color }}">
+    <h5 class="mb-0 me-auto" style="color:{{ temp_data.color }}">
+      <i class="fas fa-thermometer-half me-2"></i>{{ temp_data.title }}
+    </h5>
+    <a href="/temperature/{{ sess.type }}?date={{ sess.date }}" class="btn btn-sm btn-outline-primary">
+      <i class="fas fa-edit me-1"></i>Edit
+    </a>
+    {% if is_admin %}
+    <a href="/export/temperature/{{ sess.id }}/excel" class="btn btn-sm btn-outline-success">
+      <i class="fas fa-file-excel me-1"></i>Excel
+    </a>
+    <a href="/export/temperature/{{ sess.id }}/pdf" class="btn btn-sm btn-outline-danger">
+      <i class="fas fa-file-pdf me-1"></i>PDF
+    </a>
+    {% endif %}
+    <button onclick="window.print()" class="btn btn-sm btn-outline-secondary">
+      <i class="fas fa-print me-1"></i>Print / PDF
+    </button>
+  </div>
+  <div class="card-body">
+    <div class="row g-3">
+      <div class="col-sm-3"><strong>Date:</strong> {{ sess.date }}</div>
+      <div class="col-sm-3"><strong>Recorded by:</strong> {{ sess.recorded_by or '—' }}</div>
+      <div class="col-sm-3"><strong>Checked by:</strong> {{ sess.checked_by or '—' }}</div>
+      <div class="col-sm-3"><strong>Submitted:</strong> {{ sess.submitted_at or '—' }}</div>
+      {% if sess.notes %}
+      <div class="col-12"><strong>Notes:</strong> {{ sess.notes }}</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="alert alert-info py-2 small mb-3">
+  <i class="fas fa-info-circle me-1"></i>
+  <span class="badge bg-danger">Red</span> = Danger zone (5°C–60°C) &nbsp;|&nbsp;
+  <span class="badge bg-success">Green</span> = Safe (&lt;5°C cold or &gt;60°C hot) &nbsp;|&nbsp;
+  <span class="badge bg-warning text-dark">Y</span> = Discarded
+</div>
+
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-bordered table-sm align-middle mb-0 temp-table">
+      <thead>
+        <tr class="table-dark text-center">
+          <th class="text-start" style="min-width:170px">Food Item</th>
+          <th colspan="2">Check 1</th>
+          <th colspan="2">Check 2</th>
+          <th colspan="2">Check 3</th>
+          <th colspan="2">Check 4</th>
+          <th colspan="2">Check 5</th>
+          <th>Discard?</th>
+        </tr>
+        <tr class="table-secondary text-center small">
+          <th></th>
+          <th>Time</th><th>°C</th>
+          <th>Time</th><th>°C</th>
+          <th>Time</th><th>°C</th>
+          <th>Time</th><th>°C</th>
+          <th>Time</th><th>°C</th>
+          <th>Y/N</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in readings %}
+        <tr>
+          <td class="fw-semibold small">{{ r.food_name }}</td>
+          {% for c in range(1,6) %}
+          {% set tkey = 'c' ~ c ~ '_time' %}
+          {% set vkey = 'c' ~ c ~ '_temp' %}
+          <td class="text-center small">{{ r[tkey] or '' }}</td>
+          <td class="text-center small fw-bold {% if r[vkey] is not none %}{% if r[vkey] < 5 or r[vkey] > 60 %}temp-safe{% else %}temp-danger{% endif %}{% endif %}">
+            {% if r[vkey] is not none %}{{ r[vkey] }}°{% else %}—{% endif %}
+          </td>
+          {% endfor %}
+          <td class="text-center">
+            <span class="badge {% if r.discarded=='Y' %}bg-warning text-dark{% else %}bg-success{% endif %}">
+              {{ r.discarded or 'N' }}
+            </span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="mt-3">
+  <a href="/" class="btn btn-outline-secondary"><i class="fas fa-arrow-left me-1"></i>Dashboard</a>
+</div>
+
+<style media="print">
+  .sidebar, .topbar, .btn { display: none !important; }
+</style>
+{% endblock %}

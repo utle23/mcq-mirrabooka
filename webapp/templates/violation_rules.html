@@ -1,0 +1,530 @@
+{% extends "base.html" %}
+{% block title %}Violation Rules{% endblock %}
+{% block topbar_title %}<span class="fw-bold"><i class="fas fa-triangle-exclamation me-2 text-danger"></i>Violation Rules</span>{% endblock %}
+
+{% block head %}
+<style>
+.vr-stat {
+  background:#fff; border:1px solid #e7ece9; border-radius:8px;
+  padding:14px 16px; box-shadow:0 1px 5px rgba(0,0,0,.05);
+  border-left:4px solid var(--vr-color);
+}
+.vr-stat-value { font-size:1.8rem; line-height:1; font-weight:800; color:var(--vr-color); }
+.vr-stat-label { font-size:.72rem; color:#66736c; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+.rule-grid {
+  display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));
+  gap:10px;
+}
+.rule-card {
+  border:1px solid #e4e9e6; border-left:4px solid var(--rule-color);
+  border-radius:8px; background:#fff; padding:11px 12px;
+  cursor:pointer; transition:background .12s, box-shadow .12s, transform .12s;
+}
+.rule-card:hover, .rule-card.active {
+  background:#f8fbf9; box-shadow:0 3px 10px rgba(0,0,0,.08);
+  transform:translateY(-1px);
+}
+.rule-icon {
+  width:34px; height:34px; border-radius:8px;
+  display:inline-flex; align-items:center; justify-content:center;
+  background:var(--rule-color); color:#fff; flex-shrink:0;
+}
+.rule-title { font-weight:800; color:#233027; font-size:.88rem; line-height:1.25; }
+.rule-desc { color:#637069; font-size:.75rem; line-height:1.35; margin-top:7px; }
+.severity-minor { background:#ECEFF1; color:#455A64; }
+.severity-moderate { background:#FFF3CD; color:#8A5A00; }
+.severity-serious { background:#F8D7DA; color:#842029; }
+.severity-critical { background:#B71C1C; color:#fff; }
+.violation-row {
+  border-left:4px solid var(--rule-color);
+}
+.quick-fill-note {
+  border:1px dashed #b9d8c7; background:#f8fff9;
+  border-radius:8px; padding:9px 11px; font-size:.78rem;
+}
+.vr-chart-wrap {
+  position:relative; min-height:220px; height:260px;
+}
+.vr-mini-chart {
+  position:relative; min-height:170px; height:190px;
+}
+.vr-table {
+  font-size:.84rem;
+}
+.vr-table th {
+  color:#66736c; font-size:.72rem; text-transform:uppercase; letter-spacing:.04em;
+}
+.vr-meter {
+  height:6px; border-radius:999px; background:#edf1ef; overflow:hidden;
+}
+.vr-meter > span {
+  display:block; height:100%; border-radius:999px; background:var(--meter-color, #C62828);
+}
+.vr-dot {
+  width:10px; height:10px; border-radius:50%; display:inline-block; background:var(--dot-color, #607D8B);
+}
+.vr-soft-panel {
+  background:#fbfcfb; border:1px solid #e7ece9; border-radius:8px; padding:12px;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+{% set summary = violation_stats.summary %}
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3"><div class="vr-stat" style="--vr-color:#263238"><div class="vr-stat-value">{{ summary.total }}</div><div class="vr-stat-label">Selected Period</div></div></div>
+  <div class="col-6 col-md-3"><div class="vr-stat" style="--vr-color:#C62828"><div class="vr-stat-value">{{ summary.open_count }}</div><div class="vr-stat-label">Open</div></div></div>
+  <div class="col-6 col-md-3"><div class="vr-stat" style="--vr-color:#6A1B9A"><div class="vr-stat-value">{{ summary.serious_count }}</div><div class="vr-stat-label">Serious / Critical</div></div></div>
+  <div class="col-6 col-md-3"><div class="vr-stat" style="--vr-color:#2E7D32"><div class="vr-stat-value">{{ summary.resolved_rate }}%</div><div class="vr-stat-label">Resolved Rate</div></div></div>
+</div>
+
+<div class="card shadow-sm mb-4">
+  <div class="card-header py-2 d-flex flex-wrap gap-2 align-items-center">
+    <h6 class="mb-0 me-auto"><i class="fas fa-chart-line me-2 text-danger"></i>Violation Statistics</h6>
+    <span class="badge bg-light text-dark border">Today: {{ summary.today_count }}</span>
+    <span class="badge bg-light text-dark border">This Month: {{ summary.month_count }}</span>
+    <span class="text-muted small">{{ date_from }} to {{ date_to }}</span>
+  </div>
+  <div class="card-body">
+    <div class="text-muted small mb-3">Statistics use the date, staff, and severity filters. Status filter controls the record list below.</div>
+    <div class="row g-3">
+      <div class="col-12 col-xl-7">
+        <div class="vr-soft-panel h-100">
+          <div class="fw-semibold small mb-2">Daily Trend</div>
+          <div class="vr-chart-wrap"><canvas id="violationDailyChart"></canvas></div>
+        </div>
+      </div>
+      <div class="col-12 col-xl-5">
+        <div class="row g-3">
+          <div class="col-12 col-md-6 col-xl-12">
+            <div class="vr-soft-panel">
+              <div class="fw-semibold small mb-2">By Status</div>
+              <div class="vr-mini-chart"><canvas id="violationStatusChart"></canvas></div>
+            </div>
+          </div>
+          <div class="col-12 col-md-6 col-xl-12">
+            <div class="vr-soft-panel">
+              <div class="fw-semibold small mb-2">By Severity</div>
+              <div class="vr-mini-chart"><canvas id="violationSeverityChart"></canvas></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row g-3 mt-1">
+      <div class="col-12 col-xl-6">
+        <div class="vr-soft-panel h-100">
+          <div class="fw-semibold small mb-2"><i class="fas fa-user-clock me-1 text-danger"></i>Top Staff In Selected Period</div>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0 vr-table">
+              <thead><tr><th>Staff</th><th class="text-center">Total</th><th class="text-center">Open</th><th class="text-center">Serious</th><th>Share</th></tr></thead>
+              <tbody>
+                {% for row in violation_stats.staff_rank %}
+                {% set pct = (row.total / summary.total * 100) if summary.total else 0 %}
+                <tr>
+                  <td class="fw-semibold">{{ row.staff_name }}</td>
+                  <td class="text-center">{{ row.total }}</td>
+                  <td class="text-center">{{ row.open_count }}</td>
+                  <td class="text-center">{{ row.serious_count }}</td>
+                  <td style="min-width:110px"><div class="vr-meter" style="--meter-color:#C62828"><span style="width:{{ pct }}%"></span></div></td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" class="text-muted text-center py-3">No staff statistics yet</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="col-12 col-xl-6">
+        <div class="vr-soft-panel h-100">
+          <div class="fw-semibold small mb-2"><i class="fas fa-list-check me-1 text-danger"></i>Most Common Rules</div>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0 vr-table">
+              <thead><tr><th>Rule</th><th class="text-center">Total</th><th class="text-center">Active</th><th class="text-center">Serious</th><th>Share</th></tr></thead>
+              <tbody>
+                {% for row in violation_stats.rule_rank %}
+                {% set pct = (row.total / summary.total * 100) if summary.total else 0 %}
+                <tr>
+                  <td>
+                    <span class="vr-dot me-1" style="--dot-color:{{ row.color }}"></span>
+                    <span class="fw-semibold">{{ row.rule_title }}</span>
+                    <span class="text-muted small d-block">{{ row.category }}</span>
+                  </td>
+                  <td class="text-center">{{ row.total }}</td>
+                  <td class="text-center">{{ row.active_count }}</td>
+                  <td class="text-center">{{ row.serious_count }}</td>
+                  <td style="min-width:110px"><div class="vr-meter" style="--meter-color:{{ row.color }}"><span style="width:{{ pct }}%"></span></div></td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" class="text-muted text-center py-3">No rule statistics yet</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4 mb-4">
+  <div class="col-12 col-xl-5">
+    <div class="card shadow-sm">
+      <div class="card-header py-2">
+        <h6 class="mb-0"><i class="fas fa-pen-to-square me-2 text-danger"></i>Record Staff Violation</h6>
+      </div>
+      <div class="card-body">
+        <div class="quick-fill-note mb-3">
+          Click a rule card to fill the rule, severity, description, and suggested action. Submit time is saved automatically.
+        </div>
+        <form method="POST" action="/admin/violations" class="row g-3">
+          <div class="col-12">
+            <label class="form-label fw-semibold">Violation Rule</label>
+            <select name="rule_id" id="rule-select" class="form-select" required onchange="selectRuleFromDropdown()">
+              <option value="">— Select rule —</option>
+              {% for rule in rules %}
+              <option value="{{ rule.id }}"
+                      data-code="{{ rule.code|e }}"
+                      data-title="{{ rule.title|e }}"
+                      data-severity="{{ rule.severity|e }}"
+                      data-desc="{{ rule.description|e }}"
+                      data-action="{{ rule.default_action|e }}">
+                {{ rule.title }}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-7">
+            <label class="form-label fw-semibold">Staff Member</label>
+            <select name="staff_name" class="form-select" required>
+              <option value="">— Select staff —</option>
+              {% for s in staff %}
+              <option value="{{ s }}">{{ s }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-5">
+            <label class="form-label fw-semibold">Severity</label>
+            <select name="severity" id="severity-select" class="form-select">
+              <option value="minor">Minor</option>
+              <option value="moderate">Moderate</option>
+              <option value="serious">Serious</option>
+              <option value="critical">Critical</option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label fw-semibold">Incident Date</label>
+            <input type="date" name="incident_date" class="form-control" value="{{ today }}" required>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label fw-semibold">Incident Time</label>
+            <input type="time" name="incident_time" class="form-control" value="{{ now_time }}" required>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label fw-semibold">Submitted by</label>
+            <select name="submitted_by" class="form-select">
+              <option value="">— Admin / Manager —</option>
+              {% for m in managers %}
+              <option value="{{ m }}">{{ m }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label fw-semibold">Follow-up Date</label>
+            <input type="date" name="follow_up_date" class="form-control">
+          </div>
+          <div class="col-12">
+            <label class="form-label fw-semibold">Description</label>
+            <textarea name="description" id="description-input" class="form-control" rows="3"
+                      placeholder="Example: Staff did not wear hat/apron during service..." required></textarea>
+          </div>
+          <div class="col-12">
+            <label class="form-label fw-semibold">Suggested / Taken Action</label>
+            <textarea name="action_taken" id="action-input" class="form-control" rows="2"
+                      placeholder="Action, reminder, retraining, follow-up..."></textarea>
+          </div>
+          <div class="col-12">
+            <button type="submit" class="btn btn-danger">
+              <i class="fas fa-save me-2"></i>Submit Violation
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-xl-7">
+    <div class="d-flex align-items-center mb-2">
+      <h6 class="mb-0 me-auto"><i class="fas fa-scale-balanced me-2 text-danger"></i>Rule Catalog</h6>
+      <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#addRuleBox">
+        <i class="fas fa-plus me-1"></i>Custom Rule
+      </button>
+    </div>
+    <div class="collapse mb-3" id="addRuleBox">
+      <div class="card card-body shadow-sm">
+        <form method="POST" action="/admin/violations/rules/add" class="row g-2 align-items-end">
+          <div class="col-md-4"><label class="form-label small fw-semibold">Title</label><input name="title" class="form-control form-control-sm" required></div>
+          <div class="col-md-2"><label class="form-label small fw-semibold">Category</label><input name="category" class="form-control form-control-sm" value="Other"></div>
+          <div class="col-md-2"><label class="form-label small fw-semibold">Severity</label><select name="severity" class="form-select form-select-sm"><option value="minor">Minor</option><option value="moderate">Moderate</option><option value="serious">Serious</option><option value="critical">Critical</option></select></div>
+          <div class="col-md-2"><label class="form-label small fw-semibold">Color</label><input type="color" name="color" class="form-control form-control-color w-100" value="#607D8B"></div>
+          <div class="col-md-2"><label class="form-label small fw-semibold">Icon</label><input name="icon" class="form-control form-control-sm" value="fa-triangle-exclamation"></div>
+          <div class="col-12"><input name="description" class="form-control form-control-sm" placeholder="Rule description..."></div>
+          <div class="col-12"><input name="default_action" class="form-control form-control-sm" placeholder="Default action..."></div>
+          <div class="col-12"><button class="btn btn-sm btn-success"><i class="fas fa-save me-1"></i>Add Rule</button></div>
+        </form>
+      </div>
+    </div>
+
+    <div class="rule-grid">
+      {% for rule in rules %}
+      <div class="rule-card" id="rule-card-{{ rule.id }}" style="--rule-color:{{ rule.color }}"
+           data-rule-id="{{ rule.id }}"
+           data-code="{{ rule.code|e }}"
+           data-severity="{{ rule.severity|e }}"
+           data-desc="{{ rule.description|e }}"
+           data-action="{{ rule.default_action|e }}"
+           onclick="selectRule(this)">
+        <div class="d-flex gap-2 align-items-start">
+          <span class="rule-icon"><i class="fas {{ rule.icon }}"></i></span>
+          <div class="min-w-0">
+            <div class="rule-title">{{ rule.title }}</div>
+            <div class="d-flex gap-1 flex-wrap mt-1">
+              <span class="badge bg-light text-dark border">{{ rule.category }}</span>
+              <span class="badge severity-{{ rule.severity }}">{{ rule.severity|title }}</span>
+            </div>
+          </div>
+        </div>
+        <div class="rule-desc">{{ rule.description }}</div>
+        <div class="mt-2 d-flex gap-1">
+          <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#edit-rule-{{ rule.id }}" onclick="event.stopPropagation()">
+            <i class="fas fa-pen me-1"></i>Edit Rule
+          </button>
+          <form method="POST" action="/admin/violations/rules/{{ rule.id }}/delete" onclick="event.stopPropagation()">
+            <button class="btn btn-sm btn-outline-danger"><i class="fas fa-box-archive me-1"></i>Archive</button>
+          </form>
+        </div>
+        <div class="collapse mt-2" id="edit-rule-{{ rule.id }}" onclick="event.stopPropagation()">
+          <form method="POST" action="/admin/violations/rules/{{ rule.id }}/update" class="row g-2 border rounded p-2 bg-light">
+            <div class="col-md-5"><label class="form-label small fw-semibold">Title</label><input name="title" class="form-control form-control-sm" value="{{ rule.title }}" required></div>
+            <div class="col-md-3"><label class="form-label small fw-semibold">Category</label><input name="category" class="form-control form-control-sm" value="{{ rule.category or '' }}"></div>
+            <div class="col-md-2"><label class="form-label small fw-semibold">Severity</label><select name="severity" class="form-select form-select-sm">{% for sev in ['minor','moderate','serious','critical'] %}<option value="{{ sev }}" {% if rule.severity==sev %}selected{% endif %}>{{ sev|title }}</option>{% endfor %}</select></div>
+            <div class="col-md-2"><label class="form-label small fw-semibold">Order</label><input name="sort_order" type="number" class="form-control form-control-sm" value="{{ rule.sort_order }}"></div>
+            <div class="col-md-3"><label class="form-label small fw-semibold">Color</label><input type="color" name="color" class="form-control form-control-color w-100" value="{{ rule.color or '#607D8B' }}"></div>
+            <div class="col-md-5"><label class="form-label small fw-semibold">Icon</label><input name="icon" class="form-control form-control-sm" value="{{ rule.icon or 'fa-triangle-exclamation' }}"></div>
+            <div class="col-md-4"><label class="form-label small fw-semibold">Active</label><select name="active" class="form-select form-select-sm"><option value="1" {% if rule.active %}selected{% endif %}>Active</option><option value="0" {% if not rule.active %}selected{% endif %}>Archived</option></select></div>
+            <div class="col-12"><label class="form-label small fw-semibold">Description</label><textarea name="description" rows="2" class="form-control form-control-sm">{{ rule.description or '' }}</textarea></div>
+            <div class="col-12"><label class="form-label small fw-semibold">Default Action</label><input name="default_action" class="form-control form-control-sm" value="{{ rule.default_action or '' }}"></div>
+            <div class="col-12"><button class="btn btn-sm btn-success"><i class="fas fa-save me-1"></i>Save Rule</button></div>
+          </form>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div class="card shadow-sm mb-4">
+  <div class="card-body py-2">
+    <form method="GET" class="row g-2 align-items-end">
+      <div class="col-auto"><label class="form-label small fw-semibold mb-1">From</label><input type="date" name="date_from" class="form-control form-control-sm" value="{{ date_from }}"></div>
+      <div class="col-auto"><label class="form-label small fw-semibold mb-1">To</label><input type="date" name="date_to" class="form-control form-control-sm" value="{{ date_to }}"></div>
+      <div class="col-auto"><label class="form-label small fw-semibold mb-1">Status</label><select name="status" class="form-select form-select-sm"><option value="all" {% if status_filter=='all' %}selected{% endif %}>All</option><option value="open" {% if status_filter=='open' %}selected{% endif %}>Open</option><option value="in_progress" {% if status_filter=='in_progress' %}selected{% endif %}>In Progress</option><option value="resolved" {% if status_filter=='resolved' %}selected{% endif %}>Resolved</option><option value="void" {% if status_filter=='void' %}selected{% endif %}>Void</option></select></div>
+      <div class="col-auto"><label class="form-label small fw-semibold mb-1">Severity</label><select name="severity" class="form-select form-select-sm"><option value="">All</option><option value="minor" {% if severity_filter=='minor' %}selected{% endif %}>Minor</option><option value="moderate" {% if severity_filter=='moderate' %}selected{% endif %}>Moderate</option><option value="serious" {% if severity_filter=='serious' %}selected{% endif %}>Serious</option><option value="critical" {% if severity_filter=='critical' %}selected{% endif %}>Critical</option></select></div>
+      <div class="col-auto"><label class="form-label small fw-semibold mb-1">Staff</label><select name="staff" class="form-select form-select-sm"><option value="">All Staff</option>{% for s in staff %}<option value="{{ s }}" {% if staff_filter==s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select></div>
+      <div class="col-auto"><button class="btn btn-sm btn-success"><i class="fas fa-search me-1"></i>Filter</button><a href="/admin/violations" class="btn btn-sm btn-outline-secondary ms-1">Reset</a></div>
+    </form>
+  </div>
+</div>
+
+{% for v in violations %}
+{% set status_badge = {'open':'danger','in_progress':'warning text-dark','resolved':'success','void':'secondary'}.get(v.status, 'secondary') %}
+<div class="card shadow-sm mb-3 violation-row" style="--rule-color:{{ v.rule_color or '#607D8B' }}">
+  <div class="card-header py-2 d-flex flex-wrap gap-2 align-items-center">
+    <i class="fas {{ v.rule_icon or 'fa-triangle-exclamation' }}" style="color:{{ v.rule_color or '#607D8B' }}"></i>
+    <strong>{{ v.rule_title or 'Rule removed' }}</strong>
+    <span class="badge severity-{{ v.severity }}">{{ v.severity|title }}</span>
+    <span class="badge bg-{{ status_badge }}">{{ v.status.replace('_',' ')|title }}</span>
+    <span class="ms-auto text-muted small">
+      <i class="fas fa-user me-1"></i>{{ v.staff_name }}
+      &nbsp;|&nbsp;<i class="fas fa-calendar me-1"></i>{{ v.incident_date }}
+      &nbsp;|&nbsp;<i class="fas fa-clock me-1"></i>{{ v.incident_time }}
+      &nbsp;|&nbsp;Submitted {{ v.submitted_at or '—' }}
+    </span>
+  </div>
+  <div class="card-body">
+    <p class="mb-2">{{ v.description }}</p>
+    {% if v.action_taken %}
+    <div class="alert alert-light border py-2 small mb-3"><strong>Action:</strong> {{ v.action_taken }}</div>
+    {% endif %}
+    {% if v.follow_up_date %}
+    <div class="small text-muted mb-2"><i class="fas fa-calendar-check me-1"></i>Follow-up date: {{ v.follow_up_date }}</div>
+    {% endif %}
+    {% if v.manager_notes %}
+    <div class="alert alert-info py-2 small mb-3"><strong>Manager notes:</strong> {{ v.manager_notes }}</div>
+    {% endif %}
+    <form method="POST" action="/admin/violations/{{ v.id }}/update" class="row g-2 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label small fw-semibold mb-1">Rule</label>
+        <select name="rule_id" class="form-select form-select-sm">
+          {% for rule in rules %}
+          <option value="{{ rule.id }}" {% if v.rule_id==rule.id %}selected{% endif %}>{{ rule.title }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small fw-semibold mb-1">Staff</label>
+        <select name="staff_name" class="form-select form-select-sm">
+          {% for s in staff %}<option value="{{ s }}" {% if v.staff_name==s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2"><label class="form-label small fw-semibold mb-1">Date</label><input type="date" name="incident_date" class="form-control form-control-sm" value="{{ v.incident_date }}"></div>
+      <div class="col-md-2"><label class="form-label small fw-semibold mb-1">Time</label><input type="time" name="incident_time" class="form-control form-control-sm" value="{{ v.incident_time }}"></div>
+      <div class="col-md-1"><button class="btn btn-sm btn-success w-100"><i class="fas fa-save"></i></button></div>
+      <div class="col-md-2"><label class="form-label small fw-semibold mb-1">Severity</label><select name="severity" class="form-select form-select-sm">{% for sev in ['minor','moderate','serious','critical'] %}<option value="{{ sev }}" {% if v.severity==sev %}selected{% endif %}>{{ sev|title }}</option>{% endfor %}</select></div>
+      <div class="col-md-2"><label class="form-label small fw-semibold mb-1">Status</label><select name="status" class="form-select form-select-sm"><option value="open" {% if v.status=='open' %}selected{% endif %}>Open</option><option value="in_progress" {% if v.status=='in_progress' %}selected{% endif %}>In Progress</option><option value="resolved" {% if v.status=='resolved' %}selected{% endif %}>Resolved</option><option value="void" {% if v.status=='void' %}selected{% endif %}>Void</option></select></div>
+      <div class="col-md-3"><label class="form-label small fw-semibold mb-1">Submitted by</label><select name="submitted_by" class="form-select form-select-sm"><option value="">— Admin / Manager —</option>{% for m in managers %}<option value="{{ m }}" {% if v.submitted_by==m %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div>
+      <div class="col-md-3"><label class="form-label small fw-semibold mb-1">Resolved by</label><select name="resolved_by" class="form-select form-select-sm"><option value="">— Manager —</option>{% for m in managers %}<option value="{{ m }}" {% if v.resolved_by==m %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div>
+      <div class="col-md-2"><label class="form-label small fw-semibold mb-1">Follow-up</label><input type="date" name="follow_up_date" class="form-control form-control-sm" value="{{ v.follow_up_date or '' }}"></div>
+      <div class="col-md-6"><label class="form-label small fw-semibold mb-1">Description</label><textarea name="description" rows="2" class="form-control form-control-sm">{{ v.description or '' }}</textarea></div>
+      <div class="col-md-3"><label class="form-label small fw-semibold mb-1">Action</label><textarea name="action_taken" rows="2" class="form-control form-control-sm">{{ v.action_taken or '' }}</textarea></div>
+      <div class="col-md-3"><label class="form-label small fw-semibold mb-1">Manager Notes</label><textarea name="manager_notes" rows="2" class="form-control form-control-sm">{{ v.manager_notes or '' }}</textarea></div>
+    </form>
+  </div>
+</div>
+{% else %}
+<div class="text-center text-muted py-5">
+  <i class="fas fa-scale-balanced fa-3x mb-3 d-block opacity-25"></i>
+  <h5>No violations found</h5>
+</div>
+{% endfor %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function clearRuleCards() {
+  document.querySelectorAll('.rule-card').forEach(card => card.classList.remove('active'));
+}
+function selectRule(card) {
+  clearRuleCards();
+  card.classList.add('active');
+  const select = document.getElementById('rule-select');
+  select.value = card.dataset.ruleId;
+  document.getElementById('severity-select').value = card.dataset.severity || 'minor';
+  const isOther = card.dataset.code === 'other';
+  document.getElementById('description-input').value = isOther ? '' : (card.dataset.desc || '');
+  document.getElementById('description-input').placeholder = isOther
+    ? 'Describe the exact violation details...'
+    : 'Example: Staff did not wear hat/apron during service...';
+  document.getElementById('action-input').value = isOther ? '' : (card.dataset.action || '');
+  document.getElementById('rule-select').scrollIntoView({behavior:'smooth', block:'center'});
+  if (isOther) document.getElementById('description-input').focus();
+}
+function selectRuleFromDropdown() {
+  const select = document.getElementById('rule-select');
+  const opt = select.options[select.selectedIndex];
+  clearRuleCards();
+  const card = document.getElementById('rule-card-' + select.value);
+  if (card) card.classList.add('active');
+  document.getElementById('severity-select').value = opt.dataset.severity || 'minor';
+  const isOther = opt.dataset.code === 'other';
+  document.getElementById('description-input').value = isOther ? '' : (opt.dataset.desc || '');
+  document.getElementById('description-input').placeholder = isOther
+    ? 'Describe the exact violation details...'
+    : 'Example: Staff did not wear hat/apron during service...';
+  document.getElementById('action-input').value = isOther ? '' : (opt.dataset.action || '');
+  if (isOther) document.getElementById('description-input').focus();
+}
+
+const violationStats = {{ violation_stats|tojson }};
+
+function labelize(value) {
+  return String(value || '')
+    .replaceAll('_', ' ')
+    .replace(/\b\w/g, ch => ch.toUpperCase());
+}
+
+function makeViolationChart(canvasId, config) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas || !window.Chart) return;
+  new Chart(canvas, config);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const statusColors = {
+    open: '#C62828',
+    in_progress: '#F57C00',
+    resolved: '#2E7D32',
+    void: '#78909C'
+  };
+  const severityColors = {
+    minor: '#90A4AE',
+    moderate: '#FBC02D',
+    serious: '#D32F2F',
+    critical: '#7B1B1B'
+  };
+
+  const dailyRows = violationStats.daily_trend || [];
+  makeViolationChart('violationDailyChart', {
+    type: 'bar',
+    data: {
+      labels: dailyRows.map(row => row.label),
+      datasets: [{
+        label: 'Violations',
+        data: dailyRows.map(row => row.count),
+        backgroundColor: '#C62828',
+        borderRadius: 5,
+        maxBarThickness: 34
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { display: false } },
+        y: { beginAtZero: true, ticks: { precision: 0 } }
+      }
+    }
+  });
+
+  const statusRows = violationStats.status_breakdown || [];
+  makeViolationChart('violationStatusChart', {
+    type: 'doughnut',
+    data: {
+      labels: statusRows.map(row => labelize(row.status)),
+      datasets: [{
+        data: statusRows.map(row => row.count),
+        backgroundColor: statusRows.map(row => statusColors[row.status] || '#607D8B')
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels: { boxWidth: 10 } } },
+      cutout: '62%'
+    }
+  });
+
+  const severityRows = violationStats.severity_breakdown || [];
+  makeViolationChart('violationSeverityChart', {
+    type: 'doughnut',
+    data: {
+      labels: severityRows.map(row => labelize(row.severity)),
+      datasets: [{
+        data: severityRows.map(row => row.count),
+        backgroundColor: severityRows.map(row => severityColors[row.severity] || '#607D8B')
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels: { boxWidth: 10 } } },
+      cutout: '62%'
+    }
+  });
+});
+</script>
+{% endblock %}

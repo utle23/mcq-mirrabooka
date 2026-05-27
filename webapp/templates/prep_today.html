@@ -1,0 +1,213 @@
+{% extends "base.html" %}
+{% block title %}Today's Prep{% endblock %}
+{% block topbar_title %}<span class="fw-bold"><i class="fas fa-list-check me-2"></i>Today's Prep — {{ day_long }}</span>{% endblock %}
+
+{% block content %}
+<!-- Filter bar -->
+<div class="card shadow-sm mb-3">
+  <div class="card-body py-2">
+    <form method="GET" class="row g-2 align-items-end">
+      <div class="col-auto">
+        <select name="staff" class="form-select form-select-sm">
+          <option value="">All Staff</option>
+          {% for s in staff_list %}
+          <option value="{{ s }}" {% if staff_filter==s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-auto">
+        <select name="station" class="form-select form-select-sm">
+          <option value="">All Stations</option>
+          {% for s in stations %}
+          <option value="{{ s.id }}" {% if station_filter==s.id|string %}selected{% endif %}>{{ s.name_en }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-auto">
+        <button type="submit" class="btn btn-success btn-sm"><i class="fas fa-filter me-1"></i>Filter</button>
+        <a href="/prep/today" class="btn btn-outline-secondary btn-sm">Reset</a>
+      </div>
+      <div class="col-auto ms-auto">
+        <span class="badge bg-success fs-6">{{ tasks|selectattr('status','eq','done')|list|length }}/{{ tasks|length }} Done</span>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if not tasks %}
+<div class="text-center py-5 text-muted">
+  <i class="fas fa-clipboard-list fa-4x mb-3 d-block opacity-25"></i>
+  <h5>No prep tasks for today</h5>
+  <p class="small">Admin needs to create the weekly schedule first.</p>
+</div>
+{% endif %}
+
+<!-- Task cards by station -->
+{% set ns_station = namespace(current='') %}
+{% for task in tasks %}
+{% if task.station.name_en != ns_station.current %}
+{% set ns_station.current = task.station.name_en %}
+<div class="d-flex align-items-center gap-2 mt-3 mb-2">
+  <span class="badge px-3 py-2 fs-6" style="background:{{ task.station.color }}">
+    {{ task.station.name_en }}
+  </span>
+  <span class="text-muted small">{{ task.station.name_vi }}</span>
+</div>
+{% endif %}
+
+<div class="card shadow-sm mb-2 prep-task-card {% if task.status=='done' %}border-success{% elif task.issue_flag %}border-danger{% endif %}"
+     id="card-{{ task.id }}" style="border-left:4px solid {{ task.station.color }}{% if task.status=='done' %}; opacity:0.75{% endif %}">
+  <div class="card-body py-2 px-3">
+    <div class="d-flex align-items-start gap-3">
+
+      <!-- Checkbox -->
+      <div class="pt-1">
+        <div class="form-check form-check-inline m-0">
+          <input type="checkbox" class="form-check-input task-checkbox"
+                 style="width:1.4rem;height:1.4rem;cursor:pointer"
+                 data-id="{{ task.id }}"
+                 {% if task.status=='done' %}checked{% endif %}
+                 onchange="toggleTask({{ task.id }}, this)">
+        </div>
+      </div>
+
+      <!-- Task info -->
+      <div class="flex-grow-1">
+        <div class="d-flex flex-wrap gap-2 align-items-center mb-1">
+          <span class="badge bg-secondary">{{ task.fmt_time }}</span>
+          {% if task.is_supplier %}
+          <span class="badge bg-primary"><i class="fas fa-truck me-1"></i>{{ task.supplier_name or 'Supplier' }}</span>
+          {% endif %}
+          {% if task.issue_flag %}
+          <span class="badge bg-danger"><i class="fas fa-exclamation-circle me-1"></i>Issue</span>
+          {% endif %}
+        </div>
+        <div class="fw-semibold {% if task.status=='done' %}text-decoration-line-through text-muted{% endif %}">
+          {{ task.task_name_en }}
+        </div>
+        <div class="text-muted small">{{ task.task_name_vi }}</div>
+        {% if task.assigned_to %}
+        <div class="mt-1 text-muted" style="font-size:0.8rem">
+          <i class="fas fa-user me-1"></i>{{ task.assigned_to }}
+        </div>
+        {% endif %}
+        {% if task.note %}
+        <div class="mt-1 p-1 bg-warning bg-opacity-10 rounded small">
+          <i class="fas fa-sticky-note me-1 text-warning"></i>{{ task.note }}
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- Action buttons -->
+      <div class="d-flex flex-column gap-1">
+        <button class="btn btn-sm btn-outline-secondary" onclick="openNote({{ task.id }}, '{{ task.note|replace("'","\\'") }}')" title="Add note">
+          <i class="fas fa-sticky-note"></i>
+        </button>
+        <button class="btn btn-sm {% if task.issue_flag %}btn-danger{% else %}btn-outline-warning{% endif %}"
+                onclick="toggleIssue({{ task.id }}, {{ task.issue_flag }})" title="Mark issue">
+          <i class="fas fa-exclamation-triangle"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endfor %}
+
+<!-- Note modal -->
+<div class="modal fade" id="noteModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header py-2"><h6 class="modal-title">Add / Edit Note</h6>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <textarea id="noteText" class="form-control" rows="3" placeholder="Enter note..."></textarea>
+      </div>
+      <div class="modal-footer py-2">
+        <button class="btn btn-sm btn-success" onclick="saveNote()">Save</button>
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Who are you? (for done_by) -->
+<div class="modal fade" id="whoModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header py-2"><h6 class="modal-title">Who completed this?</h6></div>
+      <div class="modal-body">
+        <select id="whoSelect" class="form-select">
+          <option value="">— Select your name —</option>
+          {% for s in staff_list %}
+          <option value="{{ s }}">{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="modal-footer py-2">
+        <button class="btn btn-sm btn-success" onclick="confirmToggle()">Confirm</button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="cancelToggle()">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let _pendingId = null, _pendingCb = null;
+let _noteId = null;
+
+function toggleTask(id, cb) {
+  if (cb.checked) {
+    _pendingId = id;
+    _pendingCb = cb;
+    new bootstrap.Modal(document.getElementById('whoModal')).show();
+  } else {
+    doToggle(id, cb, '');
+  }
+}
+function confirmToggle() {
+  const who = document.getElementById('whoSelect').value;
+  bootstrap.Modal.getInstance(document.getElementById('whoModal')).hide();
+  if (_pendingId) doToggle(_pendingId, _pendingCb, who);
+}
+function cancelToggle() {
+  if (_pendingCb) _pendingCb.checked = false;
+  bootstrap.Modal.getInstance(document.getElementById('whoModal')).hide();
+}
+function doToggle(id, cb, who) {
+  const fd = new FormData();
+  fd.append('done_by', who);
+  fetch(`/prep/daily/${id}/toggle`, {method:'POST', body:fd, headers:{'X-Requested-With':'XMLHttpRequest'}})
+    .then(r=>r.json()).then(data => {
+      const card = document.getElementById('card-' + id);
+      if (data.status === 'done') {
+        card.classList.add('border-success');
+        card.style.opacity = '0.75';
+      } else {
+        card.classList.remove('border-success');
+        card.style.opacity = '1';
+      }
+    });
+}
+function openNote(id, existing) {
+  _noteId = id;
+  document.getElementById('noteText').value = existing || '';
+  new bootstrap.Modal(document.getElementById('noteModal')).show();
+}
+function saveNote() {
+  const fd = new FormData();
+  fd.append('note', document.getElementById('noteText').value);
+  fetch(`/prep/daily/${_noteId}/note`, {method:'POST', body:fd, headers:{'X-Requested-With':'XMLHttpRequest'}})
+    .then(()=>{ bootstrap.Modal.getInstance(document.getElementById('noteModal')).hide(); location.reload(); });
+}
+function toggleIssue(id, current) {
+  const note = current ? '' : prompt('Describe the issue (optional):') || '';
+  const fd = new FormData();
+  fd.append('note', note);
+  fetch(`/prep/daily/${id}/issue`, {method:'POST', body:fd, headers:{'X-Requested-With':'XMLHttpRequest'}})
+    .then(()=>location.reload());
+}
+</script>
+{% endblock %}

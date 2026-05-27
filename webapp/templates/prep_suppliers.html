@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+{% block title %}Supplier Tracking{% endblock %}
+{% block topbar_title %}<span class="fw-bold"><i class="fas fa-truck me-2"></i>Supplier Delivery Tracking</span>{% endblock %}
+
+{% block content %}
+<!-- Week selector -->
+<div class="card shadow-sm mb-3">
+  <div class="card-body py-2">
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      {% set ws_date = week_start %}
+      <a href="/prep/suppliers?week={{ (week_dates[0]|string)[:10] }}"
+         class="btn btn-sm btn-outline-secondary" id="prevWeekBtn"><i class="fas fa-chevron-left"></i></a>
+      <span class="fw-semibold">Week of {{ week_start }}</span>
+      <a href="/prep/suppliers?week={{ (week_dates[0]|string)[:10] }}"
+         class="btn btn-sm btn-outline-secondary" id="nextWeekBtn"><i class="fas fa-chevron-right"></i></a>
+      <a href="/prep/suppliers" class="btn btn-sm btn-outline-success ms-1">This Week</a>
+    </div>
+  </div>
+</div>
+
+{% if not items %}
+<div class="text-center py-5 text-muted">
+  <i class="fas fa-truck fa-4x mb-3 d-block opacity-25"></i>
+  <h5>No supplier deliveries this week</h5>
+  <p class="small">Create the weekly schedule first, or check that supplier tasks are marked in templates.</p>
+  <a href="/prep/weekly/{{ week_start }}" class="btn btn-outline-primary btn-sm">Go to Weekly Schedule</a>
+</div>
+
+{% else %}
+<!-- Group items by task name -->
+{% set seen = namespace(tasks=[]) %}
+{% for item in items %}
+{% if item.task_name_en not in seen.tasks %}
+{% set _ = seen.tasks.append(item.task_name_en) %}
+
+<!-- Supplier task card -->
+<div class="card shadow-sm mb-4">
+  <div class="card-header py-2 d-flex align-items-center gap-2"
+       style="background:{{ item.station.color }}15;border-left:4px solid {{ item.station.color }}">
+    <span class="badge" style="background:{{ item.station.color }}">{{ item.station.name_en }}</span>
+    <span class="fw-bold">{{ item.task_name_en }}</span>
+    <span class="text-muted small">{{ item.task_name_vi }}</span>
+    {% if item.supplier_name %}
+    <span class="badge bg-primary ms-auto"><i class="fas fa-truck me-1"></i>{{ item.supplier_name }}</span>
+    {% endif %}
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm table-bordered mb-0 align-middle" style="font-size:0.82rem">
+      <thead class="table-light">
+        <tr>
+          <th style="width:90px">Day</th>
+          <th style="width:90px">Date</th>
+          <th class="text-center" style="width:100px">Ordered</th>
+          <th class="text-center" style="width:100px">Received</th>
+          <th>Note</th>
+          <th style="width:80px" class="text-center">Issue</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in items if row.task_name_en == item.task_name_en %}
+        <tr id="ss-row-{{ row.ss_id }}" class="{% if row.issue_flag %}table-danger{% elif row.ordered and row.received %}table-success bg-opacity-25{% endif %}">
+          <td class="fw-semibold">{{ row.day_label }}</td>
+          <td class="text-muted small">{{ row.date[-5:] }}</td>
+          <!-- Ordered -->
+          <td class="text-center">
+            {% if row.ordered %}
+            <div class="d-flex flex-column align-items-center">
+              <i class="fas fa-check-circle text-success"></i>
+              <small class="text-muted" style="font-size:0.65rem">{{ row.ordered_by or '' }}</small>
+            </div>
+            {% else %}
+            <button class="btn btn-sm btn-outline-primary" onclick="markOrdered({{ row.ss_id }})">
+              <i class="fas fa-shopping-cart me-1"></i>Mark Ordered
+            </button>
+            {% endif %}
+          </td>
+          <!-- Received -->
+          <td class="text-center">
+            {% if not row.ordered %}
+            <span class="text-muted small">—</span>
+            {% elif row.received %}
+            <div class="d-flex flex-column align-items-center">
+              <i class="fas fa-check-circle text-success"></i>
+              <small class="text-muted" style="font-size:0.65rem">{{ row.received_by or '' }}</small>
+            </div>
+            {% else %}
+            <button class="btn btn-sm btn-outline-success" onclick="markReceived({{ row.ss_id }})">
+              <i class="fas fa-box-open me-1"></i>Mark Received
+            </button>
+            {% endif %}
+          </td>
+          <!-- Note -->
+          <td>
+            {% if row.note %}
+            <span class="small text-muted">{{ row.note }}</span>
+            {% endif %}
+            <button class="btn btn-sm btn-outline-secondary ms-1" onclick="openNoteModal({{ row.ss_id }}, '{{ row.note or '' }}')" title="Add note">
+              <i class="fas fa-sticky-note"></i>
+            </button>
+          </td>
+          <!-- Issue -->
+          <td class="text-center">
+            <button class="btn btn-sm {% if row.issue_flag %}btn-danger{% else %}btn-outline-warning{% endif %}"
+                    onclick="toggleIssue({{ row.ss_id }}, {{ row.issue_flag }})" title="Flag issue">
+              <i class="fas fa-exclamation-triangle"></i>
+            </button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<!-- Who are you modal -->
+<div class="modal fade" id="whoModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header py-2"><h6 class="modal-title" id="whoTitle">Who are you?</h6></div>
+      <div class="modal-body">
+        <select id="whoSelect" class="form-select">
+          <option value="">— Select your name —</option>
+          {% for s in staff_list %}
+          <option value="{{ s }}">{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="modal-footer py-2">
+        <button class="btn btn-sm btn-success" onclick="confirmWho()">Confirm</button>
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Note modal -->
+<div class="modal fade" id="noteModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header py-2"><h6 class="modal-title">Add / Edit Note</h6>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <textarea id="noteText" class="form-control" rows="3" placeholder="Enter note..."></textarea>
+      </div>
+      <div class="modal-footer py-2">
+        <button class="btn btn-sm btn-success" onclick="saveNote()">Save</button>
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let _pendingSsId = null, _pendingField = null;
+let _noteSsId = null;
+
+function markOrdered(ssId) {
+  _pendingSsId  = ssId;
+  _pendingField = 'ordered';
+  document.getElementById('whoTitle').textContent = 'Who placed the order?';
+  new bootstrap.Modal(document.getElementById('whoModal')).show();
+}
+function markReceived(ssId) {
+  _pendingSsId  = ssId;
+  _pendingField = 'received';
+  document.getElementById('whoTitle').textContent = 'Who received the delivery?';
+  new bootstrap.Modal(document.getElementById('whoModal')).show();
+}
+function confirmWho() {
+  const who = document.getElementById('whoSelect').value;
+  bootstrap.Modal.getInstance(document.getElementById('whoModal')).hide();
+  if (!_pendingSsId) return;
+  const fd = new FormData();
+  fd.append('field', _pendingField);
+  fd.append('value', '1');
+  fd.append('by', who);
+  fetch(`/prep/suppliers/${_pendingSsId}/update`, {method:'POST',body:fd,headers:{'X-Requested-With':'XMLHttpRequest'}})
+    .then(() => location.reload());
+}
+function openNoteModal(ssId, existing) {
+  _noteSsId = ssId;
+  document.getElementById('noteText').value = existing || '';
+  new bootstrap.Modal(document.getElementById('noteModal')).show();
+}
+function saveNote() {
+  const fd = new FormData();
+  fd.append('note', document.getElementById('noteText').value);
+  fetch(`/prep/suppliers/${_noteSsId}/update`, {method:'POST',body:fd,headers:{'X-Requested-With':'XMLHttpRequest'}})
+    .then(() => { bootstrap.Modal.getInstance(document.getElementById('noteModal')).hide(); location.reload(); });
+}
+function toggleIssue(ssId, current) {
+  const fd = new FormData();
+  fd.append('field', 'issue');
+  fd.append('value', current ? '0' : '1');
+  fetch(`/prep/suppliers/${ssId}/update`, {method:'POST',body:fd,headers:{'X-Requested-With':'XMLHttpRequest'}})
+    .then(() => location.reload());
+}
+
+// Week navigation
+(function(){
+  const ws = new Date('{{ week_start }}');
+  const prev = new Date(ws); prev.setDate(prev.getDate() - 7);
+  const next = new Date(ws); next.setDate(next.getDate() + 7);
+  const fmt = d => d.toISOString().slice(0,10);
+  document.getElementById('prevWeekBtn').href = `/prep/suppliers?week=${fmt(prev)}`;
+  document.getElementById('nextWeekBtn').href = `/prep/suppliers?week=${fmt(next)}`;
+})();
+</script>
+{% endblock %}

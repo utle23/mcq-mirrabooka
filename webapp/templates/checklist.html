@@ -1,0 +1,553 @@
+{% extends "base.html" %}
+{% block title %}{{ chk_data.title }} Checklist{% endblock %}
+{% block topbar_title %}<span class="fw-bold">{{ chk_data.title }} — Checklist</span>{% endblock %}
+
+{% block content %}
+<div class="row mb-3">
+  <div class="col">
+    <div class="d-flex align-items-center gap-3 flex-wrap">
+      <div class="input-group input-group-sm" style="width:180px">
+        <span class="input-group-text"><i class="fas fa-calendar"></i></span>
+        <input type="date" id="date-picker" class="form-control" value="{{ chk_date }}"
+               onchange="location.href='/checklist/{{ chk_type }}?date='+this.value+'&section={{ section }}'">
+      </div>
+      <div class="btn-group">
+        <a href="/checklist/{{ chk_type }}?date={{ chk_date }}&section=opening"
+           class="btn btn-sm {% if section=='opening' %}btn-success{% else %}btn-outline-success{% endif %}">
+          <i class="fas fa-sun me-1"></i>Opening
+        </a>
+        <a href="/checklist/{{ chk_type }}?date={{ chk_date }}&section=closing"
+           class="btn btn-sm {% if section=='closing' %}btn-success{% else %}btn-outline-success{% endif %}">
+          <i class="fas fa-moon me-1"></i>Closing
+        </a>
+      </div>
+      <span class="badge bg-light text-dark border">{{ day_name }}</span>
+      {% if existing %}
+        <span class="badge bg-{% if existing.verified %}success{% else %}warning text-dark{% endif %}">
+          {% if existing.verified %}Verified{% else %}Submitted{% endif %}
+        </span>
+        <a href="/checklist/view/{{ existing.id }}" class="btn btn-sm btn-outline-secondary">View Record</a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-header py-2" style="background:{{ chk_data.color }}20; border-left:4px solid {{ chk_data.color }}">
+    <div class="d-flex align-items-center flex-wrap gap-2">
+      <h5 class="mb-0 me-auto" style="color:{{ chk_data.color }}">
+        <i class="fas fa-{% if section=='opening' %}sun{% else %}moon{% endif %} me-2"></i>
+        {{ chk_data.title }} — {{ section|title }} Checklist
+      </h5>
+      <span class="badge fs-6 {% if section=='opening' %}bg-warning text-dark{% else %}bg-primary{% endif %}">
+        <i class="fas fa-clock me-1"></i>
+        Deadline: {% if section=='opening' %}10:30 AM{% else %}6:30 PM{% endif %}
+      </span>
+      <span id="deadline-status" class="badge fs-6 bg-secondary">Checking time...</span>
+    </div>
+    <small class="text-muted mt-1 d-block">{{ chk_date }} &nbsp;|&nbsp; {{ day_name }}</small>
+  </div>
+  <!-- Deadline alert -->
+  <div id="deadline-alert" class="alert mb-0 py-2 px-3 rounded-0 d-none" role="alert"></div>
+  <div class="card-body">
+    <form method="POST" action="/checklist/{{ chk_type }}/save"
+          id="chk-form" enctype="multipart/form-data">
+      <input type="hidden" name="date" value="{{ chk_date }}">
+      <input type="hidden" name="section" value="{{ section }}">
+
+      <div class="row g-3 mb-3">
+        <div class="col-md-6">
+          <label class="form-label fw-semibold">Responsible Person</label>
+          <select name="responsible" class="form-select">
+            <option value="">— Select staff —</option>
+            {% for s in staff %}
+            <option value="{{ s }}" {% if existing and existing.responsible==s %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label fw-semibold">Submitted by</label>
+          <select name="submitted_by" class="form-select" required>
+            <option value="">— Select staff —</option>
+            {% for s in staff %}
+            <option value="{{ s }}" {% if existing and existing.submitted_by==s %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12">
+          <label class="form-label fw-semibold">General Note</label>
+          <textarea name="general_note" class="form-control" rows="2"
+                    placeholder="Any general note about this section...">{{ existing.general_note if existing and existing.general_note else '' }}</textarea>
+        </div>
+      </div>
+
+      <!-- Quick select -->
+      <div class="mb-3 d-flex gap-2 flex-wrap align-items-center">
+        <button type="button" class="btn btn-sm btn-success" onclick="tickAll(true)">
+          <i class="fas fa-check-double me-1"></i>Check All
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="tickAll(false)">
+          <i class="fas fa-times me-1"></i>Uncheck All
+        </button>
+        <span class="ms-3 text-muted small">Done: <strong id="done-count">0</strong>/<strong id="total-count">{{ tasks|length }}</strong></span>
+        <div class="progress flex-grow-1" style="height:8px;min-width:100px">
+          <div class="progress-bar bg-success" id="progress-bar" style="width:0%"></div>
+        </div>
+      </div>
+
+      {% if is_admin %}
+      <div class="admin-add-task mb-3">
+        <div class="input-group input-group-sm">
+          <span class="input-group-text"><i class="fas fa-plus"></i></span>
+          <input type="text" class="form-control" id="new-checklist-task"
+                 placeholder="Admin: add task directly to this {{ section }} checklist..."
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();addChecklistTask();}">
+          <button type="button" class="btn btn-success" onclick="addChecklistTask()">
+            Add Task
+          </button>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- Task Table -->
+      <div class="table-responsive mb-4">
+        <table class="table table-bordered table-hover align-middle mb-0">
+          <thead class="table-dark">
+            <tr>
+              <th style="width:40px">#</th>
+              <th>Task</th>
+              <th style="width:80px" class="text-center">Done?</th>
+              <th>Note</th>
+            </tr>
+          </thead>
+          <tbody id="task-tbody">
+            {% for task in tasks %}
+            {% set i = loop.index0 %}
+            {% set et = existing_tasks[i] if i < existing_tasks|length else None %}
+            <tr class="task-row {% if et and et.done %}done-row{% endif %}" id="row-{{ i }}">
+              <td class="text-center text-muted">{{ i+1 }}</td>
+              <td class="task-name" id="taskname-cell-{{ i }}">
+                {% if is_admin %}
+                <span class="task-label" id="taskname-label-{{ i }}"
+                      title="Click to edit task name"
+                      onclick="startEditTask({{ i }})"
+                      style="cursor:pointer">
+                  <span id="taskname-text-{{ i }}">{{ task }}</span>
+                  <i class="fas fa-pen ms-1 edit-icon" style="font-size:0.65rem;color:#bbb;opacity:0;transition:opacity .2s"></i>
+                </span>
+                <div class="d-none" id="taskname-edit-{{ i }}">
+                  <div class="input-group input-group-sm">
+                    <input type="text" class="form-control form-control-sm"
+                           id="taskname-input-{{ i }}"
+                           value="{{ task|e }}"
+                           onkeydown="handleTaskNameKey(event, {{ i }})"
+                           onblur="saveTaskName({{ i }})">
+                    <button type="button" class="btn btn-success btn-sm" onclick="saveTaskName({{ i }})">
+                      <i class="fas fa-check"></i>
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="cancelEditTask({{ i }})">
+                      <i class="fas fa-times"></i>
+                    </button>
+                  </div>
+                </div>
+                {% else %}
+                {{ task }}
+                {% endif %}
+              </td>
+              <td class="text-center">
+                <div class="form-check form-switch d-flex justify-content-center">
+                  <input class="form-check-input task-check" type="checkbox" name="done_{{ i }}"
+                         id="check-{{ i }}" value="1" onchange="updateRow({{ i }})"
+                         {% if et and et.done %}checked{% endif %}>
+                </div>
+              </td>
+              <td>
+                <input type="text" name="note_{{ i }}" class="form-control form-control-sm"
+                       placeholder="Optional note..."
+                       value="{{ et.note if et and et.note else '' }}">
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- ═══════════════════════════════════════════════════════════════════ -->
+      <!-- PHOTO UPLOAD SECTION (MANDATORY 4 PHOTOS)                         -->
+      <!-- ═══════════════════════════════════════════════════════════════════ -->
+      <div class="photo-section">
+        <div class="photo-section-header">
+          <i class="fas fa-camera me-2"></i>
+          <span>Photo Evidence — <strong>{{ photos_required }} photos required</strong> to submit</span>
+          <span class="photo-counter ms-auto">
+            <span id="photo-count">0</span>/{{ photos_required }}
+            <i class="fas fa-camera ms-1"></i>
+          </span>
+        </div>
+
+        <div class="photo-section-body">
+          {% if existing %}
+          <div class="alert alert-info py-2 small mb-3">
+            <i class="fas fa-info-circle me-1"></i>
+            This checklist was already submitted. Upload new photos to replace existing ones,
+            or leave empty to keep existing photos.
+          </div>
+          {% endif %}
+
+          <div class="photo-labels-info small text-muted mb-3">
+            <i class="fas fa-lightbulb me-1 text-warning"></i>
+            Suggested: (1) Work Area Setup &nbsp;|&nbsp; (2) Tasks in Progress &nbsp;|&nbsp;
+            (3) Completion Proof &nbsp;|&nbsp; (4) Clean &amp; Ready
+          </div>
+
+          <div class="photo-grid-upload" id="photo-grid">
+            {% for n in range(photos_required) %}
+            <div class="photo-slot" id="slot-{{ n }}" onclick="document.getElementById('photo-input-{{ n }}').click()">
+              <input type="file" name="photo_{{ n }}" id="photo-input-{{ n }}"
+                     accept="image/*" capture="environment"
+                     class="photo-file-input"
+                     onchange="previewPhoto(this, {{ n }})">
+              <div class="photo-slot-empty" id="empty-{{ n }}">
+                <i class="fas fa-camera fa-2x text-muted"></i>
+                <div class="mt-1 small text-muted">Photo {{ n+1 }}</div>
+                <div class="tiny text-muted">Tap to take photo</div>
+              </div>
+              <img id="preview-{{ n }}" class="photo-preview-img" src="" alt="" style="display:none">
+              <div class="photo-slot-check" id="check-ph-{{ n }}" style="display:none">
+                <i class="fas fa-check-circle"></i>
+              </div>
+            </div>
+            {% endfor %}
+
+            <!-- Extra slot (optional) -->
+            <div class="photo-slot photo-slot-extra" id="slot-extra"
+                 onclick="document.getElementById('photo-input-extra').click()">
+              <input type="file" name="photo_{{ photos_required }}" id="photo-input-extra"
+                     accept="image/*" capture="environment"
+                     class="photo-file-input"
+                     onchange="previewExtra(this)">
+              <div id="empty-extra">
+                <i class="fas fa-plus fa-lg text-muted"></i>
+                <div class="tiny text-muted mt-1">Extra</div>
+              </div>
+              <img id="preview-extra" class="photo-preview-img" src="" alt="" style="display:none">
+            </div>
+          </div>
+
+          <!-- Progress -->
+          <div class="mt-2">
+            <div class="progress" style="height:6px">
+              <div class="progress-bar bg-success" id="photo-progress" style="width:0%"></div>
+            </div>
+            <div id="photo-status-msg" class="small mt-1 text-danger fw-semibold">
+              <i class="fas fa-exclamation-circle me-1"></i>{{ photos_required }} photos required before submitting
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- ═══════════════════════════════════════════════════════════════════ -->
+
+      <div class="mt-4 d-flex gap-2 flex-wrap">
+        <button type="submit" class="btn btn-success btn-lg" id="submit-btn" disabled>
+          <i class="fas fa-save me-2"></i>Save &amp; Submit Checklist
+        </button>
+        {% if existing %}
+        <button type="submit" class="btn btn-warning btn-lg" id="submit-btn-existing">
+          <i class="fas fa-edit me-2"></i>Update (Keep Existing Photos)
+        </button>
+        {% endif %}
+        <a href="/" class="btn btn-outline-secondary btn-lg">
+          <i class="fas fa-home me-1"></i>Dashboard
+        </a>
+      </div>
+
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block head %}
+<style>
+.task-label:hover .edit-icon, .task-label:hover i.fa-pen { opacity: 1 !important; }
+.task-label:hover { color: #1565C0; }
+.admin-add-task {
+  border:1px dashed #95D5B2;
+  background:#f8fff8;
+  border-radius:8px;
+  padding:10px;
+}
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const PHOTOS_REQ = {{ photos_required }};
+let photoCount = 0;
+
+function previewPhoto(input, n) {
+  if (input.files && input.files[0]) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const preview = document.getElementById('preview-' + n);
+      preview.src = e.target.result;
+      preview.style.display = 'block';
+      document.getElementById('empty-' + n).style.display = 'none';
+      document.getElementById('check-ph-' + n).style.display = 'flex';
+      document.getElementById('slot-' + n).classList.add('has-photo');
+    };
+    reader.readAsDataURL(input.files[0]);
+  }
+  updatePhotoCount();
+}
+
+function previewExtra(input) {
+  if (input.files && input.files[0]) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const preview = document.getElementById('preview-extra');
+      preview.src = e.target.result;
+      preview.style.display = 'block';
+      document.getElementById('empty-extra').style.display = 'none';
+      document.getElementById('slot-extra').classList.add('has-photo');
+    };
+    reader.readAsDataURL(input.files[0]);
+  }
+  updatePhotoCount();
+}
+
+function updatePhotoCount() {
+  let count = 0;
+  for (let i = 0; i < PHOTOS_REQ; i++) {
+    const inp = document.getElementById('photo-input-' + i);
+    if (inp && inp.files && inp.files[0]) count++;
+  }
+  photoCount = count;
+  document.getElementById('photo-count').textContent = count;
+  const pct = Math.min(count / PHOTOS_REQ * 100, 100);
+  document.getElementById('photo-progress').style.width = pct + '%';
+
+  const submitBtn = document.getElementById('submit-btn');
+  if (count >= PHOTOS_REQ) {
+    submitBtn.disabled = false;
+    submitBtn.classList.replace('btn-success', 'btn-success');
+    document.getElementById('photo-status-msg').innerHTML =
+      '<i class="fas fa-check-circle me-1 text-success"></i><span class="text-success">Ready to submit!</span>';
+  } else {
+    submitBtn.disabled = true;
+    const need = PHOTOS_REQ - count;
+    document.getElementById('photo-status-msg').innerHTML =
+      `<i class="fas fa-exclamation-circle me-1"></i>${need} more photo${need>1?'s':''} required`;
+  }
+}
+
+// Allow existing submissions to update without re-uploading photos
+{% if existing %}
+document.getElementById('submit-btn').disabled = false;
+document.getElementById('photo-status-msg').innerHTML =
+  '<i class="fas fa-info-circle me-1 text-info"></i><span class="text-info">Existing photos kept. Upload new ones to replace.</span>';
+{% endif %}
+
+function updateRow(i) {
+  const cb  = document.getElementById('check-' + i);
+  const row = document.getElementById('row-' + i);
+  if (cb.checked) row.classList.add('done-row');
+  else row.classList.remove('done-row');
+  updateProgress();
+}
+function tickAll(val) {
+  document.querySelectorAll('.task-check').forEach((cb, i) => { cb.checked = val; updateRow(i); });
+}
+function updateProgress() {
+  const total = document.querySelectorAll('.task-check').length;
+  const done  = document.querySelectorAll('.task-check:checked').length;
+  document.getElementById('done-count').textContent = done;
+  document.getElementById('total-count').textContent = total;
+  document.getElementById('progress-bar').style.width = (total ? done / total * 100 : 0) + '%';
+}
+document.addEventListener('DOMContentLoaded', updateProgress);
+
+{% if is_admin %}
+// ── Inline task name editing (admin only) ──────────────────────────────────
+const CHK_TYPE = '{{ chk_type }}';
+const CHK_SECTION = '{{ section }}';
+let _savingTask = false;
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+  }[ch]));
+}
+
+function startEditTask(i) {
+  const label = document.getElementById('taskname-label-' + i);
+  label.classList.add('d-none');
+  const editDiv = document.getElementById('taskname-edit-' + i);
+  editDiv.classList.remove('d-none');
+  const inp = document.getElementById('taskname-input-' + i);
+  // Use live label text so re-edits pick up the latest saved name
+  const textEl = document.getElementById('taskname-text-' + i);
+  const currentText = textEl ? textEl.textContent.trim() : inp.value;
+  inp.value = currentText;
+  inp.focus();
+  inp.select();
+}
+
+function cancelEditTask(i) {
+  document.getElementById('taskname-edit-' + i).classList.add('d-none');
+  const label = document.getElementById('taskname-label-' + i);
+  label.classList.remove('d-none');
+}
+
+function handleTaskNameKey(e, i) {
+  if (e.key === 'Enter') { e.preventDefault(); saveTaskName(i); }
+  if (e.key === 'Escape') { cancelEditTask(i); }
+}
+
+async function saveTaskName(i) {
+  if (_savingTask) return;
+  const inp = document.getElementById('taskname-input-' + i);
+  const name = inp.value.trim();
+  if (!name) return;
+
+  _savingTask = true;
+  const fd = new FormData();
+  fd.append('chk_type', CHK_TYPE);
+  fd.append('section', CHK_SECTION);
+  fd.append('order', i);
+  fd.append('name', name);
+
+  try {
+    const res = await fetch('/admin/checklist-task/update', {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      body: fd
+    });
+    const data = await res.json();
+    if (data.ok) {
+      const label = document.getElementById('taskname-label-' + i);
+      const textEl = document.getElementById('taskname-text-' + i);
+      if (textEl) textEl.textContent = data.name;
+      document.getElementById('taskname-edit-' + i).classList.add('d-none');
+      label.classList.remove('d-none');
+      // Brief success flash
+      label.style.color = '#2E7D32';
+      setTimeout(() => label.style.color = '', 1200);
+    } else {
+      alert('Failed to save: ' + (data.error || 'unknown error'));
+    }
+  } catch(e) {
+    alert('Network error saving task name');
+  } finally {
+    _savingTask = false;
+  }
+}
+
+async function addChecklistTask() {
+  const input = document.getElementById('new-checklist-task');
+  const name = input.value.trim();
+  if (!name) return;
+  input.disabled = true;
+
+  const fd = new FormData();
+  fd.append('chk_type', CHK_TYPE);
+  fd.append('section', CHK_SECTION);
+  fd.append('name', name);
+
+  try {
+    const res = await fetch('/admin/checklist-task/add', {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      body: fd
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      alert('Failed to add task: ' + (data.error || 'unknown error'));
+      return;
+    }
+    appendChecklistTaskRow(data.order, data.name);
+    input.value = '';
+    updateProgress();
+  } catch(e) {
+    alert('Network error adding task');
+  } finally {
+    input.disabled = false;
+    input.focus();
+  }
+}
+
+function appendChecklistTaskRow(i, name) {
+  const tbody = document.getElementById('task-tbody');
+  const row = document.createElement('tr');
+  row.className = 'task-row';
+  row.id = 'row-' + i;
+  row.innerHTML = `
+    <td class="text-center text-muted">${i + 1}</td>
+    <td class="task-name" id="taskname-cell-${i}">
+      <span class="task-label" id="taskname-label-${i}"
+            title="Click to edit task name"
+            onclick="startEditTask(${i})"
+            style="cursor:pointer">
+        <span id="taskname-text-${i}">${escapeHtml(name)}</span>
+        <i class="fas fa-pen ms-1 edit-icon" style="font-size:0.65rem;color:#bbb;opacity:0;transition:opacity .2s"></i>
+      </span>
+      <div class="d-none" id="taskname-edit-${i}">
+        <div class="input-group input-group-sm">
+          <input type="text" class="form-control form-control-sm"
+                 id="taskname-input-${i}"
+                 value="${escapeHtml(name)}"
+                 onkeydown="handleTaskNameKey(event, ${i})"
+                 onblur="saveTaskName(${i})">
+          <button type="button" class="btn btn-success btn-sm" onclick="saveTaskName(${i})">
+            <i class="fas fa-check"></i>
+          </button>
+          <button type="button" class="btn btn-outline-secondary btn-sm" onclick="cancelEditTask(${i})">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+      </div>
+    </td>
+    <td class="text-center">
+      <div class="form-check form-switch d-flex justify-content-center">
+        <input class="form-check-input task-check" type="checkbox" name="done_${i}"
+               id="check-${i}" value="1" onchange="updateRow(${i})">
+      </div>
+    </td>
+    <td>
+      <input type="text" name="note_${i}" class="form-control form-control-sm"
+             placeholder="Optional note..." value="">
+    </td>`;
+  tbody.appendChild(row);
+}
+{% endif %}
+
+// Deadline check
+(function() {
+  const section  = '{{ section }}';
+  const isOpen   = section === 'opening';
+  const deadline = isOpen ? { h: 10, m: 30 } : { h: 18, m: 30 };
+  const now      = new Date();
+  const dlLabel  = isOpen ? '10:30 AM' : '6:30 PM';
+  const nowMins  = now.getHours() * 60 + now.getMinutes();
+  const dlMins   = deadline.h * 60 + deadline.m;
+  const diff     = dlMins - nowMins;
+
+  const statusBadge = document.getElementById('deadline-status');
+  const alertBox    = document.getElementById('deadline-alert');
+
+  if (diff > 30) {
+    statusBadge.className = 'badge fs-6 bg-success';
+    statusBadge.innerHTML = `<i class="fas fa-check-circle me-1"></i>On time (${diff} min left)`;
+  } else if (diff > 0) {
+    statusBadge.className = 'badge fs-6 bg-warning text-dark';
+    statusBadge.innerHTML = `<i class="fas fa-exclamation-triangle me-1"></i>Only ${diff} min left!`;
+    alertBox.className = 'alert alert-warning mb-0 py-2 px-3 rounded-0';
+    alertBox.innerHTML = `<i class="fas fa-exclamation-triangle me-2"></i><strong>Hurry!</strong> Less than ${diff} minutes before the ${dlLabel} deadline.`;
+  } else {
+    statusBadge.className = 'badge fs-6 bg-danger';
+    statusBadge.innerHTML = `<i class="fas fa-times-circle me-1"></i>Past deadline (${dlLabel})`;
+    alertBox.className = 'alert alert-danger mb-0 py-2 px-3 rounded-0';
+    alertBox.innerHTML = `<i class="fas fa-times-circle me-2"></i><strong>Past deadline!</strong> The ${dlLabel} submission deadline has passed. Please submit as soon as possible and notify your manager.`;
+  }
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,522 @@
+{% extends "base.html" %}
+{% block title %}Monthly Rewards{% endblock %}
+{% block topbar_title %}<span class="fw-bold"><i class="fas fa-award me-2 text-success"></i>Monthly Rewards</span>{% endblock %}
+
+{% block head %}
+<style>
+.mr-hero {
+  background:#fff; border:1px solid #e3ebe5; border-radius:8px;
+  padding:16px; box-shadow:0 1px 8px rgba(0,0,0,.05);
+}
+.mr-card {
+  background:#fff; border:1px solid #e3ebe5; border-radius:8px;
+  box-shadow:0 1px 7px rgba(0,0,0,.05);
+}
+.mr-stat {
+  border-left:4px solid var(--c); padding:12px 14px; background:#fff; border-radius:8px;
+  border-top:1px solid #edf1ef; border-right:1px solid #edf1ef; border-bottom:1px solid #edf1ef;
+}
+.mr-stat-value { font-size:1.65rem; line-height:1; font-weight:800; color:var(--c); }
+.mr-stat-label { font-size:.72rem; color:#66736c; text-transform:uppercase; font-weight:800; letter-spacing:.04em; }
+.winner-panel {
+  border:1px solid #e3ebe5; border-left:4px solid var(--c);
+  background:#fbfdfb; border-radius:8px; padding:14px;
+}
+.rank-badge {
+  width:34px; height:34px; border-radius:8px; display:inline-flex;
+  align-items:center; justify-content:center; font-weight:800; background:#eef4ef; color:#1B4332;
+}
+.score-pill {
+  display:inline-flex; align-items:center; gap:5px;
+  border-radius:999px; padding:4px 9px; font-weight:800; font-size:.78rem;
+  background:#eef7ef; color:#1B5E20;
+}
+.score-pill.checklist { background:#FFF8E1; color:#8A5A00; }
+.metric-line { height:7px; background:#edf1ef; border-radius:999px; overflow:hidden; }
+.metric-line span { display:block; height:100%; background:var(--c); border-radius:999px; }
+.mr-table th { font-size:.72rem; color:#66736c; text-transform:uppercase; letter-spacing:.04em; }
+.mr-chart { position:relative; min-height:230px; height:260px; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% set eom = decision_map.get('employee_month') %}
+{% set best = decision_map.get('best_checklist') %}
+{% set top_employee = reward.employee_rank[0] if reward.employee_rank else none %}
+{% set top_checklist = reward.checklist_rank[0] if reward.checklist_rank else none %}
+
+<div class="mr-hero mb-4">
+  <div class="d-flex flex-wrap align-items-end gap-3">
+    <div class="me-auto">
+      <div class="text-muted small fw-semibold">Reward Month</div>
+      <h4 class="mb-0">{{ reward.month_label }}</h4>
+    </div>
+    <form method="GET" class="d-flex gap-2 align-items-end">
+      <div>
+        <label class="form-label small fw-semibold mb-1">Month</label>
+        <input type="month" name="month" class="form-control form-control-sm" value="{{ reward_month }}">
+      </div>
+      <button class="btn btn-sm btn-success"><i class="fas fa-rotate me-1"></i>Load</button>
+    </form>
+  </div>
+</div>
+
+<!-- ── Scoring Rules Panel ── -->
+<div class="card shadow-sm mb-4" id="rules-panel">
+  <div class="card-header py-2 d-flex align-items-center" style="cursor:pointer;background:#F3E5F5;border-bottom:1px solid #CE93D8"
+       onclick="this.nextElementSibling.classList.toggle('d-none');this.querySelector('.rules-chevron').style.transform=this.nextElementSibling.classList.contains('d-none')?'rotate(-90deg)':''">
+    <i class="fas fa-scale-balanced me-2" style="color:#7B1FA2"></i>
+    <h6 class="mb-0 me-auto" style="color:#4A148C">How Scores Are Calculated — Rules</h6>
+    <span class="badge me-2" style="background:#7B1FA2;color:#fff;font-size:0.7rem">Scoring Guide</span>
+    <i class="fas fa-chevron-down rules-chevron" style="color:#7B1FA2;transition:transform .2s;transform:rotate(-90deg);font-size:0.8rem"></i>
+  </div>
+  <div class="card-body d-none" id="rules-body">
+    <div class="row g-3">
+
+      <!-- Employee Score -->
+      <div class="col-12 col-lg-6">
+        <div class="border rounded p-3 h-100" style="border-left:4px solid #2E7D32 !important">
+          <div class="fw-bold mb-2" style="color:#2E7D32"><i class="fas fa-trophy me-2"></i>Employee of the Month Score</div>
+          <div class="small text-muted mb-3">Points accumulate from all activities during the month. Higher = better candidate.</div>
+          <div class="p-2 rounded mb-2" style="background:#E3F2FD;font-size:0.78rem;border-left:3px solid #1565C0">
+            <i class="fas fa-info-circle me-1 text-primary"></i>
+            <strong>Only manager-verified checklists earn or lose points.</strong> Submitting alone = 0 pts.
+          </div>
+          <table class="table table-sm mb-0" style="font-size:0.8rem">
+            <tbody>
+              <tr class="table-success"><td><i class="fas fa-shield-check me-1 text-success"></i>Verified — clean &amp; on time</td><td class="text-end fw-bold text-success">+2 pts</td></tr>
+              <tr class="table-warning"><td><i class="fas fa-clock me-1 text-warning"></i>Verified — clean but late</td><td class="text-end fw-bold" style="color:#E65100">+1 pt</td></tr>
+              <tr class="table-danger"><td><i class="fas fa-exclamation-circle me-1 text-danger"></i>Verified — issues found</td><td class="text-end fw-bold text-danger">−1 pt</td></tr>
+              <tr class="table-danger"><td><i class="fas fa-exclamation-circle me-1 text-danger"></i>Verified — issues found &amp; late</td><td class="text-end fw-bold text-danger">−2 pts</td></tr>
+              <tr><td class="text-muted"><i class="fas fa-ban me-1"></i>Not verified (submitted only)</td><td class="text-end text-muted">0 pts</td></tr>
+              <tr><td><i class="fas fa-thermometer-half me-1 text-info"></i>Temperature record submitted</td><td class="text-end fw-bold text-success">+5 pts</td></tr>
+              <tr><td><i class="fas fa-flag me-1 text-warning"></i>Issue report submitted</td><td class="text-end fw-bold text-success">+2 pts</td></tr>
+              <tr><td><i class="fas fa-flag-checkered me-1 text-success"></i>Report resolved</td><td class="text-end fw-bold text-success">+5 pts</td></tr>
+              <tr class="table-danger"><td><i class="fas fa-triangle-exclamation me-1"></i>Minor violation</td><td class="text-end fw-bold text-danger">−5 pts</td></tr>
+              <tr class="table-danger"><td><i class="fas fa-triangle-exclamation me-1"></i>Moderate violation</td><td class="text-end fw-bold text-danger">−12 pts</td></tr>
+              <tr class="table-danger"><td><i class="fas fa-triangle-exclamation me-1"></i>Serious violation</td><td class="text-end fw-bold text-danger">−25 pts</td></tr>
+              <tr class="table-danger"><td><i class="fas fa-triangle-exclamation me-1"></i>Critical violation</td><td class="text-end fw-bold text-danger">−40 pts</td></tr>
+            </tbody>
+          </table>
+          <div class="mt-2 p-2 rounded" style="background:#E8F5E9;font-size:0.75rem">
+            <i class="fas fa-star me-1 text-warning"></i>
+            Score ≥ 30 &amp; 0 violations → <strong>Excellent</strong> &nbsp;|&nbsp;
+            ≥ 15 → <strong>Strong</strong> &nbsp;|&nbsp;
+            ≥ 5 → <strong>Developing</strong>
+          </div>
+        </div>
+      </div>
+
+      <!-- Checklist Score -->
+      <div class="col-12 col-lg-6">
+        <div class="border rounded p-3 h-100" style="border-left:4px solid #F57C00 !important">
+          <div class="fw-bold mb-2" style="color:#F57C00"><i class="fas fa-list-check me-2"></i>Best Checklist Compliance Score</div>
+          <div class="small text-muted mb-3">A percentage score (0–100%) measuring quality and consistency of checklist completion.</div>
+          <div class="p-2 rounded mb-2" style="background:#FFF3E0;font-size:0.8rem">
+            <strong>Formula:</strong><br>
+            <code style="font-size:0.76rem;color:#E65100">
+              (Completion Rate × 45%) +<br>
+              (On-Time Rate × 25%) +<br>
+              (Verified Rate × 20%) +<br>
+              (Clean Rate × 10%) −<br>
+              min(20, violation penalty × 0.25)
+            </code>
+          </div>
+          <table class="table table-sm mb-0" style="font-size:0.8rem">
+            <tbody>
+              <tr><td><strong>Completion Rate</strong></td><td class="text-muted">Tasks ticked ÷ total tasks</td></tr>
+              <tr><td><strong>On-Time Rate</strong></td><td class="text-muted">Submitted without late flag</td></tr>
+              <tr><td><strong>Verified Rate</strong></td><td class="text-muted">Manager verified sessions</td></tr>
+              <tr><td><strong>Clean Rate</strong></td><td class="text-muted">Sessions with no issues found</td></tr>
+            </tbody>
+          </table>
+          <div class="mt-2 p-2 rounded" style="background:#FFF3E0;font-size:0.75rem">
+            <i class="fas fa-info-circle me-1 text-warning"></i>
+            Violation penalty is capped at <strong>20 pts deduction</strong> from checklist score.
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-lg-3"><div class="mr-stat" style="--c:#2E7D32"><div class="mr-stat-value">{{ reward.employee_rank|length }}</div><div class="mr-stat-label">Active Staff</div></div></div>
+  <div class="col-6 col-lg-3"><div class="mr-stat" style="--c:#1565C0"><div class="mr-stat-value">{{ top_employee.employee_score if top_employee else 0 }}</div><div class="mr-stat-label">Top EOM Score</div></div></div>
+  <div class="col-6 col-lg-3"><div class="mr-stat" style="--c:#F57C00"><div class="mr-stat-value">{{ top_checklist.checklist_score if top_checklist else 0 }}</div><div class="mr-stat-label">Top Checklist</div></div></div>
+  <div class="col-6 col-lg-3"><div class="mr-stat" style="--c:#6A1B9A"><div class="mr-stat-value">{{ reward.adjustments|length }}</div><div class="mr-stat-label">Adjustments</div></div></div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-12 col-xl-6">
+    <div class="winner-panel h-100" style="--c:#2E7D32">
+      <div class="d-flex align-items-start gap-3">
+        <span class="rank-badge"><i class="fas fa-trophy"></i></span>
+        <div class="flex-grow-1">
+          <div class="text-muted small fw-semibold">Employee of the Month</div>
+          <h5 class="mb-1">{{ eom.staff_name if eom else (top_employee.staff_name if top_employee else 'No data') }}</h5>
+          {% if eom %}
+          <span class="badge bg-success">Approved</span>
+          <span class="text-muted small ms-1">{{ eom.approved_at }}</span>
+          {% else %}
+          <span class="score-pill"><i class="fas fa-star"></i>{{ top_employee.employee_score if top_employee else 0 }} pts</span>
+          {% endif %}
+        </div>
+      </div>
+      <form method="POST" action="/admin/monthly-rewards/decision" class="row g-2 align-items-end mt-3">
+        <input type="hidden" name="reward_month" value="{{ reward.month }}">
+        <input type="hidden" name="award_type" value="employee_month">
+        <div class="col-md-5">
+          <label class="form-label small fw-semibold">Winner</label>
+          <select name="staff_name" class="form-select form-select-sm">
+            {% for row in reward.employee_rank %}
+            <option value="{{ row.staff_name }}" {% if eom and eom.staff_name==row.staff_name %}selected{% elif not eom and loop.first %}selected{% endif %}>{{ row.staff_name }} - {{ row.employee_score }} pts</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-3"><label class="form-label small fw-semibold">Amount</label><input name="reward_amount" type="number" step="0.01" class="form-control form-control-sm" value="{{ eom.reward_amount if eom else 0 }}"></div>
+        <div class="col-md-3"><label class="form-label small fw-semibold">Approved By</label><input name="approved_by" class="form-control form-control-sm" value="{{ eom.approved_by if eom else '' }}"></div>
+        <div class="col-md-1"><button class="btn btn-sm btn-success w-100"><i class="fas fa-check"></i></button></div>
+        <div class="col-12"><input name="notes" class="form-control form-control-sm" placeholder="Decision notes" value="{{ eom.notes if eom else '' }}"></div>
+      </form>
+      {% if eom %}
+      <form method="POST" action="/admin/monthly-rewards/decision/{{ eom.id }}/delete" class="mt-2">
+        <button class="btn btn-sm btn-outline-danger"><i class="fas fa-trash me-1"></i>Clear Approved Winner</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+  <div class="col-12 col-xl-6">
+    <div class="winner-panel h-100" style="--c:#F57C00">
+      <div class="d-flex align-items-start gap-3">
+        <span class="rank-badge"><i class="fas fa-clipboard-check"></i></span>
+        <div class="flex-grow-1">
+          <div class="text-muted small fw-semibold">Best Checklist Compliance</div>
+          <h5 class="mb-1">{{ best.staff_name if best else (top_checklist.staff_name if top_checklist else 'No data') }}</h5>
+          {% if best %}
+          <span class="badge bg-success">Approved</span>
+          <span class="text-muted small ms-1">{{ best.approved_at }}</span>
+          {% else %}
+          <span class="score-pill checklist"><i class="fas fa-list-check"></i>{{ top_checklist.checklist_score if top_checklist else 0 }}%</span>
+          {% endif %}
+        </div>
+      </div>
+      <form method="POST" action="/admin/monthly-rewards/decision" class="row g-2 align-items-end mt-3">
+        <input type="hidden" name="reward_month" value="{{ reward.month }}">
+        <input type="hidden" name="award_type" value="best_checklist">
+        <div class="col-md-5">
+          <label class="form-label small fw-semibold">Winner</label>
+          <select name="staff_name" class="form-select form-select-sm">
+            {% for row in reward.checklist_rank %}
+            <option value="{{ row.staff_name }}" {% if best and best.staff_name==row.staff_name %}selected{% elif not best and loop.first %}selected{% endif %}>{{ row.staff_name }} - {{ row.checklist_score }}%</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-3"><label class="form-label small fw-semibold">Amount</label><input name="reward_amount" type="number" step="0.01" class="form-control form-control-sm" value="{{ best.reward_amount if best else 0 }}"></div>
+        <div class="col-md-3"><label class="form-label small fw-semibold">Approved By</label><input name="approved_by" class="form-control form-control-sm" value="{{ best.approved_by if best else '' }}"></div>
+        <div class="col-md-1"><button class="btn btn-sm btn-warning w-100"><i class="fas fa-check"></i></button></div>
+        <div class="col-12"><input name="notes" class="form-control form-control-sm" placeholder="Decision notes" value="{{ best.notes if best else '' }}"></div>
+      </form>
+      {% if best %}
+      <form method="POST" action="/admin/monthly-rewards/decision/{{ best.id }}/delete" class="mt-2">
+        <button class="btn btn-sm btn-outline-danger"><i class="fas fa-trash me-1"></i>Clear Approved Winner</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-12 col-xl-7">
+    <div class="mr-card p-3 h-100">
+      <div class="fw-bold mb-2"><i class="fas fa-chart-column me-2 text-success"></i>Score Distribution</div>
+      <div class="mr-chart"><canvas id="rewardScoreChart"></canvas></div>
+    </div>
+  </div>
+  <div class="col-12 col-xl-5">
+    <div class="mr-card p-3 h-100">
+      <div class="fw-bold mb-2"><i class="fas fa-sliders me-2 text-primary"></i>Manager Adjustment</div>
+      <form method="POST" action="/admin/monthly-rewards/adjustment" class="row g-2">
+        <input type="hidden" name="reward_month" value="{{ reward.month }}">
+        <div class="col-md-6">
+          <label class="form-label small fw-semibold">Staff</label>
+          <select name="staff_name" class="form-select form-select-sm">
+            {% for s in staff %}<option value="{{ s.name }}">{{ s.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="col-md-3"><label class="form-label small fw-semibold">Points</label><input name="points" type="number" step="0.5" class="form-control form-control-sm" placeholder="+/-"></div>
+        <div class="col-md-3"><label class="form-label small fw-semibold">By</label><input name="created_by" class="form-control form-control-sm"></div>
+        <div class="col-12"><input name="reason" class="form-control form-control-sm" placeholder="Reason for bonus or deduction" required></div>
+        <div class="col-12"><button class="btn btn-sm btn-primary"><i class="fas fa-plus me-1"></i>Add Adjustment</button></div>
+      </form>
+      <hr>
+      {% for adj in reward.adjustments %}
+      <div class="border rounded p-2 small mb-2">
+        <div class="d-flex gap-2 align-items-start">
+          <span class="badge {% if adj.points >= 0 %}bg-success{% else %}bg-danger{% endif %}">{{ adj.points }}</span>
+          <div class="me-auto"><strong>{{ adj.staff_name }}</strong><div class="text-muted">{{ adj.reason }}</div></div>
+          <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#adj-{{ adj.id }}">
+            <i class="fas fa-pen"></i>
+          </button>
+        </div>
+        <div class="collapse mt-2" id="adj-{{ adj.id }}">
+          <form method="POST" action="/admin/monthly-rewards/adjustment/{{ adj.id }}/update" class="row g-1">
+            <input type="hidden" name="reward_month" value="{{ reward.month }}">
+            <div class="col-md-5">
+              <select name="staff_name" class="form-select form-select-sm">
+                {% for s in staff %}<option value="{{ s.name }}" {% if adj.staff_name==s.name %}selected{% endif %}>{{ s.name }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="col-md-2"><input name="points" type="number" step="0.5" class="form-control form-control-sm" value="{{ adj.points }}"></div>
+            <div class="col-md-3"><input name="created_by" class="form-control form-control-sm" value="{{ adj.created_by or '' }}" placeholder="By"></div>
+            <div class="col-md-2"><button class="btn btn-sm btn-success w-100"><i class="fas fa-save"></i></button></div>
+            <div class="col-10"><input name="reason" class="form-control form-control-sm" value="{{ adj.reason }}"></div>
+            <div class="col-2">
+              <button type="submit" formaction="/admin/monthly-rewards/adjustment/{{ adj.id }}/delete" class="btn btn-sm btn-outline-danger w-100">
+                <i class="fas fa-trash"></i>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+      {% else %}
+      <div class="text-muted small">No adjustments for this month.</div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-12 col-xl-6">
+    <div class="mr-card p-3">
+      <div class="fw-bold mb-2"><i class="fas fa-ranking-star me-2 text-success"></i>Employee of the Month Ranking</div>
+      <div class="text-muted small mb-2"><i class="fas fa-info-circle me-1"></i>Click on a score to see the full breakdown</div>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mr-table">
+          <thead><tr><th>#</th><th>Staff</th><th class="text-end">Score</th><th>Violations</th></tr></thead>
+          <tbody>
+          {% for row in reward.employee_rank %}
+          <tr style="cursor:pointer" onclick="showBreakdown({{ loop.index0 }})">
+            <td><span class="rank-badge">{{ loop.index }}</span></td>
+            <td>
+              <strong>{{ row.staff_name }}</strong>
+              <div class="text-muted small">{{ row.role or 'Staff' }}</div>
+            </td>
+            <td class="text-end">
+              <span class="score-pill" title="Click to see breakdown">
+                {{ row.employee_score }}
+                <i class="fas fa-chart-pie ms-1" style="font-size:0.6rem;opacity:0.7"></i>
+              </span>
+            </td>
+            <td><span class="badge {% if row.violations_total %}bg-danger{% else %}bg-success{% endif %}">{{ row.violations_total }} violations</span></td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="col-12 col-xl-6">
+    <div class="mr-card p-3">
+      <div class="fw-bold mb-2"><i class="fas fa-list-check me-2 text-warning"></i>Checklist Compliance Ranking</div>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mr-table">
+          <thead><tr><th>#</th><th>Staff</th><th class="text-end">Score</th><th>Quality</th></tr></thead>
+          <tbody>
+          {% for row in reward.checklist_rank %}
+          <tr>
+            <td><span class="rank-badge">{{ loop.index }}</span></td>
+            <td><strong>{{ row.staff_name }}</strong><div class="text-muted small">{{ row.checklist_sessions }} records</div></td>
+            <td class="text-end"><span class="score-pill checklist">{{ row.checklist_score }}%</span></td>
+            <td style="min-width:190px">
+              <div class="small text-muted">Complete {{ row.completion_rate }}% | On time {{ row.on_time_rate }}%</div>
+              <div class="metric-line mt-1" style="--c:#F57C00"><span style="width:{{ row.checklist_score }}%"></span></div>
+            </td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+<!-- ── Score Breakdown Modal ── -->
+<div class="modal fade" id="breakdownModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header py-2" style="background:#E8F5E9;border-bottom:1px solid #C8E6C9">
+        <h6 class="modal-title" style="color:#1B5E20">
+          <i class="fas fa-chart-bar me-2"></i><span id="bd-name"></span>
+          <span class="ms-2 text-muted" style="font-weight:400;font-size:0.8rem" id="bd-month"></span>
+        </h6>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-3" id="bd-body"></div>
+    </div>
+  </div>
+</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const EMP_RANK = {{ reward.employee_rank|tojson }};
+const ADJ_ROWS = {{ reward.adjustments|tojson }};
+const BD_MONTH = {{ reward.month_label|tojson }};
+
+function showBreakdown(idx) {
+  const r = EMP_RANK[idx];
+  document.getElementById('bd-name').textContent = r.staff_name;
+  document.getElementById('bd-month').textContent = BD_MONTH;
+
+  // Compute sub-components
+  const sessions   = r.checklist_sessions  || 0;
+  const verified   = r.checklist_verified  || 0;
+  const late       = r.checklist_late      || 0;
+  const issues     = r.checklist_issues    || 0;
+  const notVerified = sessions - verified;
+
+  // Clean verified = verified with no issues
+  const cleanOnTime  = Math.max(0, verified - issues - Math.max(0, late - (sessions - verified)));
+  // Approximate breakdown: verified clean on time → +2, clean late → +1, issues → -1/-2
+  // We rely on the server-computed checklist_points total and show the contributing counts
+  const issuesLate   = Math.min(issues, late);        // worst case: those with issues were also late
+  const issuesOnTime = issues - issuesLate;
+  const cleanLate    = Math.max(0, late - issuesLate);
+  const cleanOT      = Math.max(0, verified - issues - cleanLate);
+
+  const resolvedRep = r.resolved_reports || 0;
+  const openRep     = (r.issue_reports || 0) - resolvedRep;
+  const tempSess    = r.temp_sessions || 0;
+
+  const minor    = r.minor_violations    || 0;
+  const moderate = r.moderate_violations || 0;
+  const serious  = r.serious_violations  || 0;
+  const critical = r.critical_violations || 0;
+
+  const myAdj = ADJ_ROWS.filter(a => a.staff_name === r.staff_name);
+
+  function row(icon, color, label, pts, detail) {
+    const ptsStr = pts >= 0 ? `<span style="color:#2E7D32;font-weight:700">+${pts.toFixed(1)}</span>`
+                            : `<span style="color:#C62828;font-weight:700">${pts.toFixed(1)}</span>`;
+    return `<tr>
+      <td style="width:24px;text-align:center"><i class="${icon}" style="color:${color};font-size:0.8rem"></i></td>
+      <td>${label}</td>
+      <td class="text-muted small">${detail}</td>
+      <td class="text-end">${ptsStr}</td>
+    </tr>`;
+  }
+
+  function sectionHeader(title) {
+    return `<tr style="background:#f8f9fa"><td colspan="4" class="fw-bold py-1 px-2" style="font-size:0.78rem;color:#555;letter-spacing:.03em;text-transform:uppercase">${title}</td></tr>`;
+  }
+
+  let html = `<table class="table table-sm mb-0" style="font-size:0.82rem"><tbody>`;
+
+  // ── Checklist ──
+  html += sectionHeader(`<i class="fas fa-clipboard-check me-1 text-primary"></i>Checklist — ${sessions} sessions (${verified} verified)`);
+  if (notVerified > 0)
+    html += `<tr class="text-muted"><td style="width:24px;text-align:center"><i class="fas fa-ban" style="font-size:0.8rem"></i></td><td>Not verified (no points)</td><td class="text-muted small">${notVerified} session${notVerified>1?'s':''}</td><td class="text-end text-muted">0</td></tr>`;
+  if (cleanOT > 0)
+    html += row('fas fa-shield-check','#2E7D32', 'Verified — clean &amp; on time (+2 each)', cleanOT * 2, `${cleanOT} session${cleanOT>1?'s':''}`);
+  if (cleanLate > 0)
+    html += row('fas fa-clock','#E65100', 'Verified — clean but late (+1 each)', cleanLate * 1, `${cleanLate} session${cleanLate>1?'s':''}`);
+  if (issuesOnTime > 0)
+    html += row('fas fa-exclamation-circle','#C62828', 'Verified — issues found (−1 each)', -(issuesOnTime * 1), `${issuesOnTime} session${issuesOnTime>1?'s':''}`);
+  if (issuesLate > 0)
+    html += row('fas fa-exclamation-circle','#C62828', 'Verified — issues found &amp; late (−2 each)', -(issuesLate * 2), `${issuesLate} session${issuesLate>1?'s':''}`);
+  html += `<tr style="background:#EEF6EE"><td colspan="3" class="text-end small fw-semibold">Checklist subtotal</td><td class="text-end fw-bold" style="color:#1565C0">${r.checklist_points >= 0 ? '+' : ''}${(r.checklist_points||0).toFixed(1)}</td></tr>`;
+
+  // ── Temperature ──
+  if (tempSess > 0) {
+    html += sectionHeader(`<i class="fas fa-thermometer-half me-1" style="color:#00ACC1"></i>Temperature Records — ${tempSess} sessions`);
+    html += row('fas fa-thermometer-half','#00ACC1', 'Temperature session (+5 pts each)', r.temperature_points, `${tempSess} sessions`);
+    html += `<tr style="background:#EEF6EE"><td colspan="3" class="text-end small fw-semibold">Temperature subtotal</td><td class="text-end fw-bold" style="color:#00ACC1">+${(r.temperature_points||0).toFixed(1)}</td></tr>`;
+  }
+
+  // ── Reports ──
+  if ((r.issue_reports || 0) > 0) {
+    html += sectionHeader(`<i class="fas fa-flag me-1 text-warning"></i>Issue Reports — ${r.issue_reports} submitted`);
+    if (openRep > 0)
+      html += row('fas fa-flag','#F57C00', 'Report submitted (+2 pts each)', openRep * 2, `${openRep} open/in-progress`);
+    if (resolvedRep > 0)
+      html += row('fas fa-flag-checkered','#2E7D32', 'Report resolved (+5 pts each)', resolvedRep * 5, `${resolvedRep} resolved`);
+    html += `<tr style="background:#EEF6EE"><td colspan="3" class="text-end small fw-semibold">Reports subtotal</td><td class="text-end fw-bold" style="color:#F57C00">+${(r.report_points||0).toFixed(1)}</td></tr>`;
+  }
+
+  // ── Violations ──
+  if (r.violations_total > 0) {
+    html += sectionHeader(`<i class="fas fa-triangle-exclamation me-1 text-danger"></i>Violations — ${r.violations_total} incidents`);
+    if (minor)    html += row('fas fa-triangle-exclamation','#E53935', 'Minor violation (−5 pts each)',    -(minor*5),    `${minor} incident${minor>1?'s':''}`);
+    if (moderate) html += row('fas fa-triangle-exclamation','#E53935', 'Moderate violation (−12 pts each)', -(moderate*12), `${moderate} incident${moderate>1?'s':''}`);
+    if (serious)  html += row('fas fa-triangle-exclamation','#E53935', 'Serious violation (−25 pts each)',  -(serious*25),  `${serious} incident${serious>1?'s':''}`);
+    if (critical) html += row('fas fa-triangle-exclamation','#E53935', 'Critical violation (−40 pts each)', -(critical*40), `${critical} incident${critical>1?'s':''}`);
+    html += `<tr style="background:#FFEBEE"><td colspan="3" class="text-end small fw-semibold">Violations subtotal</td><td class="text-end fw-bold" style="color:#C62828">-${(r.violation_penalty||0).toFixed(1)}</td></tr>`;
+  }
+
+  // ── Adjustments ──
+  if (myAdj.length > 0) {
+    html += sectionHeader(`<i class="fas fa-sliders me-1" style="color:#6A1B9A"></i>Manager Adjustments`);
+    myAdj.forEach(a => {
+      const pts = parseFloat(a.points) || 0;
+      html += row(pts >= 0 ? 'fas fa-plus' : 'fas fa-minus', '#6A1B9A',
+        a.reason || 'Manual adjustment', pts,
+        `by ${a.created_by || '—'}`);
+    });
+    html += `<tr style="background:#F3E5F5"><td colspan="3" class="text-end small fw-semibold">Adjustments subtotal</td><td class="text-end fw-bold" style="color:#6A1B9A">${r.adjustment_points >= 0 ? '+' : ''}${(r.adjustment_points||0).toFixed(1)}</td></tr>`;
+  }
+
+  // ── Total ──
+  html += `<tr style="background:#1B5E20;color:#fff">
+    <td colspan="2" class="fw-bold py-2" style="font-size:0.9rem">
+      <i class="fas fa-trophy me-2"></i>TOTAL EMPLOYEE SCORE
+    </td>
+    <td class="text-muted small" style="color:#A5D6A7 !important">
+      ${sessions} checklist + ${tempSess} temp + ${r.issue_reports||0} reports${r.violations_total ? ' − '+r.violations_total+' violations' : ''}${myAdj.length ? ' + adj' : ''}
+    </td>
+    <td class="text-end fw-bold" style="font-size:1.1rem">${r.employee_score}</td>
+  </tr>`;
+
+  html += `</tbody></table>`;
+
+  // Checklist compliance score detail (separate metric for Best Checklist award)
+  if (sessions > 0) {
+    html += `<div class="mt-3 p-2 rounded border" style="background:#FFF8E1;font-size:0.78rem">
+      <div class="fw-bold mb-1" style="color:#F57C00"><i class="fas fa-list-check me-1"></i>Best Checklist Compliance Score: <strong>${r.checklist_score}%</strong></div>
+      <div class="text-muted mb-1" style="font-size:0.72rem">Separate metric — all sessions included, not just verified</div>
+      <div class="d-flex flex-wrap gap-3">
+        <span>Completion <strong>${r.completion_rate}%</strong> × 45% = <strong>${(r.completion_rate*.45).toFixed(1)}</strong></span>
+        <span>On-time <strong>${r.on_time_rate}%</strong> × 25% = <strong>${(r.on_time_rate*.25).toFixed(1)}</strong></span>
+        <span>Verified <strong>${r.verified_rate}%</strong> × 20% = <strong>${(r.verified_rate*.20).toFixed(1)}</strong></span>
+        <span>Clean <strong>${r.clean_rate}%</strong> × 10% = <strong>${(r.clean_rate*.10).toFixed(1)}</strong></span>
+        ${r.violation_penalty ? `<span class="text-danger">Violation deduction: <strong>−${Math.min(20, r.violation_penalty*.25).toFixed(1)}</strong></span>` : ''}
+      </div>
+    </div>`;
+  }
+
+  document.getElementById('bd-body').innerHTML = html;
+  new bootstrap.Modal(document.getElementById('breakdownModal')).show();
+}
+
+const rewardRows = {{ reward.employee_rank[:10]|tojson }};
+const ctx = document.getElementById('rewardScoreChart');
+if (ctx && window.Chart) {
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: rewardRows.map(r => r.staff_name),
+      datasets: [
+        {label:'Employee Score', data:rewardRows.map(r => r.employee_score), backgroundColor:'#2E7D32', borderRadius:5},
+        {label:'Checklist Score', data:rewardRows.map(r => r.checklist_score), backgroundColor:'#F57C00', borderRadius:5}
+      ]
+    },
+    options: {
+      responsive:true,
+      maintainAspectRatio:false,
+      scales:{y:{beginAtZero:true}, x:{grid:{display:false}}},
+      plugins:{legend:{position:'bottom'}}
+    }
+  });
+}
+</script>
+{% endblock %}

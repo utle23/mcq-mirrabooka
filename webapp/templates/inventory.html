@@ -1,0 +1,459 @@
+{% extends "base.html" %}
+{% block title %}Item List{% endblock %}
+{% block topbar_title %}
+<span class="fw-bold"><i class="fas fa-boxes-stacked me-2" style="color:#26A69A"></i>Item List</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.inv-card {
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.07);
+  overflow: hidden;
+}
+.inv-toolbar {
+  padding: 10px 14px;
+  border-bottom: 1px solid #f0f0f0;
+  background: #fafafa;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.inv-table { font-size: 0.79rem; width: 100%; border-collapse: collapse; }
+.inv-table th {
+  background: #1B3A2D; color: #fff;
+  font-size: 0.72rem; white-space: nowrap;
+  padding: 8px 10px; position: sticky; top: 0; z-index: 2;
+}
+.inv-table td { padding: 7px 10px; vertical-align: middle; border-bottom: 1px solid #f5f5f5; }
+.inv-table tr:hover td { background: #f9fffe; }
+.cat-header-row td {
+  background: linear-gradient(90deg, #1B4332, #2D6A4F) !important;
+  color: #fff !important; font-weight: 700; font-size: 0.78rem;
+  padding: 7px 14px !important;
+}
+.cat-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 20px;
+  font-size: 0.66rem; font-weight: 700;
+  background: #E8F5E9; color: #2E7D32; border: 1px solid #A5D6A7;
+}
+.item-name { font-weight: 600; color: #1B3A2D; }
+.item-original { font-size: 0.7rem; color: #aaa; }
+.cost-val { font-weight: 700; color: #1565C0; }
+.cost-na  { color: #ccc; font-size: 0.72rem; }
+.btn-edit-row { opacity: 0; transition: opacity .15s; }
+tr:hover .btn-edit-row { opacity: 1; }
+.inv-empty { text-align: center; padding: 60px 20px; color: #bbb; }
+.modal-header-inv { background: #FFF3E0; border-bottom: 1px solid #FFCC80; }
+.modal-header-add { background: #E8F5E9; border-bottom: 1px solid #A5D6A7; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Toolbar: search + category dropdown + count + add button -->
+<div class="inv-card mb-0">
+  <div class="inv-toolbar">
+
+    <!-- Category dropdown -->
+    <select class="form-select form-select-sm" id="cat-dropdown" style="max-width:200px"
+            onchange="applyCatFilter(this.value)">
+      <option value="All" {% if selected_cat == 'All' or not selected_cat %}selected{% endif %}>
+        All Items ({{ total }})
+      </option>
+      {% for cat in categories %}
+      {% if cat_counts.get(cat, 0) > 0 %}
+      <option value="{{ cat }}" {% if selected_cat == cat %}selected{% endif %}>
+        {{ cat }} ({{ cat_counts.get(cat, 0) }})
+      </option>
+      {% endif %}
+      {% endfor %}
+    </select>
+
+    <!-- Search box -->
+    <div class="input-group input-group-sm" style="max-width:320px">
+      <span class="input-group-text"><i class="fas fa-search"></i></span>
+      <input type="text" class="form-control" id="search-input"
+             placeholder="Search item, brand, code…"
+             value="{{ search }}"
+             oninput="filterTable(this.value)">
+      {% if search %}
+      <button class="btn btn-outline-secondary" type="button"
+              onclick="document.getElementById('search-input').value='';filterTable('')">
+        <i class="fas fa-times"></i>
+      </button>
+      {% endif %}
+    </div>
+
+    <span class="text-muted small" id="result-count">
+      <strong>{{ items|length }}</strong> item{{ 's' if items|length != 1 }}
+      {% if selected_cat and selected_cat != 'All' %} in <strong>{{ selected_cat }}</strong>{% endif %}
+      {% if search %} matching "<strong>{{ search }}</strong>"{% endif %}
+    </span>
+
+    <div class="ms-auto d-flex gap-2">
+      <a id="export-btn"
+         href="/inventory/export?category={{ selected_cat or '' }}&q={{ search }}"
+         class="btn btn-sm btn-outline-success">
+        <i class="fas fa-file-excel me-1"></i>Export Excel
+      </a>
+      {% if is_admin %}
+      <button class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#addItemModal">
+        <i class="fas fa-plus me-1"></i>Add Item
+      </button>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="table-responsive" style="max-height:calc(100vh - 200px);overflow-y:auto">
+    {% if not items %}
+    <div class="inv-empty">
+      <i class="fas fa-search fa-3x mb-3 d-block"></i>
+      <h6>No items found</h6>
+      <p class="small">Try a different category or search term.</p>
+    </div>
+    {% else %}
+    <table class="inv-table" id="inv-table">
+      <thead>
+        <tr>
+          <th style="width:32px">#</th>
+          <th style="min-width:200px">Item Name</th>
+          <th style="min-width:100px">Brand</th>
+          <th style="width:90px">Unit Size</th>
+          <th style="width:90px" class="text-end">Cost / Unit</th>
+          <th style="width:100px" class="text-end">Cost / Carton</th>
+          <th style="width:70px" class="text-center">Qty/Ctn</th>
+          <th style="width:100px">Code</th>
+          {% if selected_cat == 'All' or not selected_cat %}
+          <th style="width:140px">Category</th>
+          {% endif %}
+          {% if is_admin %}<th style="width:50px" class="text-center">Edit</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% set ns = namespace(cur_cat='', row=0) %}
+        {% for item in items %}
+
+        {% if (selected_cat == 'All' or not selected_cat) and item.category != ns.cur_cat %}
+        {% set ns.cur_cat = item.category %}
+        <tr class="cat-header-row">
+          <td colspan="{{ 10 if is_admin else 9 }}">
+            <i class="{{ category_icons.get(item.category, 'fas fa-tag') }} me-2"></i>{{ item.category }}
+          </td>
+        </tr>
+        {% set ns.row = 0 %}
+        {% endif %}
+
+        {% set ns.row = ns.row + 1 %}
+        <tr class="data-row">
+          <td class="text-muted text-center" style="font-size:0.7rem">{{ ns.row }}</td>
+          <td>
+            <div class="item-name">{{ item.name }}</div>
+            {% if item.original and item.original != item.name %}
+            <div class="item-original">{{ item.original }}</div>
+            {% endif %}
+          </td>
+          <td class="text-muted" style="font-size:0.77rem">{{ item.brand or '—' }}</td>
+          <td class="text-muted" style="font-size:0.77rem">{{ item.unit_size or '—' }}</td>
+          <td class="text-end">
+            {% if item.cost_unit %}
+            <span class="cost-val">${{ "%.2f"|format(item.cost_unit) }}</span>
+            {% else %}
+            <span class="cost-na">—</span>
+            {% endif %}
+          </td>
+          <td class="text-end">
+            {% if item.cost_carton %}
+            <span style="color:#555;font-weight:600">${{ "%.2f"|format(item.cost_carton) }}</span>
+            {% else %}
+            <span class="cost-na">—</span>
+            {% endif %}
+          </td>
+          <td class="text-center text-muted" style="font-size:0.77rem">
+            {{ item.qty_carton if item.qty_carton else '—' }}
+          </td>
+          <td>
+            {% if item.code %}
+            <code style="font-size:0.7rem;background:#f5f5f5;padding:1px 5px;border-radius:4px;color:#555">{{ item.code }}</code>
+            {% else %}
+            <span class="cost-na">—</span>
+            {% endif %}
+          </td>
+          {% if selected_cat == 'All' or not selected_cat %}
+          <td><span class="cat-badge">{{ item.category }}</span></td>
+          {% endif %}
+          {% if is_admin %}
+          <td class="text-center">
+            <button class="btn btn-sm btn-outline-secondary btn-edit-row"
+                    title="Edit"
+                    onclick="openEdit(this.dataset)"
+                    data-id="{{ item.id }}"
+                    data-name="{{ item.name|e }}"
+                    data-original="{{ (item.original or '')|e }}"
+                    data-brand="{{ (item.brand or '')|e }}"
+                    data-unit="{{ (item.unit_size or '')|e }}"
+                    data-cost-unit="{{ item.cost_unit or '' }}"
+                    data-cost-carton="{{ item.cost_carton or '' }}"
+                    data-qty-carton="{{ item.qty_carton or '' }}"
+                    data-code="{{ (item.code or '')|e }}"
+                    data-category="{{ item.category|e }}">
+              <i class="fas fa-pencil-alt" style="font-size:0.7rem"></i>
+            </button>
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+</div>
+
+
+{% if is_admin %}
+<!-- EDIT ITEM MODAL -->
+<div class="modal fade" id="editItemModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header modal-header-inv py-2">
+        <h6 class="modal-title" style="color:#E65100">
+          <i class="fas fa-pencil-alt me-1"></i>Edit Item
+        </h6>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="edit-id">
+        <div class="row g-2">
+          <div class="col-md-8">
+            <label class="form-label fw-semibold small">Item Name <span class="text-danger">*</span></label>
+            <input type="text" class="form-control form-control-sm" id="edit-name" required>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label fw-semibold small">Category</label>
+            <select class="form-select form-select-sm" id="edit-category">
+              {% for cat in categories %}
+              <option value="{{ cat }}">{{ cat }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label fw-semibold small">Original / Full Description</label>
+            <input type="text" class="form-control form-control-sm" id="edit-original">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label fw-semibold small">Brand</label>
+            <input type="text" class="form-control form-control-sm" id="edit-brand">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label fw-semibold small">Unit Size</label>
+            <input type="text" class="form-control form-control-sm" id="edit-unit" placeholder="e.g. 1KG, 500ML">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label fw-semibold small">Cost / Unit ($)</label>
+            <input type="number" class="form-control form-control-sm" id="edit-cost-unit" step="0.0001" min="0" placeholder="0.00">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label fw-semibold small">Cost / Carton ($)</label>
+            <input type="number" class="form-control form-control-sm" id="edit-cost-carton" step="0.01" min="0" placeholder="0.00">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label fw-semibold small">Qty / Carton</label>
+            <input type="number" class="form-control form-control-sm" id="edit-qty-carton" step="1" min="1" placeholder="e.g. 24">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label fw-semibold small">Product Code</label>
+            <input type="text" class="form-control form-control-sm" id="edit-code" placeholder="e.g. PC16">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer py-2">
+        <button class="btn btn-sm btn-warning" onclick="submitEdit()">
+          <i class="fas fa-save me-1"></i>Save Changes
+        </button>
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ADD ITEM MODAL -->
+<div class="modal fade" id="addItemModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header modal-header-add py-2">
+        <h6 class="modal-title" style="color:#1B4332">
+          <i class="fas fa-plus-circle me-1"></i>Add New Item
+        </h6>
+        <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-2">
+          <div class="col-md-8">
+            <label class="form-label fw-semibold small">Item Name <span class="text-danger">*</span></label>
+            <input type="text" class="form-control form-control-sm" id="add-name" required>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label fw-semibold small">Category <span class="text-danger">*</span></label>
+            <select class="form-select form-select-sm" id="add-category">
+              <option value="">— Select —</option>
+              {% for cat in categories %}
+              <option value="{{ cat }}" {% if selected_cat == cat %}selected{% endif %}>{{ cat }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label fw-semibold small">Original / Full Description</label>
+            <input type="text" class="form-control form-control-sm" id="add-original">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label fw-semibold small">Brand</label>
+            <input type="text" class="form-control form-control-sm" id="add-brand">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label fw-semibold small">Unit Size</label>
+            <input type="text" class="form-control form-control-sm" id="add-unit" placeholder="e.g. 1KG, 500ML">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label fw-semibold small">Cost / Unit ($)</label>
+            <input type="number" class="form-control form-control-sm" id="add-cost-unit" step="0.0001" min="0" placeholder="0.00">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label fw-semibold small">Cost / Carton ($)</label>
+            <input type="number" class="form-control form-control-sm" id="add-cost-carton" step="0.01" min="0" placeholder="0.00">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label fw-semibold small">Qty / Carton</label>
+            <input type="number" class="form-control form-control-sm" id="add-qty-carton" step="1" min="1" placeholder="e.g. 24">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label fw-semibold small">Product Code</label>
+            <input type="text" class="form-control form-control-sm" id="add-code">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer py-2">
+        <button class="btn btn-sm btn-success" onclick="submitAdd()">
+          <i class="fas fa-plus me-1"></i>Add Item
+        </button>
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── Category dropdown navigation ──
+function applyCatFilter(cat) {
+  const q = document.getElementById('search-input')?.value || '';
+  const url = new URL(window.location.href);
+  url.searchParams.set('category', cat === 'All' ? '' : cat);
+  if (q) url.searchParams.set('q', q); else url.searchParams.delete('q');
+  window.location.href = url.toString();
+}
+
+// Keep export link in sync with current filter
+function updateExportLink() {
+  const cat = document.getElementById('cat-dropdown')?.value || '';
+  const q   = document.getElementById('search-input')?.value || '';
+  const btn = document.getElementById('export-btn');
+  if (btn) btn.href = `/inventory/export?category=${encodeURIComponent(cat)}&q=${encodeURIComponent(q)}`;
+}
+document.getElementById('search-input')?.addEventListener('input', function() {
+  filterTable(this.value);
+  updateExportLink();
+});
+
+// ── Client-side text filter ──
+function filterTable(q) {
+  const ql = q.toLowerCase();
+  let visible = 0;
+  document.querySelectorAll('#inv-table tbody tr.data-row').forEach(row => {
+    const match = !ql || row.textContent.toLowerCase().includes(ql);
+    row.style.display = match ? '' : 'none';
+    if (match) visible++;
+  });
+  const rc = document.getElementById('result-count');
+  if (rc) rc.innerHTML = `<strong>${visible}</strong> item${visible !== 1 ? 's' : ''}`;
+}
+
+{% if is_admin %}
+function openEdit(d) {
+  document.getElementById('edit-id').value          = d.id || '';
+  document.getElementById('edit-name').value        = d.name || '';
+  document.getElementById('edit-original').value    = d.original || '';
+  document.getElementById('edit-brand').value       = d.brand || '';
+  document.getElementById('edit-unit').value        = d.unit || '';
+  document.getElementById('edit-cost-unit').value   = d.costUnit || '';
+  document.getElementById('edit-cost-carton').value = d.costCarton || '';
+  document.getElementById('edit-qty-carton').value  = d.qtyCarton || '';
+  document.getElementById('edit-code').value        = d.code || '';
+  document.getElementById('edit-category').value    = d.category || '';
+  new bootstrap.Modal(document.getElementById('editItemModal')).show();
+}
+
+function submitEdit() {
+  const id = document.getElementById('edit-id').value;
+  if (!id) return;
+  const name = document.getElementById('edit-name').value.trim();
+  if (!name) { alert('Item name is required.'); return; }
+
+  const fd = new FormData();
+  fd.append('name',         name);
+  fd.append('original',     document.getElementById('edit-original').value.trim());
+  fd.append('brand',        document.getElementById('edit-brand').value.trim());
+  fd.append('unit_size',    document.getElementById('edit-unit').value.trim());
+  fd.append('cost_unit',    document.getElementById('edit-cost-unit').value);
+  fd.append('cost_carton',  document.getElementById('edit-cost-carton').value);
+  fd.append('qty_carton',   document.getElementById('edit-qty-carton').value);
+  fd.append('code',         document.getElementById('edit-code').value.trim());
+  fd.append('category',     document.getElementById('edit-category').value);
+
+  fetch(`/inventory/item/${id}/edit`, {
+    method: 'POST', body: fd,
+    headers: {'X-Requested-With': 'XMLHttpRequest'}
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.error) { alert('Error: ' + data.error); return; }
+    bootstrap.Modal.getInstance(document.getElementById('editItemModal')).hide();
+    location.reload();
+  })
+  .catch(() => alert('Network error. Please try again.'));
+}
+
+function submitAdd() {
+  const name = document.getElementById('add-name').value.trim();
+  const cat  = document.getElementById('add-category').value;
+  if (!name) { alert('Item name is required.'); return; }
+  if (!cat)  { alert('Please select a category.'); return; }
+
+  const fd = new FormData();
+  fd.append('name',         name);
+  fd.append('category',     cat);
+  fd.append('original',     document.getElementById('add-original').value.trim());
+  fd.append('brand',        document.getElementById('add-brand').value.trim());
+  fd.append('unit_size',    document.getElementById('add-unit').value.trim());
+  fd.append('cost_unit',    document.getElementById('add-cost-unit').value);
+  fd.append('cost_carton',  document.getElementById('add-cost-carton').value);
+  fd.append('qty_carton',   document.getElementById('add-qty-carton').value);
+  fd.append('code',         document.getElementById('add-code').value.trim());
+
+  fetch('/inventory/item/add', {
+    method: 'POST', body: fd,
+    headers: {'X-Requested-With': 'XMLHttpRequest'}
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.error) { alert('Error: ' + data.error); return; }
+    bootstrap.Modal.getInstance(document.getElementById('addItemModal')).hide();
+    location.reload();
+  })
+  .catch(() => alert('Network error. Please try again.'));
+}
+{% endif %}
+</script>
+{% endblock %}

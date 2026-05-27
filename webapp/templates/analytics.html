@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% block title %}Analytics{% endblock %}
+{% block topbar_title %}<span class="fw-bold">Analytics & Reports</span>{% endblock %}
+
+{% block content %}
+<!-- Period Selector -->
+<div class="card shadow-sm mb-4">
+  <div class="card-body py-2">
+    <div class="d-flex gap-2 align-items-center flex-wrap">
+      <span class="fw-semibold small">View period:</span>
+      <button onclick="loadData(7)"  class="btn btn-sm btn-outline-success period-btn" data-days="7">7 Days</button>
+      <button onclick="loadData(30)" class="btn btn-sm btn-success period-btn active" data-days="30">30 Days</button>
+      <button onclick="loadData(60)" class="btn btn-sm btn-outline-success period-btn" data-days="60">60 Days</button>
+      <button onclick="loadData(90)" class="btn btn-sm btn-outline-success period-btn" data-days="90">90 Days</button>
+      <div class="ms-auto">
+        <a href="/export/bulk/excel" class="btn btn-sm btn-outline-success">
+          <i class="fas fa-file-excel me-1"></i>Export All Records
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Summary Stats -->
+<div class="row g-3 mb-4" id="summary-stats">
+  <div class="col-6 col-md-3">
+    <div class="stat-card stat-green">
+      <div class="stat-icon"><i class="fas fa-clipboard-check"></i></div>
+      <div class="stat-value" id="stat-total-chk">—</div>
+      <div class="stat-label">Total Checklists</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="stat-card stat-blue">
+      <div class="stat-icon"><i class="fas fa-check-double"></i></div>
+      <div class="stat-value" id="stat-verified">—</div>
+      <div class="stat-label">Verified</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="stat-card stat-orange">
+      <div class="stat-icon"><i class="fas fa-thermometer-half"></i></div>
+      <div class="stat-value" id="stat-total-temp">—</div>
+      <div class="stat-label">Temp Records</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="stat-card stat-purple">
+      <div class="stat-icon"><i class="fas fa-percentage"></i></div>
+      <div class="stat-value" id="stat-verify-rate">—</div>
+      <div class="stat-label">Verify Rate</div>
+    </div>
+  </div>
+</div>
+
+<!-- Charts Row 1 -->
+<div class="row g-4 mb-4">
+  <div class="col-12 col-lg-8">
+    <div class="card shadow-sm h-100">
+      <div class="card-header"><h6 class="mb-0"><i class="fas fa-chart-line me-2 text-success"></i>Daily Submissions & Verifications</h6></div>
+      <div class="card-body"><canvas id="chart-daily" height="80"></canvas></div>
+    </div>
+  </div>
+  <div class="col-12 col-lg-4">
+    <div class="card shadow-sm h-100">
+      <div class="card-header"><h6 class="mb-0"><i class="fas fa-chart-pie me-2 text-primary"></i>Checklist Type Compliance</h6></div>
+      <div class="card-body"><canvas id="chart-types" height="200"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- Charts Row 2 -->
+<div class="row g-4 mb-4">
+  <div class="col-12 col-lg-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-header"><h6 class="mb-0"><i class="fas fa-users me-2 text-info"></i>Staff Activity (Submissions)</h6></div>
+      <div class="card-body"><canvas id="chart-staff" height="120"></canvas></div>
+    </div>
+  </div>
+  <div class="col-12 col-lg-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-header"><h6 class="mb-0"><i class="fas fa-thermometer me-2 text-danger"></i>Temperature Records per Day</h6></div>
+      <div class="card-body"><canvas id="chart-temp" height="120"></canvas></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let charts = {};
+let currentDays = 30;
+
+function destroyChart(id){
+  if(charts[id]){ charts[id].destroy(); delete charts[id]; }
+}
+
+async function loadData(days){
+  currentDays = days;
+  document.querySelectorAll('.period-btn').forEach(b=>{
+    b.classList.toggle('btn-success', b.dataset.days==days);
+    b.classList.toggle('btn-outline-success', b.dataset.days!=days);
+  });
+
+  const res = await fetch(`/api/analytics-data?days=${days}`);
+  const d   = await res.json();
+
+  // Summary stats
+  const totalChk  = d.daily_chk.reduce((a,b)=>a+b,0);
+  const totalVer  = d.daily_verified.reduce((a,b)=>a+b,0);
+  const totalTemp = d.daily_temp.reduce((a,b)=>a+b,0);
+  const rate      = totalChk > 0 ? Math.round(totalVer/totalChk*100) : 0;
+  document.getElementById('stat-total-chk').textContent  = totalChk;
+  document.getElementById('stat-verified').textContent   = totalVer;
+  document.getElementById('stat-total-temp').textContent = totalTemp;
+  document.getElementById('stat-verify-rate').textContent = rate+'%';
+
+  // Chart: Daily
+  destroyChart('daily');
+  charts['daily'] = new Chart(document.getElementById('chart-daily'),{
+    type:'line',
+    data:{
+      labels: d.labels,
+      datasets:[
+        { label:'Submitted', data:d.daily_chk,
+          borderColor:'#2D6A4F', backgroundColor:'rgba(45,106,79,0.12)',
+          fill:true, tension:0.4, pointRadius:3 },
+        { label:'Verified', data:d.daily_verified,
+          borderColor:'#52B788', backgroundColor:'rgba(82,183,136,0.1)',
+          fill:true, tension:0.4, pointRadius:3 },
+        { label:'Temp Records', data:d.daily_temp,
+          borderColor:'#F4A261', backgroundColor:'rgba(244,162,97,0.1)',
+          fill:true, tension:0.4, pointRadius:3, borderDash:[5,5] },
+      ]
+    },
+    options:{ responsive:true, plugins:{ legend:{ position:'top' }},
+      scales:{ x:{ ticks:{ maxTicksLimit:10, font:{size:10} }}, y:{ beginAtZero:true }}}
+  });
+
+  // Chart: Types
+  destroyChart('types');
+  charts['types'] = new Chart(document.getElementById('chart-types'),{
+    type:'doughnut',
+    data:{
+      labels: d.type_labels,
+      datasets:[{
+        data: d.type_totals,
+        backgroundColor:['#2196F3','#FF9800','#F44336','#4CAF50','#00BCD4'],
+        borderWidth:2
+      }]
+    },
+    options:{ responsive:true, plugins:{ legend:{ position:'bottom', labels:{ font:{size:11}}}}}
+  });
+
+  // Chart: Staff
+  destroyChart('staff');
+  charts['staff'] = new Chart(document.getElementById('chart-staff'),{
+    type:'bar',
+    data:{
+      labels: d.staff_names,
+      datasets:[{ label:'Submissions', data:d.staff_counts,
+        backgroundColor:'rgba(33,150,243,0.7)', borderColor:'#2196F3',
+        borderWidth:1, borderRadius:4 }]
+    },
+    options:{ responsive:true, indexAxis:'y',
+      plugins:{ legend:{ display:false }},
+      scales:{ x:{ beginAtZero:true }}}
+  });
+
+  // Chart: Temp daily
+  destroyChart('temp');
+  charts['temp'] = new Chart(document.getElementById('chart-temp'),{
+    type:'bar',
+    data:{
+      labels: d.labels,
+      datasets:[{ label:'Temp Records', data:d.daily_temp,
+        backgroundColor:'rgba(244,67,54,0.6)', borderColor:'#F44336',
+        borderWidth:1, borderRadius:3 }]
+    },
+    options:{ responsive:true,
+      plugins:{ legend:{ display:false }},
+      scales:{ x:{ ticks:{ maxTicksLimit:10, font:{size:10} }}, y:{ beginAtZero:true }}}
+  });
+}
+
+document.addEventListener('DOMContentLoaded', ()=> loadData(30));
+</script>
+{% endblock %}

@@ -1,0 +1,362 @@
+{% extends "base.html" %}
+{% block title %}{{ temp_data.title }}{% endblock %}
+{% block topbar_title %}<span class="fw-bold">{{ temp_data.title }}</span>{% endblock %}
+
+{% block content %}
+<div class="row mb-3">
+  <div class="col">
+    <div class="d-flex align-items-center gap-3 flex-wrap">
+      <div class="input-group input-group-sm" style="width:180px">
+        <span class="input-group-text"><i class="fas fa-calendar"></i></span>
+        <input type="date" class="form-control" value="{{ temp_date }}"
+               onchange="location.href='/temperature/{{ temp_type }}?date='+this.value">
+      </div>
+      {% if existing %}
+        <span class="badge bg-success"><i class="fas fa-check me-1"></i>Record Exists</span>
+        <a href="/temperature/view/{{ existing.id }}" class="btn btn-sm btn-outline-secondary">View Record</a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="alert alert-info py-2 mb-3">
+  <i class="fas fa-info-circle me-2"></i>
+  <strong>Food Safety Rule:</strong> Food in the danger zone (5°C – 60°C) must NOT be kept more than
+  <strong>4 hours</strong>. Record temperature at each check. Discard if unsafe.
+  Cells highlighted <span class="badge bg-danger">red</span> indicate danger zone temps.
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-header py-2" style="background:{{ temp_data.color }}15; border-left:4px solid {{ temp_data.color }}">
+    <h5 class="mb-0" style="color:{{ temp_data.color }}">
+      <i class="fas fa-thermometer-half me-2"></i>{{ temp_data.title }}
+    </h5>
+    <small class="text-muted">Date: {{ temp_date }} — Record live during shift, do NOT pre-fill</small>
+  </div>
+  <div class="card-body">
+    <form method="POST" action="/temperature/{{ temp_type }}/save">
+      <input type="hidden" name="date" value="{{ temp_date }}">
+
+      <div class="row g-3 mb-3">
+        <div class="col-md-4">
+          <label class="form-label fw-semibold">Recorded by</label>
+          <select name="recorded_by" class="form-select">
+            <option value="">— Select staff —</option>
+            {% for s in staff %}
+            <option value="{{ s }}" {% if existing and existing.recorded_by==s %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label fw-semibold">Checked by</label>
+          <select name="checked_by" class="form-select">
+            <option value="">— Select staff —</option>
+            {% for s in staff %}
+            <option value="{{ s }}" {% if existing and existing.checked_by==s %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label fw-semibold">Notes</label>
+          <input type="text" name="notes" class="form-control"
+                 value="{{ existing.notes if existing and existing.notes else '' }}"
+                 placeholder="Optional notes...">
+        </div>
+      </div>
+
+      {% if is_admin %}
+      <div class="admin-temp-food mb-3">
+        <div class="input-group input-group-sm">
+          <span class="input-group-text"><i class="fas fa-plus"></i></span>
+          <input type="text" class="form-control" id="new-temp-food"
+                 placeholder="Admin: add food item to this temperature record..."
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();addTempFood();}">
+          <button type="button" class="btn btn-success" onclick="addTempFood()">
+            Add Food
+          </button>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- Temperature Table -->
+      <div class="table-responsive">
+        <table class="table table-bordered table-sm align-middle temp-table">
+          <thead>
+            <tr class="table-dark text-center">
+              <th style="min-width:170px" class="text-start">Food Item</th>
+              <th colspan="2">Check 1</th>
+              <th colspan="2">Check 2</th>
+              <th colspan="2">Check 3</th>
+              <th colspan="2">Check 4</th>
+              <th colspan="2">Check 5</th>
+              <th style="width:80px">Discard?</th>
+            </tr>
+            <tr class="table-secondary text-center small">
+              <th></th>
+              <th>Time</th><th>°C</th>
+              <th>Time</th><th>°C</th>
+              <th>Time</th><th>°C</th>
+              <th>Time</th><th>°C</th>
+              <th>Time</th><th>°C</th>
+              <th>Y / N</th>
+            </tr>
+          </thead>
+          <tbody id="temp-food-tbody">
+            {% for food in temp_data.foods %}
+            {% set i = loop.index0 %}
+            {% set er = existing_readings[i] if i < existing_readings|length else None %}
+            <tr>
+              <td class="fw-semibold small" id="food-cell-{{ i }}">
+                {% if is_admin %}
+                <span class="food-label" id="food-label-{{ i }}"
+                      title="Click to edit food item"
+                      onclick="startEditFood({{ i }})"
+                      style="cursor:pointer">
+                  <span id="food-text-{{ i }}">{{ food }}</span>
+                  <i class="fas fa-pen ms-1 food-edit-icon"></i>
+                </span>
+                <div class="d-none" id="food-edit-{{ i }}">
+                  <div class="input-group input-group-sm">
+                    <input type="text" class="form-control form-control-sm"
+                           id="food-input-{{ i }}"
+                           value="{{ food|e }}"
+                           onkeydown="handleFoodKey(event, {{ i }})"
+                           onblur="saveFoodName({{ i }})">
+                    <button type="button" class="btn btn-success btn-sm" onclick="saveFoodName({{ i }})">
+                      <i class="fas fa-check"></i>
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" onclick="cancelEditFood({{ i }})">
+                      <i class="fas fa-times"></i>
+                    </button>
+                  </div>
+                </div>
+                {% else %}
+                {{ food }}
+                {% endif %}
+              </td>
+              {% for c in range(1,6) %}
+              {% set tkey = 'c' ~ c ~ '_time' %}
+              {% set vkey = 'c' ~ c ~ '_temp' %}
+              <td class="p-1">
+                <input type="time" name="c{{ c }}_time_{{ i }}" class="form-control form-control-sm p-1"
+                       value="{{ er[tkey] if er and er[tkey] else '' }}"
+                       style="min-width:80px">
+              </td>
+              <td class="p-1">
+                <input type="number" name="c{{ c }}_temp_{{ i }}" step="0.1"
+                       class="form-control form-control-sm p-1 temp-input"
+                       value="{{ er[vkey] if er and er[vkey] is not none else '' }}"
+                       placeholder="—" oninput="colorTemp(this)"
+                       style="min-width:65px">
+              </td>
+              {% endfor %}
+              <td class="text-center p-1">
+                <select name="discarded_{{ i }}" class="form-select form-select-sm p-1">
+                  <option value="N" {% if not er or er.get('discarded','N')=='N' %}selected{% endif %}>N</option>
+                  <option value="Y" {% if er and er.get('discarded')=='Y' %}selected{% endif %}>Y</option>
+                </select>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="mt-4 d-flex gap-2 flex-wrap">
+        <button type="submit" class="btn btn-success btn-lg">
+          <i class="fas fa-save me-2"></i>Save Temperature Record
+        </button>
+        <a href="/" class="btn btn-outline-secondary btn-lg">
+          <i class="fas fa-home me-1"></i>Dashboard
+        </a>
+        {% if existing %}
+        <a href="/temperature/view/{{ existing.id }}" class="btn btn-outline-primary btn-lg">
+          <i class="fas fa-eye me-1"></i>View Record
+        </a>
+        {% endif %}
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block head %}
+<style>
+.admin-temp-food {
+  border:1px dashed #90CAF9;
+  background:#f7fbff;
+  border-radius:8px;
+  padding:10px;
+}
+.food-edit-icon {
+  font-size:0.65rem;
+  color:#bbb;
+  opacity:0;
+  transition:opacity .2s;
+}
+.food-label:hover .food-edit-icon { opacity:1; }
+.food-label:hover { color:#1565C0; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const TEMP_TYPE = '{{ temp_type }}';
+
+function colorTemp(input){
+  const v = parseFloat(input.value);
+  if(isNaN(v)){
+    input.style.background = '';
+    input.style.color = '';
+    return;
+  }
+  if(v < 5 || v > 60){
+    // Safe zone (cold storage or hot holding)
+    input.style.background = '#d4edda';
+    input.style.color = '#155724';
+  } else {
+    // Danger zone
+    input.style.background = '#f8d7da';
+    input.style.color = '#721c24';
+  }
+}
+document.addEventListener('DOMContentLoaded', ()=>{
+  document.querySelectorAll('.temp-input').forEach(colorTemp);
+});
+
+{% if is_admin %}
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+  }[ch]));
+}
+
+function startEditFood(i) {
+  const label = document.getElementById('food-label-' + i);
+  label.classList.add('d-none');
+  const editDiv = document.getElementById('food-edit-' + i);
+  editDiv.classList.remove('d-none');
+  const inp = document.getElementById('food-input-' + i);
+  const textEl = document.getElementById('food-text-' + i);
+  inp.value = textEl ? textEl.textContent.trim() : inp.value;
+  inp.focus();
+  inp.select();
+}
+
+function cancelEditFood(i) {
+  document.getElementById('food-edit-' + i).classList.add('d-none');
+  document.getElementById('food-label-' + i).classList.remove('d-none');
+}
+
+function handleFoodKey(e, i) {
+  if (e.key === 'Enter') { e.preventDefault(); saveFoodName(i); }
+  if (e.key === 'Escape') { cancelEditFood(i); }
+}
+
+async function saveFoodName(i) {
+  const inp = document.getElementById('food-input-' + i);
+  const name = inp.value.trim();
+  if (!name) return;
+
+  const fd = new FormData();
+  fd.append('temp_type', TEMP_TYPE);
+  fd.append('order', i);
+  fd.append('name', name);
+  try {
+    const res = await fetch('/admin/temperature-food/update', {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      body: fd
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      alert('Failed to save: ' + (data.error || 'unknown error'));
+      return;
+    }
+    const textEl = document.getElementById('food-text-' + i);
+    if (textEl) textEl.textContent = data.name;
+    cancelEditFood(i);
+  } catch(e) {
+    alert('Network error saving food item');
+  }
+}
+
+async function addTempFood() {
+  const input = document.getElementById('new-temp-food');
+  const name = input.value.trim();
+  if (!name) return;
+  input.disabled = true;
+
+  const fd = new FormData();
+  fd.append('temp_type', TEMP_TYPE);
+  fd.append('name', name);
+  try {
+    const res = await fetch('/admin/temperature-food/add', {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      body: fd
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      alert('Failed to add food item: ' + (data.error || 'unknown error'));
+      return;
+    }
+    appendTempFoodRow(data.order, data.name);
+    input.value = '';
+  } catch(e) {
+    alert('Network error adding food item');
+  } finally {
+    input.disabled = false;
+    input.focus();
+  }
+}
+
+function appendTempFoodRow(i, name) {
+  const tbody = document.getElementById('temp-food-tbody');
+  const row = document.createElement('tr');
+  row.innerHTML = `
+    <td class="fw-semibold small" id="food-cell-${i}">
+      <span class="food-label" id="food-label-${i}"
+            title="Click to edit food item"
+            onclick="startEditFood(${i})"
+            style="cursor:pointer">
+        <span id="food-text-${i}">${escapeHtml(name)}</span>
+        <i class="fas fa-pen ms-1 food-edit-icon"></i>
+      </span>
+      <div class="d-none" id="food-edit-${i}">
+        <div class="input-group input-group-sm">
+          <input type="text" class="form-control form-control-sm"
+                 id="food-input-${i}" value="${escapeHtml(name)}"
+                 onkeydown="handleFoodKey(event, ${i})"
+                 onblur="saveFoodName(${i})">
+          <button type="button" class="btn btn-success btn-sm" onclick="saveFoodName(${i})">
+            <i class="fas fa-check"></i>
+          </button>
+          <button type="button" class="btn btn-outline-secondary btn-sm" onclick="cancelEditFood(${i})">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+      </div>
+    </td>
+    ${[1,2,3,4,5].map(c => `
+      <td class="p-1">
+        <input type="time" name="c${c}_time_${i}" class="form-control form-control-sm p-1" style="min-width:80px">
+      </td>
+      <td class="p-1">
+        <input type="number" name="c${c}_temp_${i}" step="0.1"
+               class="form-control form-control-sm p-1 temp-input"
+               placeholder="—" oninput="colorTemp(this)"
+               style="min-width:65px">
+      </td>
+    `).join('')}
+    <td class="text-center p-1">
+      <select name="discarded_${i}" class="form-select form-select-sm p-1">
+        <option value="N" selected>N</option>
+        <option value="Y">Y</option>
+      </select>
+    </td>`;
+  tbody.appendChild(row);
+}
+{% endif %}
+</script>
+{% endblock %}

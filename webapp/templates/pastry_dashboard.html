@@ -1,0 +1,306 @@
+{% extends "base.html" %}
+{% block title %}Pastry Dashboard{% endblock %}
+{% block topbar_title %}
+<span class="fw-bold"><i class="fas fa-chart-bar me-2" style="color:#AB47BC"></i>Pastry Dashboard</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.pd-stat-card {
+  border-radius: 12px;
+  padding: 18px 20px;
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.12);
+  position: relative;
+  overflow: hidden;
+  height: 100%;
+}
+.pd-stat-card::after {
+  content: '';
+  position: absolute;
+  right: -15px; top: -15px;
+  width: 70px; height: 70px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.08);
+}
+.pd-stat-icon  { font-size: 1.4rem; opacity: 0.85; }
+.pd-stat-value { font-size: 2rem; font-weight: 800; line-height: 1.1; }
+.pd-stat-label { font-size: 0.72rem; opacity: 0.85; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+.pd-stat-sub   { font-size: 0.78rem; opacity: 0.75; }
+
+.pd-green  { background: linear-gradient(135deg, #2D6A4F, #52B788); }
+.pd-teal   { background: linear-gradient(135deg, #00695C, #26A69A); }
+.pd-blue   { background: linear-gradient(135deg, #1565C0, #42A5F5); }
+.pd-purple { background: linear-gradient(135deg, #6A1B9A, #AB47BC); }
+
+.margin-high   { color: #2E7D32 !important; font-weight: 700; }
+.margin-mid    { color: #E65100 !important; font-weight: 700; }
+.margin-low    { color: #C62828 !important; font-weight: 700; }
+
+.perf-table    { font-size: 0.8rem; }
+.perf-table th { font-size: 0.75rem; white-space: nowrap; background: #1B3A2D !important; color: #fff; }
+.perf-table td { vertical-align: middle; }
+
+.del-table     { font-size: 0.8rem; }
+.del-table th  { font-size: 0.75rem; white-space: nowrap; background: #1B3A2D !important; color: #fff; }
+.del-table td  { vertical-align: middle; }
+
+.condition-good    { background:#E8F5E9;color:#1B5E20; }
+.condition-damaged { background:#FFEBEE;color:#C62828; }
+.condition-partial { background:#FFF3E0;color:#E65100; }
+
+.section-heading-pastry {
+  color: #1B4332;
+  font-weight: 700;
+  border-bottom: 2px solid #4CAF50;
+  padding-bottom: 5px;
+  margin-bottom: 12px;
+  font-size: 0.95rem;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- ── 4 stat cards ── -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="pd-stat-card pd-green">
+      <div class="pd-stat-icon"><i class="fas fa-dollar-sign"></i></div>
+      <div class="pd-stat-value">${{ "%.2f"|format(today_sales.revenue or 0) }}</div>
+      <div class="pd-stat-label">Today's Revenue</div>
+      <div class="pd-stat-sub">{{ today_sales.total_sold or 0 }} units sold</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="pd-stat-card pd-teal">
+      <div class="pd-stat-icon"><i class="fas fa-chart-line"></i></div>
+      <div class="pd-stat-value">${{ "%.2f"|format(today_sales.profit or 0) }}</div>
+      <div class="pd-stat-label">Today's Profit</div>
+      <div class="pd-stat-sub">
+        {% if today_sales.revenue and today_sales.revenue > 0 %}
+        {{ ((today_sales.profit / today_sales.revenue) * 100)|round(1) }}% margin
+        {% else %}
+        —
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="pd-stat-card pd-blue">
+      <div class="pd-stat-icon"><i class="fas fa-calendar-week"></i></div>
+      <div class="pd-stat-value">${{ "%.2f"|format(week_sales.revenue or 0) }}</div>
+      <div class="pd-stat-label">Week Revenue</div>
+      <div class="pd-stat-sub">{{ week_sales.total_sold or 0 }} units</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="pd-stat-card pd-purple">
+      <div class="pd-stat-icon"><i class="fas fa-piggy-bank"></i></div>
+      <div class="pd-stat-value">${{ "%.2f"|format(week_sales.profit or 0) }}</div>
+      <div class="pd-stat-label">Week Profit</div>
+      <div class="pd-stat-sub">
+        {% if week_sales.revenue and week_sales.revenue > 0 %}
+        {{ ((week_sales.profit / week_sales.revenue) * 100)|round(1) }}% margin
+        {% else %}
+        —
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Today delivery progress ── -->
+<div class="card shadow-sm mb-4">
+  <div class="card-body py-2">
+    {% set recv = today_del.items_recv or 0 %}
+    {% set total_exp = today_del.total_recv or 0 %}
+    {% set del_pct = ((recv / total_exp * 100)|round|int) if total_exp > 0 else 0 %}
+    <div class="d-flex justify-content-between align-items-center mb-1">
+      <span class="fw-semibold" style="font-size:0.88rem">
+        <i class="fas fa-truck me-1 text-warning"></i>
+        Today's Deliveries — {{ today_day_label if today_day_label is defined else today }}
+      </span>
+      <span class="fw-bold {% if del_pct == 100 %}text-success{% elif del_pct > 0 %}text-warning{% else %}text-danger{% endif %}">
+        {{ recv }} / {{ total_exp }} received
+      </span>
+    </div>
+    <div class="progress" style="height:10px">
+      <div class="progress-bar bg-{% if del_pct == 100 %}success{% elif del_pct > 0 %}warning{% else %}secondary{% endif %}"
+           style="width:{{ del_pct }}%"
+           role="progressbar" aria-valuenow="{{ del_pct }}" aria-valuemin="0" aria-valuemax="100">
+      </div>
+    </div>
+    <div class="text-muted mt-1" style="font-size:0.72rem">
+      {{ del_pct }}% of scheduled deliveries received today
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+
+  <!-- ── Item performance table ── -->
+  <div class="col-12">
+    <h5 class="section-heading-pastry">
+      <i class="fas fa-table me-2"></i>Item Performance — Week {{ week_start }} to {{ week_end }}
+    </h5>
+    <div class="card shadow-sm">
+      <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0 perf-table align-middle">
+          <thead>
+            <tr>
+              <th>Item</th>
+              <th>Supplier</th>
+              <th class="text-end">Sell $</th>
+              <th class="text-end">Cost $</th>
+              <th class="text-center">Margin %</th>
+              <th class="text-center">Wk Sold</th>
+              <th class="text-end">Wk Revenue</th>
+              <th class="text-end">Wk Profit</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in item_perf %}
+            <tr>
+              <td>
+                <div class="fw-semibold" style="color:#1B4332">{{ p.name_en }}</div>
+              </td>
+              <td>
+                <span class="text-muted" style="font-size:0.75rem">{{ p.supplier_name }}</span>
+              </td>
+              <td class="text-end fw-semibold">${{ "%.2f"|format(p.selling_price) }}</td>
+              <td class="text-end text-muted">${{ "%.2f"|format(p.cost_price) }}</td>
+              <td class="text-center">
+                {% set m = p.margin %}
+                <span class="fw-bold {% if m > 40 %}margin-high{% elif m >= 20 %}margin-mid{% else %}margin-low{% endif %}">
+                  {{ "%.1f"|format(m) }}%
+                </span>
+              </td>
+              <td class="text-center">
+                <span class="badge bg-light text-dark border" style="font-size:0.75rem">{{ p.week_sold or 0 }}</span>
+                {% if p.week_returned %}
+                <span class="badge" style="background:#FFF3E0;color:#E65100;font-size:0.68rem">-{{ p.week_returned }} ret</span>
+                {% endif %}
+              </td>
+              <td class="text-end fw-semibold" style="color:#1565C0">${{ "%.2f"|format(p.week_revenue or 0) }}</td>
+              <td class="text-end fw-semibold {% if (p.week_profit or 0) > 0 %}text-success{% else %}text-danger{% endif %}">
+                ${{ "%.2f"|format(p.week_profit or 0) }}
+              </td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="8" class="text-center text-muted py-4">
+                <i class="fas fa-chart-bar fa-2x mb-2 d-block opacity-25"></i>
+                No sales data this week
+              </td>
+            </tr>
+            {% endfor %}
+
+            <!-- Totals row -->
+            {% if item_perf %}
+            {% set ns_tot = namespace(sold=0, rev=0.0, profit=0.0) %}
+            {% for p in item_perf %}
+              {% set ns_tot.sold   = ns_tot.sold + (p.week_sold or 0) %}
+              {% set ns_tot.rev    = ns_tot.rev + (p.week_revenue or 0) %}
+              {% set ns_tot.profit = ns_tot.profit + (p.week_profit or 0) %}
+            {% endfor %}
+            <tr class="table-light fw-bold" style="border-top:2px solid #1B4332">
+              <td colspan="5" class="text-end" style="font-size:0.78rem;color:#555">Week Totals:</td>
+              <td class="text-center">{{ ns_tot.sold }}</td>
+              <td class="text-end" style="color:#1565C0">${{ "%.2f"|format(ns_tot.rev) }}</td>
+              <td class="text-end {% if ns_tot.profit > 0 %}text-success{% else %}text-danger{% endif %}">
+                ${{ "%.2f"|format(ns_tot.profit) }}
+              </td>
+            </tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Recent deliveries ── -->
+  <div class="col-12">
+    <h5 class="section-heading-pastry">
+      <i class="fas fa-history me-2"></i>Recent Deliveries (Last 20)
+    </h5>
+    <div class="card shadow-sm">
+      <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0 del-table align-middle">
+          <thead>
+            <tr>
+              <th>Item</th>
+              <th>Supplier</th>
+              <th class="text-center">Qty Received</th>
+              <th>Received By</th>
+              <th>Time</th>
+              <th class="text-center">Condition</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for d in recent_del %}
+            <tr>
+              <td class="fw-semibold" style="color:#1B4332">{{ d.name_en }}</td>
+              <td class="text-muted small">{{ d.supplier_name }}</td>
+              <td class="text-center">
+                <span class="badge bg-light text-dark border">{{ d.qty_received }}</span>
+              </td>
+              <td class="small">
+                {% if d.received_by %}
+                <i class="fas fa-user me-1 text-muted"></i>{{ d.received_by }}
+                {% else %}
+                <span class="text-muted">—</span>
+                {% endif %}
+              </td>
+              <td class="text-muted small">
+                {% if d.received_at %}
+                <i class="fas fa-clock me-1"></i>{{ d.received_at }}
+                {% else %}
+                —
+                {% endif %}
+              </td>
+              <td class="text-center">
+                {% if d.condition %}
+                <span class="badge condition-{{ d.condition }}" style="font-size:0.7rem">
+                  {{ d.condition|capitalize }}
+                </span>
+                {% else %}
+                <span class="text-muted">—</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="6" class="text-center text-muted py-4">
+                <i class="fas fa-truck fa-2x mb-2 d-block opacity-25"></i>
+                No delivery records yet
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /row -->
+
+<!-- Quick links -->
+<div class="mt-4 d-flex gap-2 flex-wrap">
+  <a href="/pastry/today" class="btn btn-sm" style="background:#FF7043;color:#fff;border-color:#FF7043">
+    <i class="fas fa-cookie-bite me-1"></i>Today's Pastry
+  </a>
+  <a href="/pastry/weekly" class="btn btn-sm btn-outline-warning">
+    <i class="fas fa-calendar-week me-1"></i>Weekly Schedule
+  </a>
+  {% if is_admin %}
+  <a href="/pastry/items" class="btn btn-sm btn-outline-secondary">
+    <i class="fas fa-cog me-1"></i>Manage Items
+  </a>
+  {% endif %}
+</div>
+
+{% endblock %}
