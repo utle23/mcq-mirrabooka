@@ -151,18 +151,6 @@ def init_pastry_tables(db_path):
         if not conn.execute("SELECT 1 FROM pastry_suppliers WHERE name='Cha Lua VINHAM'").fetchone():
             conn.execute("INSERT INTO pastry_suppliers (name, phone) VALUES ('Cha Lua VINHAM','0422 785 126')")
 
-        # Migration: add Cha Lua VINHAM item if not exists
-        if not conn.execute("SELECT 1 FROM pastry_items WHERE name_en LIKE 'Cha Lua VINHAM%'").fetchone():
-            sup = conn.execute("SELECT id FROM pastry_suppliers WHERE name='Cha Lua VINHAM'").fetchone()
-            if sup:
-                max_order = conn.execute('SELECT COALESCE(MAX(sort_order),0) FROM pastry_items').fetchone()[0]
-                conn.execute('''INSERT INTO pastry_items
-                    (name_en, name_vi, supplier_id, selling_price, cost_price,
-                     delivery_days, returnable, on_order_only, sort_order)
-                    VALUES (?,?,?,?,?,?,?,?,?)''',
-                    ('Cha Lua VINHAM (3.5kg x 10 pcs)', 'Chả Lụa VINHAM (3.5kg x 10 pcs)',
-                     sup['id'], 0, 0, '', 0, 1, max_order + 1))
-
         # Seed items if empty
         if conn.execute('SELECT COUNT(*) as c FROM pastry_items').fetchone()['c'] == 0:
             for i, item in enumerate(ITEMS_SEED):
@@ -173,6 +161,18 @@ def init_pastry_tables(db_path):
                      delivery_days, returnable, on_order_only, sort_order)
                     VALUES (?,?,?,?,?,?,?,?,?)''',
                     (item[0], item[1], sup_id, item[3], item[4], item[5], item[6], item[7], i))
+
+        # Migration: add Cha Lua VINHAM item if not exists (for existing DBs)
+        if not conn.execute("SELECT 1 FROM pastry_items WHERE name_en LIKE 'Cha Lua VINHAM%'").fetchone():
+            sup = conn.execute("SELECT id FROM pastry_suppliers WHERE name='Cha Lua VINHAM'").fetchone()
+            if sup:
+                max_order = conn.execute('SELECT COALESCE(MAX(sort_order),0) FROM pastry_items').fetchone()[0]
+                conn.execute('''INSERT INTO pastry_items
+                    (name_en, name_vi, supplier_id, selling_price, cost_price,
+                     delivery_days, returnable, on_order_only, sort_order)
+                    VALUES (?,?,?,?,?,?,?,?,?)''',
+                    ('Cha Lua VINHAM (3.5kg x 10 pcs)', 'Chả Lụa VINHAM (3.5kg x 10 pcs)',
+                     sup['id'], 0, 0, '', 0, 1, max_order + 1))
 
 def _get_items_with_supplier(conn, active_only=True):
     q = '''SELECT i.*, s.name as supplier_name, s.phone as supplier_phone
