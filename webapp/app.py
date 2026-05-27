@@ -3442,15 +3442,9 @@ def email_settings():
 @app.route('/admin/email-settings/save', methods=['POST'])
 @admin_required
 def email_settings_save():
-    try:
-        port = int(request.form.get('smtp_port', '587') or '587')
-    except ValueError:
-        port = 587
     email_service.update_settings(
-        smtp_host=request.form.get('smtp_host', '').strip() or 'smtp.gmail.com',
-        smtp_port=port,
-        smtp_user=request.form.get('smtp_user', '').strip(),
-        smtp_password=request.form.get('smtp_password', ''),  # don't strip — preserve spaces
+        brevo_api_key=request.form.get('brevo_api_key', '').strip(),
+        sender_email=request.form.get('sender_email', '').strip().lower(),
         from_name=request.form.get('from_name', '').strip() or 'MCQ Mirrabooka Notification',
         base_url=request.form.get('base_url', '').strip().rstrip('/'),
         enabled=1 if request.form.get('enabled') else 0,

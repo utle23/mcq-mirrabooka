@@ -1,25 +1,32 @@
 """Email notification service for MCQ Mirrabooka.
 
+Uses Brevo (formerly Sendinblue) HTTP API instead of SMTP, because:
+- PythonAnywhere FREE tier blocks outbound SMTP (port 587/465) to Gmail etc.
+- Brevo's API host (api.brevo.com) IS on PythonAnywhere's whitelist.
+- HTTP POST to Brevo over port 443 works on every host.
+- 300 emails / day free, no credit card needed.
+
 Design goals:
 - Never crash a request: every send runs in a daemon thread, wrapped in try/except.
-- Off by default: if SMTP not configured or globally disabled, all send() calls are no-ops.
+- Off by default: if API key not configured or globally disabled, all send() calls are no-ops.
 - Granular: each recipient picks which event types they receive.
-- Self-contained: one module, no external dependencies beyond Python stdlib.
+- Self-contained: stdlib only (urllib + json + ssl + threading).
 """
 from __future__ import annotations
 
-import smtplib
+import json
 import sqlite3
 import ssl
 import threading
 import traceback
+import urllib.error
+import urllib.request
 from datetime import datetime
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.utils import formataddr, formatdate, make_msgid
 from html import escape
 
 DB_PATH: str | None = None
+
+BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email'
 
 # All event types known to the system. Keep keys stable — they are stored in DB columns.
 EVENT_TYPES = [
@@ -77,8 +84,27 @@ def init_email_tables(db_path: str) -> None:
             status       TEXT NOT NULL,
             error_detail TEXT DEFAULT ''
         )''')
+        # Migration: add Brevo-specific columns if missing.
+        for col, ddl in [
+            ('brevo_api_key', "ALTER TABLE email_settings ADD COLUMN brevo_api_key TEXT NOT NULL DEFAULT ''"),
+            ('sender_email',  "ALTER TABLE email_settings ADD COLUMN sender_email  TEXT NOT NULL DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError:
+                pass
+
         # Seed the singleton settings row if missing.
         conn.execute('INSERT OR IGNORE INTO email_settings (id) VALUES (1)')
+
+        # Carry-over: if Brevo fields are empty but old SMTP fields had a value,
+        # populate sender_email from smtp_user so the user keeps their sender address.
+        row = conn.execute(
+            'SELECT brevo_api_key, sender_email, smtp_user FROM email_settings WHERE id=1').fetchone()
+        if row and not row['sender_email'] and row['smtp_user']:
+            conn.execute(
+                'UPDATE email_settings SET sender_email=? WHERE id=1',
+                (row['smtp_user'],))
 
 
 def _conn() -> sqlite3.Connection:
@@ -96,8 +122,8 @@ def get_settings() -> dict:
 
 
 def update_settings(**kwargs) -> None:
-    allowed = {'smtp_host', 'smtp_port', 'smtp_user', 'smtp_password',
-               'from_name', 'base_url', 'enabled', 'updated_by'}
+    allowed = {'brevo_api_key', 'sender_email', 'from_name',
+               'base_url', 'enabled', 'updated_by'}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
         return
@@ -120,7 +146,6 @@ def get_recent_log(limit: int = 50) -> list[dict]:
 
 
 def add_recipient(email: str, name: str = '', events: dict | None = None) -> int:
-    """Insert a new recipient. `events` overrides per-event opt-in (default all ON except jobs)."""
     email = (email or '').strip().lower()
     if not email or '@' not in email:
         raise ValueError('Invalid email address.')
@@ -173,52 +198,17 @@ def toggle_recipient(rid: int) -> int:
         return new_val
 
 
-# ── Sending ───────────────────────────────────────────────────────────────────
-
-def _recipients_for_event(event_type: str) -> list[str]:
-    if event_type not in VALID_EVENTS:
-        return []
-    col = f'notify_{event_type}'
-    with _conn() as conn:
-        rows = conn.execute(
-            f'SELECT email FROM email_recipients WHERE active=1 AND {col}=1 ORDER BY email'
-        ).fetchall()
-    return [r['email'] for r in rows]
-
-
-def _is_configured(settings: dict) -> bool:
-    return bool(settings.get('smtp_host')
-                and settings.get('smtp_port')
-                and settings.get('smtp_user')
-                and settings.get('smtp_password'))
-
-
-def _log(event_type: str, subject: str, recipients: list[str], status: str, error: str = '') -> None:
-    try:
-        with _conn() as conn:
-            conn.execute('''INSERT INTO email_log
-                (event_type, subject, recipients, status, error_detail)
-                VALUES (?,?,?,?,?)''',
-                (event_type, subject[:200], ', '.join(recipients)[:500], status, error[:1000]))
-    except Exception:
-        pass   # logging must never crash
-
+# ── Email rendering ───────────────────────────────────────────────────────────
 
 def _darken(hex_color: str, factor: float = 0.82) -> str:
-    """Return a slightly darker shade for gradient header."""
     try:
         c = hex_color.lstrip('#')
         r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
-        r = max(0, int(r * factor))
-        g = max(0, int(g * factor))
-        b = max(0, int(b * factor))
-        return f'#{r:02X}{g:02X}{b:02X}'
+        return f'#{max(0, int(r * factor)):02X}{max(0, int(g * factor)):02X}{max(0, int(b * factor)):02X}'
     except Exception:
         return hex_color
 
 
-# Lines starting with these prefixes get rendered as visual "people chips"
-# instead of plain table rows, so submitter/manager stand out.
 PEOPLE_KEYS = {
     'submitted by', 'recorded by', 'reported by', 'trainer',
     'verified by', 'approved by', 'checked by', 'received by',
@@ -227,7 +217,6 @@ PEOPLE_KEYS = {
     'general done by',
 }
 
-# Lines with these keys get a coloured pill emphasis.
 PILL_KEYS = {'status': '#1565C0', 'severity': '#C62828', 'priority': '#E65100',
              'overall rating': '#6A1B9A', 'condition': '#E65100',
              'completion': '#2E7D32', 'late submission': '#C62828',
@@ -279,7 +268,6 @@ def _build_html(event_label: str, color: str, title: str, lines: list[str],
 
     rows = ''.join(rows_html)
 
-    # People chips (submitter, manager, etc.)
     if actor and not any(p[1] == actor for p in people_html):
         people_html.insert(0, ('Submitted by', actor))
 
@@ -331,7 +319,6 @@ def _build_html(event_label: str, color: str, title: str, lines: list[str],
       <table cellpadding="0" cellspacing="0" border="0" width="620" style="max-width:620px;background:#ffffff;
               border-radius:14px;overflow:hidden;box-shadow:0 4px 24px rgba(20,30,50,.08)">
 
-        <!-- Header banner with gradient -->
         <tr><td style="background:linear-gradient(135deg,{color} 0%,{dark} 100%);padding:24px 28px;color:#fff">
           <div style="font-size:11px;text-transform:uppercase;letter-spacing:.18em;opacity:.82;font-weight:600">
             MCQ Mirrabooka Cafe
@@ -342,7 +329,6 @@ def _build_html(event_label: str, color: str, title: str, lines: list[str],
           <div style="font-size:20px;font-weight:700;margin-top:8px;line-height:1.35">{escape(title)}</div>
         </td></tr>
 
-        <!-- Body -->
         <tr><td style="padding:22px 26px 8px">
           <table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;
                   border:1px solid #eef0f3;border-radius:8px;overflow:hidden">
@@ -352,7 +338,6 @@ def _build_html(event_label: str, color: str, title: str, lines: list[str],
           {link_html}
         </td></tr>
 
-        <!-- Footer -->
         <tr><td style="padding:18px 26px 22px;background:#fafbfc;border-top:1px solid #eef0f3;
                 color:#90969f;font-size:11px;text-align:center;line-height:1.6">
           <div style="font-weight:600;color:#5a6068">MCQ Mirrabooka Cafe management system</div>
@@ -379,6 +364,66 @@ def _build_text(event_label: str, title: str, lines: list[str], link: str, actor
     return '\n'.join(body)
 
 
+# ── Sending via Brevo HTTP API ────────────────────────────────────────────────
+
+def _recipients_for_event(event_type: str) -> list[str]:
+    if event_type not in VALID_EVENTS:
+        return []
+    col = f'notify_{event_type}'
+    with _conn() as conn:
+        rows = conn.execute(
+            f'SELECT email FROM email_recipients WHERE active=1 AND {col}=1 ORDER BY email'
+        ).fetchall()
+    return [r['email'] for r in rows]
+
+
+def _is_configured(settings: dict) -> bool:
+    return bool(settings.get('brevo_api_key') and settings.get('sender_email'))
+
+
+def _log(event_type: str, subject: str, recipients: list[str], status: str, error: str = '') -> None:
+    try:
+        with _conn() as conn:
+            conn.execute('''INSERT INTO email_log
+                (event_type, subject, recipients, status, error_detail)
+                VALUES (?,?,?,?,?)''',
+                (event_type, subject[:200], ', '.join(recipients)[:500], status, error[:1000]))
+    except Exception:
+        pass
+
+
+def _brevo_post(payload: dict, api_key: str, timeout: int = 30) -> tuple[bool, str]:
+    """POST one transactional email to Brevo. Returns (ok, message)."""
+    body = json.dumps(payload).encode('utf-8')
+    req = urllib.request.Request(
+        BREVO_API_URL,
+        data=body,
+        method='POST',
+        headers={
+            'accept': 'application/json',
+            'content-type': 'application/json',
+            'api-key': api_key,
+        },
+    )
+    ctx = ssl.create_default_context()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+            data = resp.read().decode('utf-8', 'replace')
+            if 200 <= resp.status < 300:
+                return True, data or 'OK'
+            return False, f'HTTP {resp.status}: {data}'
+    except urllib.error.HTTPError as e:
+        try:
+            detail = e.read().decode('utf-8', 'replace')
+        except Exception:
+            detail = str(e)
+        return False, f'HTTPError {e.code}: {detail}'
+    except urllib.error.URLError as e:
+        return False, f'URLError: {e.reason}'
+    except Exception as e:
+        return False, f'{type(e).__name__}: {e}'
+
+
 def _send_sync(event_type: str, subject: str, lines: list[str],
                link_path: str, actor: str, recipients: list[str], settings: dict) -> None:
     label_color = next(((lbl, color) for k, lbl, _, color in EVENT_TYPES if k == event_type),
@@ -391,35 +436,19 @@ def _send_sync(event_type: str, subject: str, lines: list[str],
     html_body = _build_html(label, color, subject, lines, link, actor)
     text_body = _build_text(label, subject, lines, link, actor)
 
-    msg = MIMEMultipart('alternative')
-    msg['Subject'] = f'[MCQ] {subject}'
-    msg['From']    = formataddr((settings.get('from_name') or 'MCQ Mirrabooka', settings['smtp_user']))
-    msg['To']      = ', '.join(recipients)
-    msg['Date']    = formatdate(localtime=True)
-    msg['Message-ID'] = make_msgid(domain='mcq-mirrabooka.local')
-    msg.attach(MIMEText(text_body, 'plain', 'utf-8'))
-    msg.attach(MIMEText(html_body, 'html', 'utf-8'))
+    payload = {
+        'sender': {
+            'name':  settings.get('from_name') or 'MCQ Mirrabooka',
+            'email': settings['sender_email'],
+        },
+        'to':          [{'email': r} for r in recipients],
+        'subject':     f'[MCQ] {subject}',
+        'htmlContent': html_body,
+        'textContent': text_body,
+    }
 
-    host = settings['smtp_host']
-    port = int(settings['smtp_port'] or 587)
-
-    try:
-        if port == 465:
-            context = ssl.create_default_context()
-            with smtplib.SMTP_SSL(host, port, timeout=30, context=context) as smtp:
-                smtp.login(settings['smtp_user'], settings['smtp_password'])
-                smtp.sendmail(settings['smtp_user'], recipients, msg.as_string())
-        else:
-            with smtplib.SMTP(host, port, timeout=30) as smtp:
-                smtp.ehlo()
-                smtp.starttls(context=ssl.create_default_context())
-                smtp.ehlo()
-                smtp.login(settings['smtp_user'], settings['smtp_password'])
-                smtp.sendmail(settings['smtp_user'], recipients, msg.as_string())
-        _log(event_type, subject, recipients, 'sent')
-    except Exception as e:
-        err = f'{type(e).__name__}: {e}\n{traceback.format_exc()}'
-        _log(event_type, subject, recipients, 'failed', err)
+    ok, msg = _brevo_post(payload, settings['brevo_api_key'])
+    _log(event_type, subject, recipients, 'sent' if ok else 'failed', '' if ok else msg)
 
 
 def send_notification(event_type: str, subject: str, lines: list[str],
@@ -434,7 +463,6 @@ def send_notification(event_type: str, subject: str, lines: list[str],
         recipients = _recipients_for_event(event_type)
         if not recipients:
             return
-        # Send asynchronously so the request returns immediately.
         t = threading.Thread(
             target=_send_sync,
             args=(event_type, subject, lines, link_path, actor, recipients, settings),
@@ -442,7 +470,6 @@ def send_notification(event_type: str, subject: str, lines: list[str],
         )
         t.start()
     except Exception as e:
-        # Last-resort safety net.
         try:
             _log(event_type, subject, [], 'queue_failed', f'{type(e).__name__}: {e}')
         except Exception:
@@ -453,55 +480,53 @@ def send_test_email(to_email: str) -> tuple[bool, str]:
     """Synchronous test send. Returns (success, message)."""
     settings = get_settings()
     if not _is_configured(settings):
-        return False, 'SMTP not configured. Fill in host, port, sender email and app password first.'
+        return False, ('Brevo not configured yet. Fill in the API key and Sender Email first. '
+                       'Get a free API key at https://app.brevo.com/settings/keys/api')
     to_email = (to_email or '').strip()
     if not to_email or '@' not in to_email:
         return False, 'Invalid recipient email.'
 
-    msg = MIMEMultipart('alternative')
-    msg['Subject'] = '[MCQ] Email notification test'
-    msg['From']    = formataddr((settings.get('from_name') or 'MCQ Mirrabooka', settings['smtp_user']))
-    msg['To']      = to_email
-    msg['Date']    = formatdate(localtime=True)
-    msg['Message-ID'] = make_msgid(domain='mcq-mirrabooka.local')
-    text = ('This is a test email from MCQ Mirrabooka management system.\n\n'
-            'If you received this, SMTP is configured correctly.\n\n'
+    html = _build_html(
+        'Test Email', '#2E7D32', 'Brevo connection successful',
+        ['Status: Configuration looks good',
+         f'Sender: {settings["sender_email"]}',
+         f'Provider: Brevo HTTP API'],
+        link='', actor='')
+    text = ('Test email from MCQ Mirrabooka management system.\n\n'
+            'If you received this, Brevo is configured correctly and notifications will work.\n\n'
             f'Sent {datetime.now().strftime("%Y-%m-%d %H:%M")}')
-    html = _build_html('Test Email', '#2E7D32', 'SMTP test successful',
-                       ['Status: Configuration looks good',
-                        f'SMTP host: {settings["smtp_host"]}:{settings["smtp_port"]}',
-                        f'Sender: {settings["smtp_user"]}'],
-                       link='', actor='')
-    msg.attach(MIMEText(text, 'plain', 'utf-8'))
-    msg.attach(MIMEText(html, 'html', 'utf-8'))
 
-    host = settings['smtp_host']
-    port = int(settings['smtp_port'] or 587)
+    payload = {
+        'sender': {
+            'name':  settings.get('from_name') or 'MCQ Mirrabooka',
+            'email': settings['sender_email'],
+        },
+        'to':          [{'email': to_email}],
+        'subject':     '[MCQ] Email notification test',
+        'htmlContent': html,
+        'textContent': text,
+    }
 
-    try:
-        if port == 465:
-            context = ssl.create_default_context()
-            with smtplib.SMTP_SSL(host, port, timeout=30, context=context) as smtp:
-                smtp.login(settings['smtp_user'], settings['smtp_password'])
-                smtp.sendmail(settings['smtp_user'], [to_email], msg.as_string())
-        else:
-            with smtplib.SMTP(host, port, timeout=30) as smtp:
-                smtp.ehlo()
-                smtp.starttls(context=ssl.create_default_context())
-                smtp.ehlo()
-                smtp.login(settings['smtp_user'], settings['smtp_password'])
-                smtp.sendmail(settings['smtp_user'], [to_email], msg.as_string())
+    ok, msg = _brevo_post(payload, settings['brevo_api_key'])
+    if ok:
         _log('test', 'Email notification test', [to_email], 'sent')
         return True, f'Test email sent to {to_email}. Check the inbox (and Spam folder).'
-    except smtplib.SMTPAuthenticationError as e:
-        msg = ('Authentication failed. For Gmail, you must use a 16-character App Password '
-               '(not your normal Google password). Enable 2-step verification first, then '
-               'generate an App Password at https://myaccount.google.com/apppasswords')
-        _log('test', 'Email notification test', [to_email], 'failed', str(e))
-        return False, msg
-    except smtplib.SMTPConnectError as e:
-        _log('test', 'Email notification test', [to_email], 'failed', str(e))
-        return False, f'Could not connect to {host}:{port}. Check host/port. ({e})'
-    except Exception as e:
-        _log('test', 'Email notification test', [to_email], 'failed', f'{type(e).__name__}: {e}')
-        return False, f'{type(e).__name__}: {e}'
+
+    _log('test', 'Email notification test', [to_email], 'failed', msg)
+
+    # Friendlier error explanations
+    lower = msg.lower()
+    if 'certificate' in lower or 'ssl' in lower:
+        return False, ('SSL certificate error reaching Brevo. This typically only happens on dev '
+                       'machines missing CA certificates — PythonAnywhere works fine. '
+                       f'Details: {msg}')
+    if 'unauthorized' in lower or '401' in msg or 'invalid api key' in lower:
+        return False, ('Brevo rejected the API key. Make sure you copied the FULL key '
+                       '(starts with "xkeysib-") from https://app.brevo.com/settings/keys/api')
+    if 'sender' in lower and ('not' in lower or 'invalid' in lower):
+        return False, (f'Brevo says the sender email "{settings["sender_email"]}" is not verified. '
+                       'Verify it at https://app.brevo.com/senders/list before sending.')
+    if 'urlerror' in lower or 'network' in lower or 'unreachable' in lower:
+        return False, ('Network unreachable. If you are on PythonAnywhere free tier, '
+                       'check that "api.brevo.com" appears on https://www.pythonanywhere.com/whitelist/')
+    return False, msg
