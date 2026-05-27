@@ -1314,6 +1314,7 @@ def checklist_save(chk_type):
                    f'{CHECKLISTS[chk_type]["title"]} / {section} / {chk_date}')
 
     done_count = sum(1 for t in task_rows if t[2])
+    completion_pct = round(done_count / len(task_rows) * 100) if task_rows else 0
     email_service.send_notification(
         'checklist',
         subject=f'{CHECKLISTS[chk_type]["title"]} {section} checklist submitted ({chk_date})',
@@ -1321,11 +1322,14 @@ def checklist_save(chk_type):
             f'Type: {CHECKLISTS[chk_type]["title"]}',
             f'Section: {section.title()}',
             f'Date: {chk_date} ({day_name})',
-            f'Tasks completed: {done_count} / {len(task_rows)}',
-            f'Late submission: {"Yes" if is_late else "No"}',
+            f'Completion: {done_count} / {len(task_rows)} tasks ({completion_pct}%)',
+            f'Late submission: {"Yes" if is_late else "On time"}',
             f'Photos attached: {len(new_photos)}',
-            f'Responsible: {responsible or "-"}',
             f'General note: {general_note or "-"}',
+            f'Submitted by: {submitted_by or "-"}',
+            f'Responsible: {responsible or "-"}',
+            f'Manager on duty: {manager_submit or "-"}',
+            f'General done by: {general_done_by or "-"}',
         ],
         link_path=f'/checklist/view/{sid}',
         actor=submitted_by,
@@ -1353,14 +1357,41 @@ def checklist_view(session_id):
 @app.route('/checklist/verify/<int:session_id>', methods=['POST'])
 @login_required
 def checklist_verify(session_id):
+    verified_by    = request.form.get('verified_by','')
+    overall_result = request.form.get('overall_result','')
+    issues_found   = request.form.get('issues_found','')
+    action_resp    = request.form.get('action_responsible','')
+    manager_notes  = request.form.get('manager_notes','')
     with get_db() as conn:
         conn.execute(
             "UPDATE checklist_sessions SET verified=1,verified_by=?,verified_at=datetime('now','localtime'),overall_result=?,issues_found=?,action_responsible=?,manager_notes=? WHERE id=?",
-            (request.form.get('verified_by',''), request.form.get('overall_result',''),
-             request.form.get('issues_found',''), request.form.get('action_responsible',''),
-             request.form.get('manager_notes',''), session_id))
-        log_action('VERIFY', 'checklist', session_id, request.form.get('verified_by',''),
-                   f'Result: {request.form.get("overall_result","")}')
+            (verified_by, overall_result, issues_found, action_resp, manager_notes, session_id))
+        log_action('VERIFY', 'checklist', session_id, verified_by,
+                   f'Result: {overall_result}')
+        sess = conn.execute('SELECT * FROM checklist_sessions WHERE id=?', (session_id,)).fetchone()
+
+    if sess:
+        sess = dict(sess)
+        chk_label = CHECKLISTS.get(sess.get('type'), {}).get('title', sess.get('type', ''))
+        result_label = (overall_result or '-').replace('_', ' ').title()
+        email_service.send_notification(
+            'checklist',
+            subject=f'Checklist VERIFIED by manager: {chk_label} {sess.get("section","")} ({sess.get("date","")})',
+            lines=[
+                f'Type: {chk_label}',
+                f'Section: {(sess.get("section") or "").title()}',
+                f'Date: {sess.get("date", "")}',
+                f'Status: Verified',
+                f'Overall result: {result_label}',
+                f'Submitted by: {sess.get("submitted_by") or "-"}',
+                f'Verified by: {verified_by or "-"}',
+                f'Action responsible: {action_resp or "-"}',
+                f'Issues found: {issues_found or "None"}',
+                f'Manager notes: {manager_notes or "-"}',
+            ],
+            link_path=f'/checklist/view/{session_id}',
+            actor=verified_by,
+        )
     return redirect(url_for('checklist_view', session_id=session_id))
 
 # ─── Temperature ───────────────────────────────────────────────────────────────

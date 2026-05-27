@@ -204,54 +204,168 @@ def _log(event_type: str, subject: str, recipients: list[str], status: str, erro
         pass   # logging must never crash
 
 
+def _darken(hex_color: str, factor: float = 0.82) -> str:
+    """Return a slightly darker shade for gradient header."""
+    try:
+        c = hex_color.lstrip('#')
+        r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+        r = max(0, int(r * factor))
+        g = max(0, int(g * factor))
+        b = max(0, int(b * factor))
+        return f'#{r:02X}{g:02X}{b:02X}'
+    except Exception:
+        return hex_color
+
+
+# Lines starting with these prefixes get rendered as visual "people chips"
+# instead of plain table rows, so submitter/manager stand out.
+PEOPLE_KEYS = {
+    'submitted by', 'recorded by', 'reported by', 'trainer',
+    'verified by', 'approved by', 'checked by', 'received by',
+    'staff', 'trainee', 'locked by', 'created by', 'assigned',
+    'responsible', 'manager on duty', 'action responsible',
+    'general done by',
+}
+
+# Lines with these keys get a coloured pill emphasis.
+PILL_KEYS = {'status': '#1565C0', 'severity': '#C62828', 'priority': '#E65100',
+             'overall rating': '#6A1B9A', 'condition': '#E65100',
+             'completion': '#2E7D32', 'late submission': '#C62828',
+             'out-of-zone readings': '#C62828'}
+
+
 def _build_html(event_label: str, color: str, title: str, lines: list[str],
                 link: str = '', actor: str = '') -> str:
-    row_html = []
+    dark = _darken(color, 0.75)
+    rows_html = []
+    people_html = []
+
     for line in lines:
         if not line:
             continue
         if ':' in line:
             k, v = line.split(':', 1)
-            row_html.append(
-                f'<tr><td style="padding:6px 10px;border-bottom:1px solid #eee;color:#555;font-weight:600;width:35%">{escape(k.strip())}</td>'
-                f'<td style="padding:6px 10px;border-bottom:1px solid #eee;color:#222">{escape(v.strip())}</td></tr>')
+            k_clean = k.strip()
+            v_clean = v.strip()
+            k_lower = k_clean.lower()
+
+            if not v_clean or v_clean == '-':
+                continue
+
+            if k_lower in PEOPLE_KEYS:
+                people_html.append((k_clean, v_clean))
+                continue
+
+            if k_lower in PILL_KEYS:
+                pill_color = PILL_KEYS[k_lower]
+                rows_html.append(
+                    f'<tr>'
+                    f'<td style="padding:9px 14px;border-bottom:1px solid #eef0f3;color:#666;font-weight:600;width:40%;font-size:13px">'
+                    f'{escape(k_clean)}</td>'
+                    f'<td style="padding:9px 14px;border-bottom:1px solid #eef0f3">'
+                    f'<span style="background:{pill_color};color:#fff;padding:3px 12px;border-radius:12px;'
+                    f'font-size:12px;font-weight:700;display:inline-block">{escape(v_clean)}</span></td></tr>')
+            else:
+                rows_html.append(
+                    f'<tr>'
+                    f'<td style="padding:9px 14px;border-bottom:1px solid #eef0f3;color:#666;font-weight:600;width:40%;font-size:13px">'
+                    f'{escape(k_clean)}</td>'
+                    f'<td style="padding:9px 14px;border-bottom:1px solid #eef0f3;color:#222;font-size:14px">'
+                    f'{escape(v_clean)}</td></tr>')
         else:
-            row_html.append(
-                f'<tr><td colspan="2" style="padding:6px 10px;border-bottom:1px solid #eee;color:#222">{escape(line)}</td></tr>')
-    rows = ''.join(row_html)
+            rows_html.append(
+                f'<tr><td colspan="2" style="padding:9px 14px;border-bottom:1px solid #eef0f3;'
+                f'color:#222;font-size:13px;font-style:italic">{escape(line)}</td></tr>')
+
+    rows = ''.join(rows_html)
+
+    # People chips (submitter, manager, etc.)
+    if actor and not any(p[1] == actor for p in people_html):
+        people_html.insert(0, ('Submitted by', actor))
+
+    people_block = ''
+    if people_html:
+        chips = []
+        for role, name in people_html:
+            initials = ''.join(w[0] for w in name.split()[:2]).upper()[:2] or '?'
+            chips.append(
+                f'<td style="padding:6px 8px;vertical-align:middle">'
+                f'<table cellpadding="0" cellspacing="0" border="0" style="border-collapse:separate">'
+                f'<tr>'
+                f'<td style="width:38px;height:38px;background:{color};color:#fff;border-radius:50%;'
+                f'text-align:center;font-weight:700;font-size:14px;letter-spacing:.5px">{escape(initials)}</td>'
+                f'<td style="padding-left:10px;vertical-align:middle">'
+                f'<div style="font-size:10px;color:#999;text-transform:uppercase;letter-spacing:.08em;font-weight:600">{escape(role)}</div>'
+                f'<div style="font-size:14px;color:#1A1A2E;font-weight:600;line-height:1.3">{escape(name)}</div>'
+                f'</td></tr></table>'
+                f'</td>')
+        people_block = (
+            f'<div style="margin-top:18px;padding:14px 16px;background:#f7f9fb;border-radius:8px;'
+            f'border-left:3px solid {color}">'
+            f'<div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.1em;'
+            f'font-weight:700;margin-bottom:10px">People involved</div>'
+            f'<table cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:separate">'
+            f'<tr>{"".join(chips)}</tr></table>'
+            f'</div>'
+        )
+
     link_html = ''
     if link:
         link_html = (
-            f'<div style="margin-top:18px;text-align:center">'
+            f'<div style="margin-top:22px;text-align:center">'
             f'<a href="{escape(link)}" style="display:inline-block;background:{color};color:#fff;'
-            f'text-decoration:none;padding:10px 22px;border-radius:6px;font-weight:600">View in app →</a>'
+            f'text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:700;font-size:14px;'
+            f'box-shadow:0 2px 8px rgba(0,0,0,.12)">View full details in app  →</a>'
             f'</div>')
-    actor_html = ''
-    if actor:
-        actor_html = (f'<div style="font-size:12px;color:#888;margin-top:14px">'
-                      f'Submitted by: <b>{escape(actor)}</b></div>')
+
     return f'''<!DOCTYPE html>
-<html><body style="margin:0;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif">
-  <div style="max-width:600px;margin:24px auto;background:#fff;border-radius:10px;overflow:hidden;
-              box-shadow:0 1px 8px rgba(0,0,0,.06)">
-    <div style="background:{color};padding:16px 22px;color:#fff">
-      <div style="font-size:11px;text-transform:uppercase;letter-spacing:.1em;opacity:.85">
-        MCQ Mirrabooka  ·  {escape(event_label)}
-      </div>
-      <div style="font-size:18px;font-weight:700;margin-top:4px">{escape(title)}</div>
-    </div>
-    <div style="padding:18px 22px">
-      <table style="width:100%;border-collapse:collapse;font-size:14px">{rows}</table>
-      {actor_html}
-      {link_html}
-    </div>
-    <div style="padding:12px 22px;background:#fafafa;font-size:11px;color:#888;text-align:center;
-                border-top:1px solid #eee">
-      Automatic notification from MCQ Mirrabooka Cafe management system<br/>
-      Sent {datetime.now().strftime('%Y-%m-%d %H:%M')}
-    </div>
-  </div>
-</body></html>'''
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{escape(title)}</title>
+</head>
+<body style="margin:0;padding:0;background:#eef1f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif">
+  <table cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#eef1f4">
+    <tr><td align="center" style="padding:28px 12px">
+      <table cellpadding="0" cellspacing="0" border="0" width="620" style="max-width:620px;background:#ffffff;
+              border-radius:14px;overflow:hidden;box-shadow:0 4px 24px rgba(20,30,50,.08)">
+
+        <!-- Header banner with gradient -->
+        <tr><td style="background:linear-gradient(135deg,{color} 0%,{dark} 100%);padding:24px 28px;color:#fff">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:.18em;opacity:.82;font-weight:600">
+            MCQ Mirrabooka Cafe
+          </div>
+          <div style="font-size:13px;text-transform:uppercase;letter-spacing:.1em;opacity:.95;margin-top:6px;font-weight:600">
+            {escape(event_label)}
+          </div>
+          <div style="font-size:20px;font-weight:700;margin-top:8px;line-height:1.35">{escape(title)}</div>
+        </td></tr>
+
+        <!-- Body -->
+        <tr><td style="padding:22px 26px 8px">
+          <table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;
+                  border:1px solid #eef0f3;border-radius:8px;overflow:hidden">
+            {rows}
+          </table>
+          {people_block}
+          {link_html}
+        </td></tr>
+
+        <!-- Footer -->
+        <tr><td style="padding:18px 26px 22px;background:#fafbfc;border-top:1px solid #eef0f3;
+                color:#90969f;font-size:11px;text-align:center;line-height:1.6">
+          <div style="font-weight:600;color:#5a6068">MCQ Mirrabooka Cafe management system</div>
+          <div>Automatic notification · sent {datetime.now().strftime('%a %d %b %Y · %H:%M')}</div>
+          <div style="margin-top:6px;opacity:.75">You're receiving this because an admin added your email
+          to the notification list. Ask an admin to remove your address if you no longer want updates.</div>
+        </td></tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>'''
 
 
 def _build_text(event_label: str, title: str, lines: list[str], link: str, actor: str) -> str:
