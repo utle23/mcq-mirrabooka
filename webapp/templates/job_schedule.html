@@ -366,7 +366,10 @@
     </a>
   </div>
   {% if is_admin %}
-  <span class="admin-edit-chip"><i class="fas fa-pen-to-square"></i>Admin can edit all job details</span>
+  <button type="button" class="btn btn-sm btn-primary" onclick="openRoleAdd()">
+    <i class="fas fa-plus me-1"></i>New Job Description
+  </button>
+  <span class="admin-edit-chip"><i class="fas fa-pen-to-square"></i>Admin can edit / add / delete</span>
   {% endif %}
 </div>
 
@@ -412,8 +415,14 @@
               data-title="{{ role.title|e }}"
               data-color="{{ role.color|e }}"
               data-icon="{{ role.icon|e }}"
+              data-slots="{{ role.slots }}"
               onclick="event.stopPropagation();openRoleEdit(this.dataset)">
         <i class="fas fa-pen"></i>
+      </button>
+      <button type="button" class="btn btn-sm btn-outline-danger jd-icon-btn"
+              title="Delete this whole job description"
+              onclick="event.stopPropagation();deleteRole('{{ role.key }}','{{ role.title|e }}')">
+        <i class="fas fa-trash"></i>
       </button>
       {% endif %}
       <button type="button" class="jd-drop-btn" title="Show job description"
@@ -424,6 +433,14 @@
   </div>
 
   <div class="jd-body d-none">
+    {% if is_admin %}
+    <div class="d-flex justify-content-end mb-2">
+      <button type="button" class="btn btn-sm btn-outline-primary"
+              onclick="openSectionAdd('{{ role.key }}','{{ role.color }}')">
+        <i class="fas fa-folder-plus me-1"></i>Add Section
+      </button>
+    </div>
+    {% endif %}
     <div class="jd-section-grid">
       {% for section in role.sections %}
       <div class="jd-section"
@@ -448,6 +465,11 @@
                   data-icon="{{ section.icon|e }}"
                   onclick="openSectionEdit(this.dataset)">
             <i class="fas fa-pen"></i>
+          </button>
+          <button type="button" class="btn btn-sm btn-outline-danger jd-icon-btn"
+                  title="Delete section"
+                  onclick="deleteSection('{{ role.key }}','{{ section.key }}','{{ section.title|e }}')">
+            <i class="fas fa-trash"></i>
           </button>
           {% endif %}
         </div>
@@ -561,14 +583,18 @@
           <input type="text" class="form-control form-control-sm" id="jr-title">
         </div>
         <div class="row g-2">
-          <div class="col-5">
+          <div class="col-4">
             <label class="form-label fw-semibold small">Color</label>
             <input type="color" class="form-control form-control-color w-100" id="jr-color">
           </div>
-          <div class="col-7">
+          <div class="col-5">
             <label class="form-label fw-semibold small">Icon class</label>
             <input type="text" class="form-control form-control-sm" id="jr-icon"
                    placeholder="fas fa-id-badge">
+          </div>
+          <div class="col-3">
+            <label class="form-label fw-semibold small">Slots</label>
+            <input type="number" min="1" max="4" class="form-control form-control-sm" id="jr-slots" value="1">
           </div>
         </div>
       </div>
@@ -614,6 +640,90 @@
       <div class="modal-footer py-2">
         <button type="button" class="btn btn-sm btn-success" onclick="saveSectionEdit()">
           <i class="fas fa-check me-1"></i>Save
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Role ADD modal -->
+<div class="modal fade" id="roleAddModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header modal-hdr-assign py-2">
+        <h6 class="modal-title text-white mb-0">
+          <i class="fas fa-id-badge me-1"></i>New Job Description
+        </h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-2">
+          <label class="form-label fw-semibold small">Role Title <span class="text-danger">*</span></label>
+          <input type="text" class="form-control form-control-sm" id="jra-title"
+                 placeholder="e.g. Dishwasher, Floor Manager">
+        </div>
+        <div class="row g-2">
+          <div class="col-4">
+            <label class="form-label fw-semibold small">Color</label>
+            <input type="color" class="form-control form-control-color w-100" id="jra-color" value="#7B1FA2">
+          </div>
+          <div class="col-5">
+            <label class="form-label fw-semibold small">Icon class</label>
+            <input type="text" class="form-control form-control-sm" id="jra-icon"
+                   placeholder="fas fa-id-badge" value="fas fa-id-badge">
+          </div>
+          <div class="col-3">
+            <label class="form-label fw-semibold small">Slots</label>
+            <input type="number" min="1" max="4" class="form-control form-control-sm" id="jra-slots" value="1">
+          </div>
+        </div>
+        <div class="text-muted small mt-2">
+          A new role is created with default <strong>Opening</strong> and <strong>Closing</strong> sections. You can add more sections and tasks after creating.
+        </div>
+      </div>
+      <div class="modal-footer py-2">
+        <button type="button" class="btn btn-sm btn-success" onclick="saveRoleAdd()">
+          <i class="fas fa-plus me-1"></i>Create
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Section ADD modal -->
+<div class="modal fade" id="sectionAddModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header modal-hdr-assign py-2">
+        <h6 class="modal-title text-white mb-0">
+          <i class="fas fa-folder-plus me-1"></i>Add Section
+        </h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="jsa-role-key">
+        <div class="mb-2">
+          <label class="form-label fw-semibold small">Section Title <span class="text-danger">*</span></label>
+          <input type="text" class="form-control form-control-sm" id="jsa-title"
+                 placeholder="e.g. Mid-shift Tasks, Catering Setup">
+        </div>
+        <div class="row g-2">
+          <div class="col-5">
+            <label class="form-label fw-semibold small">Color</label>
+            <input type="color" class="form-control form-control-color w-100" id="jsa-color" value="#7B1FA2">
+          </div>
+          <div class="col-7">
+            <label class="form-label fw-semibold small">Icon class</label>
+            <input type="text" class="form-control form-control-sm" id="jsa-icon"
+                   placeholder="fas fa-list-check" value="fas fa-list-check">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer py-2">
+        <button type="button" class="btn btn-sm btn-success" onclick="saveSectionAdd()">
+          <i class="fas fa-plus me-1"></i>Create Section
         </button>
         <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
       </div>
@@ -723,6 +833,7 @@ function openRoleEdit(d) {
   document.getElementById('jr-title').value = d.title || '';
   document.getElementById('jr-color').value = d.color || '#7B1FA2';
   document.getElementById('jr-icon').value = d.icon || 'fas fa-id-badge';
+  document.getElementById('jr-slots').value = d.slots || '1';
   new bootstrap.Modal(document.getElementById('roleEditModal')).show();
 }
 
@@ -732,15 +843,70 @@ function saveRoleEdit() {
     role_key: roleKey,
     title: document.getElementById('jr-title').value.trim(),
     color: document.getElementById('jr-color').value,
-    icon: document.getElementById('jr-icon').value.trim()
+    icon: document.getElementById('jr-icon').value.trim(),
+    slots: document.getElementById('jr-slots').value
   }).then(data => {
-    document.getElementById('role-title-' + roleKey).textContent = data.title;
-    const iconEl = document.getElementById('role-icon-' + roleKey);
-    iconEl.className = data.icon;
-    const card = document.getElementById('job-role-' + roleKey);
-    card.style.setProperty('--role-color', data.color);
     bootstrap.Modal.getInstance(document.getElementById('roleEditModal')).hide();
+    location.reload();
   }).catch(err => alert(err.message));
+}
+
+function openRoleAdd() {
+  document.getElementById('jra-title').value = '';
+  document.getElementById('jra-color').value = '#7B1FA2';
+  document.getElementById('jra-icon').value = 'fas fa-id-badge';
+  document.getElementById('jra-slots').value = '1';
+  new bootstrap.Modal(document.getElementById('roleAddModal')).show();
+}
+
+function saveRoleAdd() {
+  const title = document.getElementById('jra-title').value.trim();
+  if (!title) { alert('Please enter a role title.'); return; }
+  postForm('/jobs/role/add', {
+    title: title,
+    color: document.getElementById('jra-color').value,
+    icon: document.getElementById('jra-icon').value.trim(),
+    slots: document.getElementById('jra-slots').value
+  }).then(() => {
+    bootstrap.Modal.getInstance(document.getElementById('roleAddModal')).hide();
+    location.reload();
+  }).catch(err => alert(err.message));
+}
+
+function deleteRole(roleKey, title) {
+  if (!confirm('Delete the "' + title + '" job description?\n\nThis will remove all its sections, tasks, and weekly assignments.')) return;
+  postForm('/jobs/role/delete', { role_key: roleKey })
+    .then(() => location.reload())
+    .catch(err => alert(err.message));
+}
+
+function openSectionAdd(roleKey, defaultColor) {
+  document.getElementById('jsa-role-key').value = roleKey;
+  document.getElementById('jsa-title').value = '';
+  document.getElementById('jsa-color').value = defaultColor || '#7B1FA2';
+  document.getElementById('jsa-icon').value = 'fas fa-list-check';
+  new bootstrap.Modal(document.getElementById('sectionAddModal')).show();
+}
+
+function saveSectionAdd() {
+  const title = document.getElementById('jsa-title').value.trim();
+  if (!title) { alert('Please enter a section title.'); return; }
+  postForm('/jobs/section/add', {
+    role_key: document.getElementById('jsa-role-key').value,
+    title: title,
+    color: document.getElementById('jsa-color').value,
+    icon: document.getElementById('jsa-icon').value.trim()
+  }).then(() => {
+    bootstrap.Modal.getInstance(document.getElementById('sectionAddModal')).hide();
+    location.reload();
+  }).catch(err => alert(err.message));
+}
+
+function deleteSection(roleKey, sectionKey, title) {
+  if (!confirm('Delete section "' + title + '"?\n\nThis will remove all its tasks too.')) return;
+  postForm('/jobs/section/delete', { role_key: roleKey, section_key: sectionKey })
+    .then(() => location.reload())
+    .catch(err => alert(err.message));
 }
 
 function openSectionEdit(d) {

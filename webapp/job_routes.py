@@ -60,22 +60,14 @@ ROLES = [
         ],
         'extra_sections': [
             {
-                'key': 'ordering',
-                'title': 'Ordering catering box, restaurant equipment',
+                'key': 'orders_supplies',
+                'title': 'Orders & Supplies Management',
                 'color': '#6D4C41',
                 'icon': 'fas fa-boxes-packing',
                 'tasks': [
                     'Order the packaging & cleaning product',
                     'Order Banh mi packaging',
-                ],
-            },
-            {
-                'key': 'catering_order',
-                'title': 'Catering order',
-                'color': '#00897B',
-                'icon': 'fas fa-clipboard-list',
-                'tasks': [
-                    'Received order from office staff by Whatsapp',
+                    'Received catering order from office staff by Whatsapp',
                     'Contact customer for order information then contact with restaurant to make order for customer',
                 ],
             },
@@ -381,6 +373,17 @@ def _section_exists(conn, role_key, section_key):
         WHERE role_key=? AND section_key=?
     ''', (role_key, section_key)).fetchone() is not None
 
+
+def _role_exists(conn, role_key):
+    return conn.execute(
+        'SELECT 1 FROM job_role_templates WHERE role_key=?',
+        (role_key,)).fetchone() is not None
+
+
+def _slugify(value, fallback='item'):
+    s = re.sub(r'[^a-z0-9]+', '_', (value or '').lower()).strip('_')
+    return s or fallback
+
 def _hex_for_excel(value, fallback='7B1FA2'):
     return _clean_color(value, f'#{fallback}').replace('#', '').upper()
 
@@ -439,6 +442,7 @@ def init_job_tables(db_path):
     global DB_PATH
     DB_PATH = db_path
     with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
         conn.execute('''CREATE TABLE IF NOT EXISTS job_assignments (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             role_key   TEXT NOT NULL,
@@ -477,6 +481,9 @@ def init_job_tables(db_path):
             task_order  INTEGER NOT NULL DEFAULT 0,
             task_name   TEXT NOT NULL
         )''')
+        # Migrate legacy 'ordering' + 'catering_order' sections into 'orders_supplies'
+        # BEFORE seeding so the seed step sees the merged section already populated and skips it.
+        _migrate_merge_catering_sections(conn)
         _seed_job_templates(conn)
         conn.execute('''
             UPDATE job_role_templates
@@ -485,6 +492,47 @@ def init_job_tables(db_path):
               AND title IN ('Chef / Kitchen', 'Chef/Kitchen', 'Chef')
         ''')
         conn.commit()
+
+
+def _migrate_merge_catering_sections(conn):
+    """Merge legacy 'ordering' + 'catering_order' sections (Cashier) into 'orders_supplies'."""
+    has_old = conn.execute('''
+        SELECT 1 FROM job_description_sections
+        WHERE role_key='take_order' AND section_key IN ('ordering','catering_order')
+        LIMIT 1''').fetchone()
+    if not has_old:
+        return
+
+    new_row = conn.execute('''
+        SELECT id FROM job_description_sections
+        WHERE role_key='take_order' AND section_key='orders_supplies' ''').fetchone()
+    if not new_row:
+        next_order = conn.execute('''
+            SELECT COALESCE(MAX(sort_order), -1) + 1 as n
+            FROM job_description_sections WHERE role_key='take_order' ''').fetchone()['n']
+        conn.execute('''INSERT INTO job_description_sections
+            (role_key, section_key, title, color, icon, sort_order)
+            VALUES ('take_order','orders_supplies',
+                    'Orders & Supplies Management', '#6D4C41', 'fas fa-boxes-packing', ?)''',
+            (next_order,))
+
+    # Move all tasks from the old sections into the new one (preserve order).
+    base_order = conn.execute('''
+        SELECT COALESCE(MAX(task_order), -1) + 1 as n
+        FROM job_description_tasks
+        WHERE role_key='take_order' AND section_key='orders_supplies' ''').fetchone()['n']
+    old_tasks = conn.execute('''
+        SELECT id FROM job_description_tasks
+        WHERE role_key='take_order' AND section_key IN ('ordering','catering_order')
+        ORDER BY section_key, task_order, id''').fetchall()
+    for offset, row in enumerate(old_tasks):
+        conn.execute('''UPDATE job_description_tasks
+            SET section_key='orders_supplies', task_order=?
+            WHERE id=?''', (base_order + offset, row['id']))
+
+    # Drop the now-empty old sections.
+    conn.execute('''DELETE FROM job_description_sections
+        WHERE role_key='take_order' AND section_key IN ('ordering','catering_order')''')
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
@@ -547,7 +595,7 @@ def assign():
     start_time = request.form.get('start_time', '').strip()
     end_time   = request.form.get('end_time', '').strip()
 
-    if role_key not in ROLES_BY_KEY or day not in DAYS:
+    if day not in DAYS:
         return jsonify({'error': 'invalid'}), 400
     try:
         slot = int(slot)
@@ -555,6 +603,8 @@ def assign():
         return jsonify({'error': 'invalid slot'}), 400
 
     with _get_db() as conn:
+        if not _role_exists(conn, role_key):
+            return jsonify({'error': 'invalid role'}), 400
         conn.execute('''
             INSERT INTO job_assignments (role_key, week_start, day, slot, staff_name, start_time, end_time)
             VALUES (?,?,?,?,?,?,?)
@@ -890,20 +940,92 @@ def update_role():
     title    = request.form.get('title', '').strip()
     color    = request.form.get('color', '').strip()
     icon     = request.form.get('icon', '').strip()
+    slots    = request.form.get('slots', '').strip()
 
-    if role_key not in ROLES_BY_KEY or not title:
+    if not role_key or not title:
         return jsonify({'error': 'invalid'}), 400
-    default = ROLES_BY_KEY[role_key]
-    color = _clean_color(color, default.get('color', '#7B1FA2'))
-    icon = icon or default.get('icon', 'fas fa-id-badge')
 
     with _get_db() as conn:
+        row = conn.execute(
+            'SELECT color, icon, slots FROM job_role_templates WHERE role_key=?',
+            (role_key,)).fetchone()
+        if not row:
+            return jsonify({'error': 'role not found'}), 404
+        color = _clean_color(color, row['color'] or '#7B1FA2')
+        icon = icon or row['icon'] or 'fas fa-id-badge'
+        try:
+            slots_int = int(slots) if slots else int(row['slots'] or 1)
+        except ValueError:
+            slots_int = int(row['slots'] or 1)
+        slots_int = max(1, min(4, slots_int))
         conn.execute('''
             UPDATE job_role_templates
-            SET title=?, color=?, icon=?
+            SET title=?, color=?, icon=?, slots=?
             WHERE role_key=?
-        ''', (title, color, icon, role_key))
-    return jsonify({'ok': True, 'title': title, 'color': color, 'icon': icon})
+        ''', (title, color, icon, slots_int, role_key))
+    return jsonify({'ok': True, 'title': title, 'color': color, 'icon': icon, 'slots': slots_int})
+
+
+@jobs.route('/role/add', methods=['POST'])
+@_admin_required
+def add_role():
+    title = request.form.get('title', '').strip()
+    color = _clean_color(request.form.get('color', ''), '#7B1FA2')
+    icon  = request.form.get('icon', '').strip() or 'fas fa-id-badge'
+    try:
+        slots = int(request.form.get('slots', '1') or '1')
+    except ValueError:
+        slots = 1
+    slots = max(1, min(4, slots))
+
+    if not title:
+        return jsonify({'error': 'title required'}), 400
+
+    with _get_db() as conn:
+        # Generate a unique role_key from title.
+        base = _slugify(title, 'role')
+        role_key = base
+        n = 2
+        while _role_exists(conn, role_key):
+            role_key = f'{base}_{n}'; n += 1
+
+        next_order = conn.execute(
+            'SELECT COALESCE(MAX(sort_order), -1) + 1 as n FROM job_role_templates'
+        ).fetchone()['n']
+
+        conn.execute('''INSERT INTO job_role_templates
+            (role_key, title, color, bg, icon, slots, sort_order)
+            VALUES (?,?,?,?,?,?,?)''',
+            (role_key, title, color, '', icon, slots, next_order))
+
+        # Seed default Opening + Closing sections so admins have somewhere to add tasks.
+        for sec_order, (skey, stitle, sicon) in enumerate([
+            ('opening', 'Opening Tasks', 'fas fa-sun'),
+            ('closing', 'Closing Tasks', 'fas fa-moon'),
+        ]):
+            conn.execute('''INSERT INTO job_description_sections
+                (role_key, section_key, title, color, icon, sort_order)
+                VALUES (?,?,?,?,?,?)''',
+                (role_key, skey, stitle, color, sicon, sec_order))
+
+    return jsonify({'ok': True, 'role_key': role_key, 'title': title,
+                    'color': color, 'icon': icon, 'slots': slots})
+
+
+@jobs.route('/role/delete', methods=['POST'])
+@_admin_required
+def delete_role():
+    role_key = request.form.get('role_key', '').strip()
+    if not role_key:
+        return jsonify({'error': 'invalid'}), 400
+    with _get_db() as conn:
+        if not _role_exists(conn, role_key):
+            return jsonify({'error': 'role not found'}), 404
+        conn.execute('DELETE FROM job_description_tasks WHERE role_key=?', (role_key,))
+        conn.execute('DELETE FROM job_description_sections WHERE role_key=?', (role_key,))
+        conn.execute('DELETE FROM job_role_templates WHERE role_key=?', (role_key,))
+        conn.execute('DELETE FROM job_assignments WHERE role_key=?', (role_key,))
+    return jsonify({'ok': True, 'role_key': role_key})
 
 
 @jobs.route('/section/update', methods=['POST'])
@@ -915,10 +1037,12 @@ def update_section():
     color       = request.form.get('color', '').strip()
     icon        = request.form.get('icon', '').strip()
 
-    if role_key not in ROLES_BY_KEY or not section_key or not title:
+    if not role_key or not section_key or not title:
         return jsonify({'error': 'invalid'}), 400
 
     with _get_db() as conn:
+        if not _role_exists(conn, role_key):
+            return jsonify({'error': 'role not found'}), 404
         row = conn.execute('''
             SELECT color, icon FROM job_description_sections
             WHERE role_key=? AND section_key=?
@@ -933,6 +1057,54 @@ def update_section():
             WHERE role_key=? AND section_key=?
         ''', (title, color, icon, role_key, section_key))
     return jsonify({'ok': True, 'title': title, 'color': color, 'icon': icon})
+
+
+@jobs.route('/section/add', methods=['POST'])
+@_admin_required
+def add_section():
+    role_key = request.form.get('role_key', '').strip()
+    title    = request.form.get('title', '').strip()
+    color    = _clean_color(request.form.get('color', ''), '#7B1FA2')
+    icon     = request.form.get('icon', '').strip() or 'fas fa-list-check'
+
+    if not role_key or not title:
+        return jsonify({'error': 'invalid'}), 400
+    with _get_db() as conn:
+        if not _role_exists(conn, role_key):
+            return jsonify({'error': 'role not found'}), 404
+        # Unique section_key per role.
+        base = _slugify(title, 'section')
+        section_key = base
+        n = 2
+        while _section_exists(conn, role_key, section_key):
+            section_key = f'{base}_{n}'; n += 1
+        next_order = conn.execute('''
+            SELECT COALESCE(MAX(sort_order), -1) + 1 as n
+            FROM job_description_sections WHERE role_key=?
+        ''', (role_key,)).fetchone()['n']
+        conn.execute('''INSERT INTO job_description_sections
+            (role_key, section_key, title, color, icon, sort_order)
+            VALUES (?,?,?,?,?,?)''',
+            (role_key, section_key, title, color, icon, next_order))
+    return jsonify({'ok': True, 'role_key': role_key, 'section_key': section_key,
+                    'title': title, 'color': color, 'icon': icon})
+
+
+@jobs.route('/section/delete', methods=['POST'])
+@_admin_required
+def delete_section():
+    role_key    = request.form.get('role_key', '').strip()
+    section_key = request.form.get('section_key', '').strip()
+    if not role_key or not section_key:
+        return jsonify({'error': 'invalid'}), 400
+    with _get_db() as conn:
+        if not _section_exists(conn, role_key, section_key):
+            return jsonify({'error': 'section not found'}), 404
+        conn.execute('DELETE FROM job_description_tasks WHERE role_key=? AND section_key=?',
+                     (role_key, section_key))
+        conn.execute('DELETE FROM job_description_sections WHERE role_key=? AND section_key=?',
+                     (role_key, section_key))
+    return jsonify({'ok': True})
 
 
 @jobs.route('/task/update', methods=['POST'])
@@ -962,7 +1134,7 @@ def add_task():
     role_key    = request.form.get('role_key', '').strip()
     section_key = request.form.get('section_key', '').strip()
     name        = request.form.get('name', '').strip()
-    if role_key not in ROLES_BY_KEY or not section_key or not name:
+    if not role_key or not section_key or not name:
         return jsonify({'error': 'invalid'}), 400
 
     with _get_db() as conn:
