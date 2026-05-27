@@ -27,9 +27,19 @@
     <h5 class="mb-0 fw-bold">Training Assessments</h5>
     <div class="text-muted small">Record and track staff training sessions</div>
   </div>
-  <a href="/training/new" class="btn btn-danger fw-semibold">
-    <i class="fas fa-plus me-1"></i>New Training Session
-  </a>
+  <div class="d-flex gap-2 flex-wrap">
+    {% if is_admin %}
+    <a href="/training/stats" class="btn btn-outline-dark fw-semibold">
+      <i class="fas fa-chart-line me-1"></i>Statistics
+    </a>
+    <a href="/training/topics" class="btn btn-outline-secondary fw-semibold">
+      <i class="fas fa-list-check me-1"></i>Manage Topics
+    </a>
+    {% endif %}
+    <a href="/training/new" class="btn btn-danger fw-semibold">
+      <i class="fas fa-plus me-1"></i>New Training Session
+    </a>
+  </div>
 </div>
 
 <!-- Stats -->

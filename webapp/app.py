@@ -3104,7 +3104,7 @@ init_pastry_tables(DB_PATH)
 init_inventory_tables(DB_PATH)
 init_job_tables(DB_PATH)
 init_rules_tables(DB_PATH)
-init_training_tables(DB_PATH)
+init_training_tables(DB_PATH, CHECKLISTS)
 
 if __name__ == '__main__':
     print('\n' + '='*50)

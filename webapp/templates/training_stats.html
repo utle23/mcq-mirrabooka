@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% block title %}Training Statistics{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-chart-line me-2" style="color:#C0392B"></i>Training Statistics</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.kpi {
+  border-radius: 10px; padding: 16px 18px;
+  background: #fff; border: 1px solid #e8eaed;
+  box-shadow: 0 1px 4px rgba(0,0,0,.04);
+}
+.kpi .label { font-size: 0.72rem; color: #888; text-transform: uppercase; letter-spacing: .08em; }
+.kpi .value { font-size: 1.6rem; font-weight: 800; }
+
+.trainee-row {
+  background: #fff; border: 1px solid #e8eaed; border-radius: 8px;
+  padding: 12px 16px; margin-bottom: 10px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.03);
+}
+.bar-wrap { height: 8px; border-radius: 4px; background: #eee; overflow: hidden; display: flex; }
+.bar-ach { background: #43A047; }
+.bar-prc { background: #FB8C00; }
+
+.cat-chip {
+  display: inline-block; padding: 3px 9px; border-radius: 10px;
+  background: #F4F6F9; color: #1A1A2E; font-size: 0.7rem; font-weight: 600;
+  margin-right: 4px; margin-bottom: 4px;
+}
+
+.role-card {
+  background: #fff; border-radius: 8px; padding: 14px 16px;
+  border-left: 4px solid #C0392B; margin-bottom: 10px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.04);
+}
+</style>
+{% endblock %}
+
+{% block content %}
+
+<div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+  <a href="/training/" class="btn btn-sm btn-outline-secondary">
+    <i class="fas fa-arrow-left me-1"></i>Back
+  </a>
+  <span class="text-muted small">
+    See which staff have been trained on which topics — handover-ready summary.
+  </span>
+</div>
+
+<!-- Filters & Export -->
+<div class="card shadow-sm mb-3">
+  <div class="card-body py-3">
+    <form method="GET" class="row g-2 align-items-end">
+      <div class="col-md-3 col-6">
+        <label class="form-label small mb-1">From</label>
+        <input type="date" name="from" value="{{ date_from }}" class="form-control form-control-sm">
+      </div>
+      <div class="col-md-3 col-6">
+        <label class="form-label small mb-1">To</label>
+        <input type="date" name="to" value="{{ date_to }}" class="form-control form-control-sm">
+      </div>
+      <div class="col-md-3 col-8">
+        <label class="form-label small mb-1">Role</label>
+        <select name="role" class="form-select form-select-sm">
+          <option value="">All Roles</option>
+          {% for r in roles %}
+          <option value="{{ r }}" {% if role==r %}selected{% endif %}>{{ r }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3 col-4 d-flex gap-2">
+        <button type="submit" class="btn btn-sm btn-dark"><i class="fas fa-filter me-1"></i>Apply</button>
+      </div>
+    </form>
+
+    <div class="d-flex gap-2 mt-3 flex-wrap">
+      <a href="/training/stats/export/excel?from={{ date_from }}&to={{ date_to }}&role={{ role }}"
+         class="btn btn-sm btn-success">
+        <i class="fas fa-file-excel me-1"></i>Export Excel
+      </a>
+      <a href="/training/stats/export/pdf?from={{ date_from }}&to={{ date_to }}&role={{ role }}"
+         class="btn btn-sm btn-danger">
+        <i class="fas fa-file-pdf me-1"></i>Export PDF
+      </a>
+    </div>
+  </div>
+</div>
+
+<!-- KPI row -->
+<div class="row g-3 mb-3">
+  <div class="col-6 col-md-3">
+    <div class="kpi" style="border-left:4px solid #1565C0">
+      <div class="label">Total Sessions</div>
+      <div class="value" style="color:#1565C0">{{ total_sessions }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="kpi" style="border-left:4px solid #6A1B9A">
+      <div class="label">Trainees Covered</div>
+      <div class="value" style="color:#6A1B9A">{{ total_trainees }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="kpi" style="border-left:4px solid #2E7D32">
+      <div class="label">Topics Achieved</div>
+      <div class="value" style="color:#2E7D32">{{ total_topics_achieved }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="kpi" style="border-left:4px solid #E65100">
+      <div class="label">Needs Practice</div>
+      <div class="value" style="color:#E65100">{{ total_topics_practice }}</div>
+    </div>
+  </div>
+</div>
+
+<!-- By role -->
+{% if by_role %}
+<h6 class="fw-bold mt-3 mb-2"><i class="fas fa-tags me-1" style="color:#C0392B"></i>Coverage by Role</h6>
+<div class="row g-2 mb-4">
+  {% for br in by_role.values() %}
+  <div class="col-md-6 col-lg-4">
+    <div class="role-card">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <div class="fw-bold">{{ br.role }}</div>
+        <span class="badge bg-secondary">{{ br.sessions }} sessions</span>
+      </div>
+      <div class="text-muted small mb-2">{{ br.trainees_count }} trainees</div>
+      <div class="d-flex gap-2 flex-wrap" style="font-size:0.78rem">
+        <span style="color:#2E7D32"><i class="fas fa-check-circle"></i> {{ br.achieved }} achieved</span>
+        <span style="color:#E65100"><i class="fas fa-exclamation-circle"></i> {{ br.needs_practice }} practice</span>
+        <span class="text-muted">{{ br.not_covered }} not covered</span>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<!-- Per trainee -->
+<h6 class="fw-bold mt-3 mb-2"><i class="fas fa-users me-1" style="color:#C0392B"></i>Trainee Progress</h6>
+{% if not per_trainee %}
+<div class="text-center py-5 text-muted">
+  <i class="fas fa-chart-line fa-3x mb-3 d-block opacity-25"></i>
+  <h6>No training sessions match the selected filters.</h6>
+</div>
+{% else %}
+{% for t in per_trainee %}
+<div class="trainee-row">
+  <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-2">
+    <div>
+      <span class="fw-bold" style="font-size:1rem">{{ t.trainee_name }}</span>
+      <span class="badge ms-2" style="background:#1A1A2E">{{ t.role or '—' }}</span>
+      <span class="badge bg-secondary ms-1">{{ t.sessions }} session{% if t.sessions != 1 %}s{% endif %}</span>
+    </div>
+    <div class="text-muted small">
+      <i class="fas fa-calendar me-1"></i>{{ t.first_date }} → {{ t.last_date }}
+      {% if t.trainers %}<span class="ms-2"><i class="fas fa-user me-1"></i>{{ t.trainers|join(', ') }}</span>{% endif %}
+    </div>
+  </div>
+
+  {% if t.total_topics > 0 %}
+  <div class="bar-wrap mb-1">
+    <div class="bar-ach" style="width:{{ (t.achieved / t.total_topics * 100)|round|int }}%"></div>
+    <div class="bar-prc" style="width:{{ (t.needs_practice / t.total_topics * 100)|round|int }}%"></div>
+  </div>
+  <div class="d-flex gap-3 flex-wrap" style="font-size:0.75rem;color:#666">
+    <span style="color:#2E7D32"><i class="fas fa-check-circle"></i> {{ t.achieved }} achieved</span>
+    <span style="color:#E65100"><i class="fas fa-exclamation-circle"></i> {{ t.needs_practice }} needs practice</span>
+    <span class="text-muted">{{ t.not_covered }} not covered</span>
+    <span class="ms-auto fw-semibold">Coverage: {{ t.coverage_pct }}%</span>
+  </div>
+  {% endif %}
+
+  {% if t.achieved_items %}
+  <details class="mt-2">
+    <summary style="cursor:pointer;font-size:0.82rem;color:#2E7D32">
+      <i class="fas fa-check-circle me-1"></i>Already trained on ({{ t.achieved_items|length }} topics)
+    </summary>
+    <div class="mt-2">
+      {% for name in t.achieved_items %}
+      <span class="cat-chip" style="background:#E8F5E9;color:#2E7D32">{{ name }}</span>
+      {% endfor %}
+    </div>
+  </details>
+  {% endif %}
+
+  {% if t.practice_items %}
+  <details class="mt-2">
+    <summary style="cursor:pointer;font-size:0.82rem;color:#E65100">
+      <i class="fas fa-exclamation-circle me-1"></i>Still needs practice ({{ t.practice_items|length }} topics)
+    </summary>
+    <div class="mt-2">
+      {% for name in t.practice_items %}
+      <span class="cat-chip" style="background:#FFF3E0;color:#E65100">{{ name }}</span>
+      {% endfor %}
+    </div>
+  </details>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
+{% endblock %}

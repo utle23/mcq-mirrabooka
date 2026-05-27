@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block title %}Training Topics — {{ selected_role }}{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-list-check me-2" style="color:#C0392B"></i>Training Topic Templates</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.role-pill {
+  display: inline-block; padding: 6px 14px; border-radius: 20px;
+  background: #fff; border: 1.5px solid #ddd; color: #555;
+  font-size: 0.82rem; font-weight: 600; text-decoration: none;
+  margin-right: 6px; margin-bottom: 6px; transition: all .12s;
+}
+.role-pill:hover { border-color: #C0392B; color: #C0392B; }
+.role-pill.active { background: #C0392B; color: #fff; border-color: #C0392B; }
+
+.cat-block {
+  background: #fff; border-radius: 8px; border: 1px solid #e8eaed;
+  box-shadow: 0 1px 4px rgba(0,0,0,.04); margin-bottom: 16px; overflow: hidden;
+}
+.cat-header {
+  background: #1A1A2E; color: #fff; padding: 10px 16px;
+  font-weight: 700; font-size: 0.88rem;
+  display: flex; align-items: center; gap: 8px;
+}
+.cat-header .badge-cnt {
+  background: #C0392B; color: #fff; padding: 2px 8px;
+  border-radius: 10px; font-size: 0.72rem; margin-left: auto;
+}
+
+.topic-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 14px; border-top: 1px solid #f0f0f0;
+}
+.topic-row:hover { background: #fafafa; }
+.topic-row.inactive { opacity: .45; }
+.topic-row .item-name { flex: 1; font-size: 0.86rem; color: #333; }
+.topic-row .src-tag {
+  font-size: 0.62rem; padding: 2px 7px; border-radius: 10px;
+  background: #f1f3f5; color: #777; font-weight: 600;
+  flex-shrink: 0;
+}
+.topic-row .src-tag.seed_checklist { background: #FFF3E0; color: #E65100; }
+.topic-row .src-tag.seed_general   { background: #E3F2FD; color: #1565C0; }
+.topic-row .src-tag.seed_extra     { background: #F3E5F5; color: #6A1B9A; }
+.topic-row .src-tag.custom         { background: #E8F5E9; color: #2E7D32; }
+
+.edit-form-inline { display: flex; gap: 6px; flex: 1; align-items: center; }
+.edit-form-inline input { font-size: 0.83rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Back -->
+<div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+  <a href="/training/" class="btn btn-sm btn-outline-secondary">
+    <i class="fas fa-arrow-left me-1"></i>Back to Training
+  </a>
+  <span class="text-muted small ms-2">
+    Edit the master topic list per role. These appear automatically when starting a new training session.
+  </span>
+</div>
+
+<!-- Role tabs -->
+<div class="mb-3">
+  {% for r in roles %}
+  <a href="/training/topics?role={{ r }}" class="role-pill {% if r==selected_role %}active{% endif %}">
+    {{ r }}
+  </a>
+  {% endfor %}
+</div>
+
+<!-- Summary + Re-import button -->
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+  <div class="text-muted small">
+    <strong style="color:#1A1A2E;font-size:1.1rem">{{ total }}</strong> topics for
+    <strong>{{ selected_role }}</strong>
+  </div>
+  <form method="POST" action="/training/topics/reseed" class="d-inline">
+    <input type="hidden" name="role" value="{{ selected_role }}">
+    <button type="submit" class="btn btn-sm btn-outline-success"
+            onclick="return confirm('Re-import latest checklist tasks into training topics? Existing items will not be removed.')">
+      <i class="fas fa-sync me-1"></i>Re-import from Checklists
+    </button>
+  </form>
+</div>
+
+<!-- Add new topic -->
+<div class="card shadow-sm mb-3" style="border-left:4px solid #C0392B">
+  <div class="card-body py-3">
+    <div class="fw-semibold small mb-2"><i class="fas fa-plus-circle me-1" style="color:#C0392B"></i>Add a new topic to <strong>{{ selected_role }}</strong></div>
+    <form method="POST" action="/training/topics/add" class="d-flex gap-2 flex-wrap align-items-end">
+      <input type="hidden" name="role" value="{{ selected_role }}">
+      <div style="flex:0 0 200px">
+        <label class="form-label small text-muted mb-1">Category</label>
+        <input name="category" class="form-control form-control-sm" placeholder="e.g. Customer Service" required>
+      </div>
+      <div style="flex:1; min-width:200px">
+        <label class="form-label small text-muted mb-1">Topic / Task</label>
+        <input name="item_name" class="form-control form-control-sm" placeholder="e.g. Greet customers within 5 seconds" required>
+      </div>
+      <button type="submit" class="btn btn-sm btn-danger">
+        <i class="fas fa-plus me-1"></i>Add Topic
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- Category blocks -->
+{% if by_cat %}
+{% for cat, items in by_cat.items() %}
+<div class="cat-block">
+  <div class="cat-header">
+    <i class="fas fa-folder-open"></i>
+    {{ cat }}
+    <span class="badge-cnt">{{ items|length }}</span>
+  </div>
+
+  {% for it in items %}
+  <div class="topic-row {% if not it.active %}inactive{% endif %}" id="row-{{ it.id }}">
+
+    <div class="item-name view-{{ it.id }}">
+      {{ it.item_name }}
+    </div>
+
+    <form method="POST" action="/training/topics/{{ it.id }}/edit" class="edit-form-inline d-none edit-{{ it.id }}">
+      <input type="hidden" name="role" value="{{ selected_role }}">
+      <input name="category" class="form-control form-control-sm" value="{{ it.category }}" style="max-width:160px">
+      <input name="item_name" class="form-control form-control-sm" value="{{ it.item_name }}">
+      <button type="submit" class="btn btn-sm btn-success">
+        <i class="fas fa-check"></i>
+      </button>
+      <button type="button" class="btn btn-sm btn-outline-secondary"
+              onclick="toggleEdit({{ it.id }}, false)">
+        <i class="fas fa-times"></i>
+      </button>
+    </form>
+
+    <span class="src-tag {{ it.source }}">{{ it.source.replace('_',' ') }}</span>
+
+    <div class="d-flex gap-1 view-{{ it.id }}">
+      <button class="btn btn-sm btn-outline-primary" onclick="toggleEdit({{ it.id }}, true)" title="Edit">
+        <i class="fas fa-pen"></i>
+      </button>
+      <form method="POST" action="/training/topics/{{ it.id }}/toggle" class="d-inline">
+        <input type="hidden" name="role" value="{{ selected_role }}">
+        <button type="submit" class="btn btn-sm btn-outline-{% if it.active %}warning{% else %}success{% endif %}"
+                title="{% if it.active %}Disable{% else %}Enable{% endif %}">
+          <i class="fas fa-{% if it.active %}eye-slash{% else %}eye{% endif %}"></i>
+        </button>
+      </form>
+      <form method="POST" action="/training/topics/{{ it.id }}/delete" class="d-inline"
+            onsubmit="return confirm('Delete this topic permanently?')">
+        <input type="hidden" name="role" value="{{ selected_role }}">
+        <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete">
+          <i class="fas fa-trash"></i>
+        </button>
+      </form>
+    </div>
+
+  </div>
+  {% endfor %}
+</div>
+{% endfor %}
+{% else %}
+<div class="text-center py-5 text-muted">
+  <i class="fas fa-folder-open fa-3x mb-3 d-block opacity-25"></i>
+  <h6>No topics for this role yet.</h6>
+  <div class="small">Add the first topic above, or click "Re-import from Checklists" to pull tasks from the daily checklist.</div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleEdit(id, on) {
+  document.querySelectorAll(`.view-${id}`).forEach(el => el.classList.toggle('d-none', on));
+  document.querySelectorAll(`.edit-${id}`).forEach(el => el.classList.toggle('d-none', !on));
+}
+</script>
+{% endblock %}

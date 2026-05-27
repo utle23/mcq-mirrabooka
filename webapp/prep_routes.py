@@ -1,5 +1,6 @@
-from flask import Blueprint, render_template, request, redirect, url_for, session, jsonify
+from flask import Blueprint, render_template, request, redirect, url_for, session, jsonify, send_file
 import sqlite3
+from io import BytesIO
 from datetime import datetime, date, timedelta
 from functools import wraps
 
@@ -385,6 +386,170 @@ def weekly_report(week_start):
         stations=PREP_STATIONS, today=today,
         total_req=total_req, total_done=total_done, issues=issues,
         pct=round(total_done / max(total_req, 1) * 100))
+
+@prep.route('/weekly/<week_start>/export/pdf')
+@_admin_required
+def weekly_export_pdf(week_start):
+    from html import escape
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    try:
+        ws_date = datetime.strptime(week_start, '%Y-%m-%d').date()
+    except Exception:
+        ws_date = get_week_start()
+    ws_date    = get_week_start(ws_date)
+    week_start = ws_date.isoformat()
+    week_dates = get_week_dates(week_start)
+
+    with _get_db() as conn:
+        _ensure_schedule(week_start, conn)
+        sched = conn.execute('SELECT * FROM prep_weekly_schedules WHERE week_start=?', (week_start,)).fetchone()
+        sched = dict(sched) if sched else None
+        tasks = []
+        if sched:
+            for wt in conn.execute(
+                    'SELECT * FROM prep_weekly_tasks WHERE schedule_id=? ORDER BY station_id, scheduled_time, id',
+                    (sched['id'],)).fetchall():
+                wt = dict(wt)
+                wt['station']  = STATIONS_MAP.get(wt['station_id'], {})
+                wt['fmt_time'] = fmt_time(wt.get('scheduled_time'))
+                ds_rows = conn.execute(
+                    'SELECT * FROM prep_daily_status WHERE weekly_task_id=? ORDER BY date', (wt['id'],)).fetchall()
+                wt['days'] = {r['day_of_week']: dict(r) for r in ds_rows}
+                tasks.append(wt)
+
+    try:
+        from app import register_pdf_fonts
+        font_name, bold_font = register_pdf_fonts()
+    except Exception:
+        font_name, bold_font = 'Helvetica', 'Helvetica-Bold'
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
+                            leftMargin=8*mm, rightMargin=8*mm,
+                            topMargin=10*mm, bottomMargin=10*mm)
+    base = getSampleStyleSheet()
+    styles = {
+        'title': ParagraphStyle('title', parent=base['Title'], fontName=bold_font, fontSize=15,
+                                leading=18, textColor=colors.HexColor('#1B4332'), alignment=TA_CENTER),
+        'sub':   ParagraphStyle('sub', parent=base['Normal'], fontName=font_name, fontSize=9,
+                                leading=11, textColor=colors.HexColor('#555555'), alignment=TA_CENTER),
+        'cell':  ParagraphStyle('cell', parent=base['BodyText'], fontName=font_name, fontSize=7.5,
+                                leading=9, textColor=colors.HexColor('#222222')),
+        'station': ParagraphStyle('station', parent=base['Normal'], fontName=bold_font, fontSize=9.5,
+                                leading=12, textColor=colors.white, alignment=TA_CENTER),
+    }
+
+    total_req  = sum(1 for t in tasks for d in DAYS if t['days'].get(d, {}).get('is_required') and t['days'][d].get('status') != 'moved')
+    total_done = sum(1 for t in tasks for d in DAYS if t['days'].get(d, {}).get('status') == 'done')
+
+    story = [
+        Paragraph('MCQ MIRRABOOKA — Weekly Prep Schedule', styles['title']),
+        Paragraph(f"Week: {week_start}  →  {week_dates[-1]}   |   Tasks: {len(tasks)}   |   "
+                  f"Done: {total_done} / {total_req}   |   "
+                  f"Status: {'LOCKED' if sched and sched.get('locked') else 'Active'}",
+                  styles['sub']),
+        Spacer(1, 4*mm),
+    ]
+
+    # Build the table: Station | Task | Time | Assigned | Mon..Sun
+    headers = ['Station', 'Task (EN / VI)', 'Time', 'Assigned']
+    for i, d in enumerate(DAY_LABELS):
+        headers.append(f'{d}\n{week_dates[i][5:]}')
+    rows = [headers]
+
+    cur_station = None
+    for t in tasks:
+        st = t['station']
+        st_cell = st.get('name_en', '') if t['station_id'] != cur_station else ''
+        cur_station = t['station_id']
+        task_p = Paragraph(f"<b>{escape(t['task_name_en'] or '')}</b><br/>{escape(t['task_name_vi'] or '')}", styles['cell'])
+        row = [st_cell, task_p, t['fmt_time'] or '-', t['assigned_to'] or '-']
+        for d in DAYS:
+            ds = t['days'].get(d, {})
+            if not ds.get('is_required'):
+                row.append('—')
+            elif ds.get('status') == 'done':
+                row.append('✓')
+            elif ds.get('status') == 'moved':
+                row.append('→ ' + (ds.get('moved_to_day','') or '').upper())
+            elif t.get('is_supplier'):
+                row.append('Order')
+            else:
+                row.append('•')
+        rows.append(row)
+
+    col_widths = [28*mm, 70*mm, 16*mm, 30*mm] + [18*mm]*7
+    table = Table(rows, colWidths=col_widths, repeatRows=1)
+
+    style_cmds = [
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1B4332')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), bold_font),
+        ('FONTNAME', (0, 1), (-1, -1), font_name),
+        ('FONTSIZE', (0, 0), (-1, 0), 8),
+        ('FONTSIZE', (0, 1), (-1, -1), 7.5),
+        ('ALIGN', (2, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('GRID', (0, 0), (-1, -1), 0.35, colors.HexColor('#CCCCCC')),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+    ]
+    # Color status cells.
+    for ri, t in enumerate(tasks, start=1):
+        for di, d in enumerate(DAYS):
+            ds = t['days'].get(d, {})
+            col = 4 + di
+            if not ds.get('is_required'):
+                style_cmds.append(('BACKGROUND', (col, ri), (col, ri), colors.HexColor('#F5F5F5')))
+                style_cmds.append(('TEXTCOLOR', (col, ri), (col, ri), colors.HexColor('#BBBBBB')))
+            elif ds.get('status') == 'done':
+                style_cmds.append(('BACKGROUND', (col, ri), (col, ri), colors.HexColor('#C8E6C9')))
+                style_cmds.append(('TEXTCOLOR', (col, ri), (col, ri), colors.HexColor('#1B5E20')))
+            elif ds.get('status') == 'moved':
+                style_cmds.append(('BACKGROUND', (col, ri), (col, ri), colors.HexColor('#FFF3E0')))
+                style_cmds.append(('TEXTCOLOR', (col, ri), (col, ri), colors.HexColor('#E65100')))
+            elif t.get('is_supplier'):
+                style_cmds.append(('BACKGROUND', (col, ri), (col, ri), colors.HexColor('#E3F2FD')))
+                style_cmds.append(('TEXTCOLOR', (col, ri), (col, ri), colors.HexColor('#1565C0')))
+            else:
+                style_cmds.append(('BACKGROUND', (col, ri), (col, ri), colors.HexColor('#F8FFF8')))
+        if ri % 2 == 0:
+            for c in range(0, 4):
+                style_cmds.append(('BACKGROUND', (c, ri), (c, ri), colors.HexColor('#FAFBFC')))
+
+    table.setStyle(TableStyle(style_cmds))
+    story.append(table)
+    story.append(Spacer(1, 4*mm))
+
+    legend = Paragraph(
+        '<font color="#1B5E20">✓ done</font> &nbsp; '
+        '<font color="#E65100">→ moved</font> &nbsp; '
+        '<font color="#1565C0">Order = supplier</font> &nbsp; '
+        '<font color="#222">• pending</font> &nbsp; '
+        '<font color="#BBB">— not required</font>',
+        styles['sub'])
+    story.append(legend)
+
+    def footer(canvas, doc_obj):
+        canvas.saveState()
+        canvas.setFont(font_name, 7.5)
+        canvas.setFillColor(colors.HexColor('#666666'))
+        canvas.drawString(8*mm, 6*mm, 'MCQ Mirrabooka Cafe - Weekly Prep Schedule')
+        canvas.drawRightString(landscape(A4)[0] - 8*mm, 6*mm,
+                               f'Generated {datetime.now().strftime("%Y-%m-%d %H:%M")}   Page {doc_obj.page}')
+        canvas.restoreState()
+
+    doc.build(story, onFirstPage=footer, onLaterPages=footer)
+    buf.seek(0)
+    fname = f'MCQ_Weekly_Prep_{week_start}.pdf'
+    return send_file(buf, mimetype='application/pdf', as_attachment=True, download_name=fname)
+
 
 @prep.route('/weekly/<week_start>/lock', methods=['POST'])
 @_admin_required
