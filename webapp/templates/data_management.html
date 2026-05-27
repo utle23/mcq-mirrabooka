@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+{% block title %}Data Management{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-database me-2" style="color:#C0392B"></i>Data Management</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.summary-card {
+  background: #fff; border-radius: 10px; border: 1px solid #e8eaed;
+  padding: 14px 16px; text-align: center;
+  box-shadow: 0 1px 4px rgba(0,0,0,.04);
+}
+.summary-card .label { font-size: 0.72rem; color: #888; text-transform: uppercase; letter-spacing: .08em; }
+.summary-card .value { font-size: 1.7rem; font-weight: 800; }
+
+.target-row {
+  background: #fff; border: 1px solid #e8eaed; border-radius: 8px;
+  padding: 14px 16px; margin-bottom: 10px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.03);
+}
+.target-row .info {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.target-row .info .label { font-size: 0.95rem; font-weight: 700; }
+.target-row .info .pill {
+  background: #F4F6F9; padding: 3px 10px; border-radius: 10px;
+  font-size: 0.72rem; color: #555;
+}
+
+.warn-box {
+  background: #FFEBEE; border-left: 4px solid #C62828; color: #B71C1C;
+  padding: 12px 16px; border-radius: 6px; margin-bottom: 16px;
+  font-size: 0.86rem; line-height: 1.5;
+}
+.info-box {
+  background: #E3F2FD; border-left: 4px solid #1565C0; color: #0D47A1;
+  padding: 12px 16px; border-radius: 6px; margin-bottom: 16px;
+  font-size: 0.86rem;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+
+<div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+  <span class="text-muted small">
+    Reduce data to speed up the website. Deletions are permanent.
+  </span>
+</div>
+
+<div class="warn-box">
+  <strong><i class="fas fa-triangle-exclamation me-1"></i>Important — keep food safety records 2+ years</strong>
+  <div>WA Food Standards typically require keeping <strong>checklists and temperature records for at least 2 years</strong>. Don't delete those younger than 730 days unless you have an offline backup (Excel/PDF exports work).</div>
+</div>
+
+<!-- Storage summary -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="summary-card" style="border-top:4px solid #1565C0">
+      <div class="label">Database File</div>
+      <div class="value" style="color:#1565C0">{{ db_size_mb }} MB</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="summary-card" style="border-top:4px solid #2E7D32">
+      <div class="label">Uploaded Photos</div>
+      <div class="value" style="color:#2E7D32">{{ upload_count }}</div>
+      <div class="small text-muted">{{ upload_size_mb }} MB</div>
+    </div>
+  </div>
+  <div class="col-12 col-md-6">
+    <div class="summary-card" style="border-top:4px solid #C0392B;text-align:left">
+      <div class="label mb-2">Storage Compaction</div>
+      <div class="d-flex gap-2 align-items-center flex-wrap">
+        <button class="btn btn-sm btn-outline-dark" onclick="vacuumDb()">
+          <i class="fas fa-broom me-1"></i>Compact Database (VACUUM)
+        </button>
+        <span class="text-muted small">Run after a big delete to reclaim disk space.</span>
+      </div>
+      <div id="vacuumResult" class="small mt-2"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Per-table purge -->
+<div class="info-box">
+  Each row below lets you bulk-delete records older than 3 / 6 / 12 / 24 months for that table. Use this monthly to keep the DB fast.
+</div>
+
+{% for s in stats %}
+<div class="target-row">
+  <div class="info">
+    <span class="label">{{ s.label }}</span>
+    <span class="pill"><strong>{{ s.count }}</strong> records</span>
+    <span class="pill">Oldest: {{ s.oldest }}</span>
+  </div>
+
+  {% if s.count > 0 %}
+  <div class="d-flex gap-2 flex-wrap">
+    <button class="btn btn-sm btn-outline-warning"
+            onclick="purgeData('{{ s.key }}', 90, '{{ s.label }}')">
+      <i class="fas fa-trash me-1"></i>Older than 3 months
+    </button>
+    <button class="btn btn-sm btn-outline-warning"
+            onclick="purgeData('{{ s.key }}', 180, '{{ s.label }}')">
+      <i class="fas fa-trash me-1"></i>Older than 6 months
+    </button>
+    <button class="btn btn-sm btn-outline-danger"
+            onclick="purgeData('{{ s.key }}', 365, '{{ s.label }}')">
+      <i class="fas fa-trash me-1"></i>Older than 12 months
+    </button>
+    <button class="btn btn-sm btn-outline-danger"
+            onclick="purgeData('{{ s.key }}', 730, '{{ s.label }}')">
+      <i class="fas fa-trash me-1"></i>Older than 24 months
+    </button>
+    <button class="btn btn-sm btn-danger"
+            onclick="purgeCustom('{{ s.key }}', '{{ s.label }}')">
+      <i class="fas fa-calendar-day me-1"></i>Custom (days)…
+    </button>
+  </div>
+  {% else %}
+  <div class="text-muted small">No records to delete.</div>
+  {% endif %}
+</div>
+{% endfor %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function purgeData(target, days, label) {
+  const msg = `Delete ALL ${label} records older than ${days} days?\n\n` +
+              `This is PERMANENT and cannot be undone. ` +
+              `Make sure you have an Excel/PDF backup if you need them for audits.`;
+  if (!confirm(msg)) return;
+
+  const fd = new FormData();
+  fd.append('target', target);
+  fd.append('days', days);
+  fetch('/admin/data-management/purge', { method: 'POST', body: fd })
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) {
+        alert('Error: ' + d.error);
+        return;
+      }
+      alert(`Deleted ${d.deleted} ${label} record(s) older than ${d.cutoff}.\n\n` +
+            `Tip: click "Compact Database (VACUUM)" to reclaim disk space.`);
+      location.reload();
+    })
+    .catch(err => alert('Network error: ' + err));
+}
+
+function purgeCustom(target, label) {
+  const ans = prompt(`Delete ${label} older than how many days?\n\n` +
+                     `Examples: 30, 90, 180, 365, 1095 (3 years)`);
+  if (!ans) return;
+  const days = parseInt(ans, 10);
+  if (!days || days <= 0) { alert('Invalid number.'); return; }
+  purgeData(target, days, label);
+}
+
+function vacuumDb() {
+  if (!confirm('Compact the database file now? This locks the DB briefly (a few seconds).')) return;
+  const result = document.getElementById('vacuumResult');
+  result.innerHTML = '<span class="text-muted"><i class="fas fa-spinner fa-spin me-1"></i>Compacting…</span>';
+  fetch('/admin/data-management/vacuum', { method: 'POST' })
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) {
+        result.innerHTML = '<span class="text-danger"><i class="fas fa-circle-exclamation me-1"></i>' + d.error + '</span>';
+      } else {
+        result.innerHTML = '<span class="text-success"><i class="fas fa-check-circle me-1"></i>' + d.message + ' Reload page to see new DB size.</span>';
+      }
+    })
+    .catch(err => {
+      result.innerHTML = '<span class="text-danger">Network error: ' + err + '</span>';
+    });
+}
+</script>
+{% endblock %}

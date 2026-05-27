@@ -168,6 +168,9 @@
       <a href="/admin/email-settings" class="nav-link-item {% if current_ep in ('email_settings','email_settings_save','email_settings_test','email_recipient_add','email_recipient_update','email_recipient_toggle','email_recipient_delete') %}active{% endif %}" style="border-left-color:#1565C0">
         <i class="fas fa-envelope fa-fw"></i><span>Email Notifications</span>
       </a>
+      <a href="/admin/data-management" class="nav-link-item {% if current_ep in ('admin_data_management','admin_data_purge','admin_data_vacuum') %}active{% endif %}" style="border-left-color:#C0392B">
+        <i class="fas fa-database fa-fw"></i><span>Data Management</span>
+      </a>
       {% endif %}
 
       <div class="sidebar-footer">

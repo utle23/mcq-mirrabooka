@@ -53,10 +53,24 @@
 </div>
 
 <!-- Results summary -->
-<div class="mb-3 text-muted small">
-  Found <strong>{{ chk_records|length }}</strong> checklist record(s) and
-  <strong>{{ temp_records|length }}</strong> temperature record(s)
-  between {{ date_from }} and {{ date_to }}
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+  <div class="text-muted small">
+    Found <strong>{{ chk_records|length }}</strong> checklist record(s) and
+    <strong>{{ temp_records|length }}</strong> temperature record(s)
+    between {{ date_from }} and {{ date_to }}
+  </div>
+  {% if is_admin %}
+  <div class="d-flex gap-2">
+    <button id="bulkDelChk" class="btn btn-sm btn-outline-danger d-none"
+            onclick="bulkDelete('chk')">
+      <i class="fas fa-trash me-1"></i>Delete <span id="chkSelectedCount">0</span> checklist(s)
+    </button>
+    <button id="bulkDelTemp" class="btn btn-sm btn-outline-danger d-none"
+            onclick="bulkDelete('temp')">
+      <i class="fas fa-trash me-1"></i>Delete <span id="tempSelectedCount">0</span> temperature(s)
+    </button>
+  </div>
+  {% endif %}
 </div>
 
 <!-- Checklist Records -->
@@ -67,6 +81,9 @@
     <table class="table table-hover table-sm mb-0 align-middle">
       <thead class="table-dark">
         <tr>
+          {% if is_admin %}
+          <th style="width:30px"><input type="checkbox" id="selectAllChk" onchange="toggleAll('chk', this.checked)"></th>
+          {% endif %}
           <th>Date</th>
           <th>Day</th>
           <th>Type</th>
@@ -83,6 +100,9 @@
         {% set pct = (r.done_count / r.total_count * 100)|int if r.total_count > 0 else 0 %}
         {% set chk = checklists.get(r.type, {}) %}
         <tr>
+          {% if is_admin %}
+          <td><input type="checkbox" class="chk-select" value="{{ r.id }}" onchange="updateBulkBtn('chk')"></td>
+          {% endif %}
           <td>{{ r.date }}</td>
           <td class="text-muted small">{{ r.day_of_week or '' }}</td>
           <td>
@@ -123,11 +143,17 @@
             <a href="/export/checklist/{{ r.id }}/pdf" class="btn btn-sm btn-outline-danger" title="PDF">
               <i class="fas fa-file-pdf"></i>
             </a>
+            <form method="POST" action="/admin/delete/checklist/{{ r.id }}" class="d-inline"
+                  onsubmit="return confirm('Delete this checklist record permanently?')">
+              <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete">
+                <i class="fas fa-trash"></i>
+              </button>
+            </form>
             {% endif %}
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="9" class="text-center text-muted py-3">No checklist records found</td></tr>
+        <tr><td colspan="{% if is_admin %}10{% else %}9{% endif %}" class="text-center text-muted py-3">No checklist records found</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -143,6 +169,9 @@
     <table class="table table-hover table-sm mb-0 align-middle">
       <thead class="table-dark">
         <tr>
+          {% if is_admin %}
+          <th style="width:30px"><input type="checkbox" id="selectAllTemp" onchange="toggleAll('temp', this.checked)"></th>
+          {% endif %}
           <th>Date</th>
           <th>Type</th>
           <th>Recorded by</th>
@@ -156,6 +185,9 @@
         {% for r in temp_records %}
         {% set temp = temperatures.get(r.type, {}) %}
         <tr>
+          {% if is_admin %}
+          <td><input type="checkbox" class="temp-select" value="{{ r.id }}" onchange="updateBulkBtn('temp')"></td>
+          {% endif %}
           <td>{{ r.date }}</td>
           <td>
             <span class="badge" style="background:{{ temp.color or '#888' }}">{{ temp.short or r.type }}</span>
@@ -173,15 +205,58 @@
             <a href="/export/temperature/{{ r.id }}/pdf" class="btn btn-sm btn-outline-danger" title="PDF">
               <i class="fas fa-file-pdf"></i>
             </a>
+            <form method="POST" action="/admin/delete/temperature/{{ r.id }}" class="d-inline"
+                  onsubmit="return confirm('Delete this temperature record permanently?')">
+              <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete">
+                <i class="fas fa-trash"></i>
+              </button>
+            </form>
             {% endif %}
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="7" class="text-center text-muted py-3">No temperature records found</td></tr>
+        <tr><td colspan="{% if is_admin %}8{% else %}7{% endif %}" class="text-center text-muted py-3">No temperature records found</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 </div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if is_admin %}
+<script>
+function toggleAll(kind, checked) {
+  document.querySelectorAll(kind === 'chk' ? '.chk-select' : '.temp-select')
+    .forEach(cb => cb.checked = checked);
+  updateBulkBtn(kind);
+}
+
+function updateBulkBtn(kind) {
+  const sel = document.querySelectorAll((kind === 'chk' ? '.chk-select' : '.temp-select') + ':checked');
+  const btn = document.getElementById(kind === 'chk' ? 'bulkDelChk' : 'bulkDelTemp');
+  const cnt = document.getElementById(kind === 'chk' ? 'chkSelectedCount' : 'tempSelectedCount');
+  cnt.textContent = sel.length;
+  btn.classList.toggle('d-none', sel.length === 0);
+}
+
+function bulkDelete(kind) {
+  const sel = document.querySelectorAll((kind === 'chk' ? '.chk-select' : '.temp-select') + ':checked');
+  if (sel.length === 0) return;
+  const label = kind === 'chk' ? 'checklist' : 'temperature';
+  if (!confirm(`Delete ${sel.length} ${label} record(s) permanently? This cannot be undone.`)) return;
+  const fd = new FormData();
+  sel.forEach(cb => fd.append('ids[]', cb.value));
+  const url = '/admin/delete/' + (kind === 'chk' ? 'checklist' : 'temperature') + '/bulk';
+  fetch(url, { method: 'POST', body: fd })
+    .then(r => r.json())
+    .then(d => {
+      alert(`Deleted ${d.deleted} record(s).`);
+      location.reload();
+    })
+    .catch(err => alert('Error: ' + err));
+}
+</script>
 {% endif %}
 {% endblock %}

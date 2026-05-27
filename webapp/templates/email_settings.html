@@ -265,6 +265,12 @@
   <div class="card-section-head">
     <i class="fas fa-clock-rotate-left"></i>
     <span class="fw-semibold">Recent notifications (last {{ log|length }})</span>
+    <form method="POST" action="/admin/email-settings/log/clear" class="ms-auto"
+          onsubmit="return confirm('Clear the entire notification log?')">
+      <button type="submit" class="btn btn-sm btn-outline-light">
+        <i class="fas fa-broom me-1"></i>Clear log
+      </button>
+    </form>
   </div>
   <div class="card-section-body p-0">
     {% for l in log %}

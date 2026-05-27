@@ -3176,6 +3176,225 @@ def update_report(report_id):
         ''', (status, admin_notes, resolved_by, resolved_at, report_id))
     return redirect(url_for('admin_reports'))
 
+# ─── Data Management — Delete & Purge (admin only) ────────────────────────────
+
+def _delete_checklist_session(conn, session_id):
+    """Delete one checklist session, its tasks, and remove its photo files from disk."""
+    photos = conn.execute(
+        'SELECT filename FROM checklist_photos WHERE session_id=?', (session_id,)).fetchall()
+    for p in photos:
+        try:
+            os.remove(os.path.join(UPLOAD_FOLDER, p['filename']))
+        except OSError:
+            pass
+    conn.execute('DELETE FROM checklist_photos WHERE session_id=?', (session_id,))
+    conn.execute('DELETE FROM checklist_tasks  WHERE session_id=?', (session_id,))
+    conn.execute('DELETE FROM checklist_sessions WHERE id=?', (session_id,))
+
+
+def _delete_temp_session(conn, session_id):
+    conn.execute('DELETE FROM temp_readings WHERE session_id=?', (session_id,))
+    conn.execute('DELETE FROM temp_sessions WHERE id=?', (session_id,))
+
+
+def _delete_issue_report(conn, report_id):
+    row = conn.execute('SELECT photo FROM issue_reports WHERE id=?', (report_id,)).fetchone()
+    if row and row['photo']:
+        try:
+            os.remove(os.path.join(UPLOAD_FOLDER, row['photo']))
+        except OSError:
+            pass
+    conn.execute('DELETE FROM issue_reports WHERE id=?', (report_id,))
+
+
+@app.route('/admin/delete/checklist/<int:sid>', methods=['POST'])
+@admin_required
+def admin_delete_checklist(sid):
+    with get_db() as conn:
+        _delete_checklist_session(conn, sid)
+    return redirect(request.referrer or url_for('history'))
+
+
+@app.route('/admin/delete/temperature/<int:sid>', methods=['POST'])
+@admin_required
+def admin_delete_temperature(sid):
+    with get_db() as conn:
+        _delete_temp_session(conn, sid)
+    return redirect(request.referrer or url_for('history'))
+
+
+@app.route('/admin/delete/issue/<int:rid>', methods=['POST'])
+@admin_required
+def admin_delete_issue(rid):
+    with get_db() as conn:
+        _delete_issue_report(conn, rid)
+    return redirect(request.referrer or url_for('admin_reports'))
+
+
+@app.route('/admin/delete/violation/<int:vid>', methods=['POST'])
+@admin_required
+def admin_delete_violation(vid):
+    with get_db() as conn:
+        conn.execute('DELETE FROM staff_violations WHERE id=?', (vid,))
+    return redirect(request.referrer or url_for('violation_rules'))
+
+
+@app.route('/admin/delete/checklist/bulk', methods=['POST'])
+@admin_required
+def admin_delete_checklist_bulk():
+    ids = [int(x) for x in request.form.getlist('ids[]') if x.isdigit()]
+    with get_db() as conn:
+        for sid in ids:
+            _delete_checklist_session(conn, sid)
+    return jsonify({'ok': True, 'deleted': len(ids)})
+
+
+@app.route('/admin/delete/temperature/bulk', methods=['POST'])
+@admin_required
+def admin_delete_temperature_bulk():
+    ids = [int(x) for x in request.form.getlist('ids[]') if x.isdigit()]
+    with get_db() as conn:
+        for sid in ids:
+            _delete_temp_session(conn, sid)
+    return jsonify({'ok': True, 'deleted': len(ids)})
+
+
+@app.route('/admin/delete/issue/bulk', methods=['POST'])
+@admin_required
+def admin_delete_issue_bulk():
+    ids = [int(x) for x in request.form.getlist('ids[]') if x.isdigit()]
+    with get_db() as conn:
+        for rid in ids:
+            _delete_issue_report(conn, rid)
+    return jsonify({'ok': True, 'deleted': len(ids)})
+
+
+@app.route('/admin/delete/violation/bulk', methods=['POST'])
+@admin_required
+def admin_delete_violation_bulk():
+    ids = [int(x) for x in request.form.getlist('ids[]') if x.isdigit()]
+    with get_db() as conn:
+        for vid in ids:
+            conn.execute('DELETE FROM staff_violations WHERE id=?', (vid,))
+    return jsonify({'ok': True, 'deleted': len(ids)})
+
+
+# ── Data Management dashboard ────────────────────────────────────────────────
+
+# Each entry: (key, label, table, date_column, related_cleanup_function)
+PURGE_TARGETS = [
+    ('checklist',   'Daily Checklists',     'checklist_sessions', 'date',         '_delete_checklist_session'),
+    ('temperature', 'Temperature Records',  'temp_sessions',      'date',         '_delete_temp_session'),
+    ('issue',       'Issue Reports',        'issue_reports',      'date',         '_delete_issue_report'),
+    ('violation',   'Staff Violations',     'staff_violations',   'incident_date', None),
+    ('training',    'Training Sessions',    'training_sessions',  'session_date', None),
+    ('audit',       'Audit Log',            'audit_log',          'timestamp',    None),
+    ('email_log',   'Email Notification Log','email_log',         'sent_at',      None),
+]
+
+
+def _table_count(conn, table):
+    try:
+        return conn.execute(f'SELECT COUNT(*) c FROM {table}').fetchone()['c']
+    except sqlite3.OperationalError:
+        return 0
+
+
+def _oldest_record(conn, table, date_column):
+    try:
+        row = conn.execute(f'SELECT MIN({date_column}) AS oldest FROM {table}').fetchone()
+        return row['oldest'] if row else None
+    except sqlite3.OperationalError:
+        return None
+
+
+@app.route('/admin/data-management')
+@admin_required
+def admin_data_management():
+    # SQLite db file size + table row counts
+    db_size_mb = round(os.path.getsize(DB_PATH) / 1024 / 1024, 2) if os.path.exists(DB_PATH) else 0
+    try:
+        uploads = os.listdir(UPLOAD_FOLDER)
+        upload_count = len(uploads)
+        upload_size_mb = round(sum(
+            os.path.getsize(os.path.join(UPLOAD_FOLDER, f)) for f in uploads
+        ) / 1024 / 1024, 2)
+    except OSError:
+        upload_count, upload_size_mb = 0, 0
+
+    with get_db() as conn:
+        stats = []
+        for key, label, table, date_col, _ in PURGE_TARGETS:
+            stats.append({
+                'key': key, 'label': label, 'table': table,
+                'date_col': date_col,
+                'count': _table_count(conn, table),
+                'oldest': _oldest_record(conn, table, date_col) or '—',
+            })
+    return render_template('data_management.html',
+        stats=stats, db_size_mb=db_size_mb,
+        upload_count=upload_count, upload_size_mb=upload_size_mb)
+
+
+@app.route('/admin/data-management/purge', methods=['POST'])
+@admin_required
+def admin_data_purge():
+    """Delete records of one category older than N days. Returns JSON with delete counts."""
+    target_key = request.form.get('target', '')
+    try:
+        days = int(request.form.get('days', '0'))
+    except ValueError:
+        days = 0
+    if days <= 0:
+        return jsonify({'error': 'Invalid number of days.'}), 400
+
+    target = next((t for t in PURGE_TARGETS if t[0] == target_key), None)
+    if not target:
+        return jsonify({'error': 'Unknown target.'}), 400
+
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    _, label, table, date_col, _ = target
+
+    cleanup_fn = {
+        'checklist':   _delete_checklist_session,
+        'temperature': _delete_temp_session,
+        'issue':       _delete_issue_report,
+    }.get(target_key)
+
+    deleted = 0
+    with get_db() as conn:
+        if cleanup_fn:
+            ids = [r['id'] for r in conn.execute(
+                f'SELECT id FROM {table} WHERE {date_col} < ?', (cutoff,)).fetchall()]
+            for id_ in ids:
+                cleanup_fn(conn, id_)
+            deleted = len(ids)
+        else:
+            cur = conn.execute(f'DELETE FROM {table} WHERE {date_col} < ?', (cutoff,))
+            deleted = cur.rowcount
+    return jsonify({'ok': True, 'deleted': deleted, 'label': label, 'cutoff': cutoff})
+
+
+@app.route('/admin/data-management/vacuum', methods=['POST'])
+@admin_required
+def admin_data_vacuum():
+    """Reclaim disk space after big deletes. Locks DB briefly — admin-triggered only."""
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute('VACUUM')
+        return jsonify({'ok': True, 'message': 'Database compacted.'})
+    except Exception as e:
+        return jsonify({'error': f'{type(e).__name__}: {e}'}), 500
+
+
+@app.route('/admin/email-settings/log/clear', methods=['POST'])
+@admin_required
+def email_log_clear():
+    with get_db() as conn:
+        conn.execute('DELETE FROM email_log')
+    return redirect(url_for('email_settings'))
+
+
 # ─── Email Notifications (admin) ───────────────────────────────────────────────
 
 @app.route('/admin/email-settings', methods=['GET'])

@@ -35,12 +35,24 @@
     <a href="/training/topics" class="btn btn-outline-secondary fw-semibold">
       <i class="fas fa-list-check me-1"></i>Manage Topics
     </a>
+    <button id="bulkDelTrain" class="btn btn-outline-danger d-none" onclick="trainingBulkDelete()">
+      <i class="fas fa-trash me-1"></i>Delete <span id="trainSelCount">0</span>
+    </button>
     {% endif %}
     <a href="/training/new" class="btn btn-danger fw-semibold">
       <i class="fas fa-plus me-1"></i>New Training Session
     </a>
   </div>
 </div>
+
+{% if is_admin and sessions %}
+<div class="d-flex align-items-center gap-2 mb-2">
+  <label class="form-check-label small text-muted d-flex align-items-center gap-2 mb-0">
+    <input type="checkbox" id="trainSelectAll" class="form-check-input" onchange="trainingToggleAll(this.checked)">
+    Select all on page
+  </label>
+</div>
+{% endif %}
 
 <!-- Stats -->
 <div class="row g-3 mb-4">
@@ -121,6 +133,10 @@
     <div class="session-card bg-white p-3">
       <div class="d-flex align-items-start gap-3">
 
+        {% if is_admin %}
+        <input type="checkbox" class="train-select form-check-input mt-2" value="{{ s.id }}" onchange="trainingUpdateBulk()">
+        {% endif %}
+
         <!-- Left: avatar -->
         <div style="width:44px;height:44px;border-radius:10px;background:#1A1A2E;
                     display:flex;align-items:center;justify-content:center;flex-shrink:0">
@@ -180,4 +196,33 @@
 </div>
 {% endif %}
 
+{% endblock %}
+
+{% block scripts %}
+{% if is_admin %}
+<script>
+function trainingToggleAll(checked) {
+  document.querySelectorAll('.train-select').forEach(cb => cb.checked = checked);
+  trainingUpdateBulk();
+}
+function trainingUpdateBulk() {
+  const sel = document.querySelectorAll('.train-select:checked');
+  const btn = document.getElementById('bulkDelTrain');
+  const cnt = document.getElementById('trainSelCount');
+  cnt.textContent = sel.length;
+  btn.classList.toggle('d-none', sel.length === 0);
+}
+function trainingBulkDelete() {
+  const sel = document.querySelectorAll('.train-select:checked');
+  if (sel.length === 0) return;
+  if (!confirm(`Delete ${sel.length} training session(s) permanently?`)) return;
+  const fd = new FormData();
+  sel.forEach(cb => fd.append('ids[]', cb.value));
+  fetch('/training/bulk-delete', { method: 'POST', body: fd })
+    .then(r => r.json())
+    .then(d => { alert(`Deleted ${d.deleted} session(s).`); location.reload(); })
+    .catch(err => alert('Error: ' + err));
+}
+</script>
+{% endif %}
 {% endblock %}

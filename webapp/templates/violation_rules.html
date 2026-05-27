@@ -392,6 +392,14 @@
       <div class="col-md-3"><label class="form-label small fw-semibold mb-1">Action</label><textarea name="action_taken" rows="2" class="form-control form-control-sm">{{ v.action_taken or '' }}</textarea></div>
       <div class="col-md-3"><label class="form-label small fw-semibold mb-1">Manager Notes</label><textarea name="manager_notes" rows="2" class="form-control form-control-sm">{{ v.manager_notes or '' }}</textarea></div>
     </form>
+    <div class="d-flex justify-content-end mt-2">
+      <form method="POST" action="/admin/delete/violation/{{ v.id }}" class="d-inline"
+            onsubmit="return confirm('Delete this violation record permanently?')">
+        <button type="submit" class="btn btn-sm btn-outline-danger">
+          <i class="fas fa-trash me-1"></i>Delete
+        </button>
+      </form>
+    </div>
   </div>
 </div>
 {% else %}

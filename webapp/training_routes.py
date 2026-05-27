@@ -450,6 +450,17 @@ def training_delete(session_id):
     return redirect(url_for('training.training_list'))
 
 
+@training_bp.route('/bulk-delete', methods=['POST'])
+@_admin_required
+def training_bulk_delete():
+    ids = [int(x) for x in request.form.getlist('ids[]') if x.isdigit()]
+    with _get_db() as conn:
+        for sid in ids:
+            conn.execute('DELETE FROM training_session_items WHERE session_id=?', (sid,))
+            conn.execute('DELETE FROM training_sessions WHERE id=?', (sid,))
+    return jsonify({'ok': True, 'deleted': len(ids)})
+
+
 # ── Admin: Topic Templates Management ─────────────────────────────────────────
 
 @training_bp.route('/topics')
