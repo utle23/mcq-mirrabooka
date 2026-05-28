@@ -779,20 +779,35 @@ def export_job_excel(role_key=None):
                 c.border = border
                 c.alignment = Alignment(horizontal='center')
             r += 1
+            # Add a Done? column for printing
+            rs.cell(r-1, 1).value = '#'
+            rs.cell(r-1, 2).value = 'TASK'
+            rs.cell(r-1, 3).value = 'DONE?'
+            for c in rs[r-1]:
+                c.fill = PatternFill('solid', fgColor='1B3A2D')
+                c.font = Font(bold=True, color='FFFFFF', size=11)
+                c.border = border
+                c.alignment = Alignment(horizontal='center')
+
+            big_task_font = Font(color='1A1A1A', size=12, bold=True)
             for i, task in enumerate(section['tasks'], 1):
                 rs.cell(r, 1).value = i
                 rs.cell(r, 2).value = task['task_name']
-                rs.cell(r, 3).value = ''
+                rs.cell(r, 3).value = ''   # empty box for ticking
                 for col in range(1, 4):
                     c = rs.cell(r, col)
                     c.border = border
-                    c.font = body_font
-                    c.alignment = Alignment(vertical='top', wrap_text=True)
-                rs.cell(r, 1).alignment = Alignment(horizontal='center', vertical='top')
-                rs.row_dimensions[r].height = max(26, min(84, 18 + (len(task['task_name']) // 48) * 16))
+                    c.alignment = Alignment(vertical='center', wrap_text=True)
+                rs.cell(r, 1).font = Font(bold=True, color='1B3A2D', size=12)
+                rs.cell(r, 1).alignment = Alignment(horizontal='center', vertical='center')
+                rs.cell(r, 2).font = big_task_font
+                rs.cell(r, 3).alignment = Alignment(horizontal='center', vertical='center')
+                rs.cell(r, 3).fill = PatternFill('solid', fgColor='FFFFFF')
+                # Taller rows so there is space to tick by hand
+                rs.row_dimensions[r].height = max(32, min(95, 24 + (len(task['task_name']) // 38) * 18))
                 r += 1
             r += 1
-        for col, width in enumerate([6, 85, 26], 1):
+        for col, width in enumerate([8, 78, 14], 1):
             rs.column_dimensions[get_column_letter(col)].width = width
 
     buf = BytesIO()
@@ -843,19 +858,20 @@ def export_job_pdf(role_key=None):
     base = getSampleStyleSheet()
     styles = {
         'cover_title': ParagraphStyle('cover_title', parent=base['Title'], fontName=bold_font,
-                                      fontSize=24, leading=28, textColor=colors.HexColor('#1B3A2D'),
+                                      fontSize=26, leading=30, textColor=colors.HexColor('#1B3A2D'),
                                       alignment=TA_CENTER, spaceAfter=8),
         'cover_sub': ParagraphStyle('cover_sub', parent=base['Normal'], fontName=font_name,
                                     fontSize=11, leading=15, textColor=colors.HexColor('#555555'),
                                     alignment=TA_CENTER, spaceAfter=18),
         'role': ParagraphStyle('role', parent=base['Heading1'], fontName=bold_font,
-                               fontSize=17, leading=22, textColor=colors.white, spaceAfter=0),
+                               fontSize=20, leading=24, textColor=colors.white, spaceAfter=0),
         'section': ParagraphStyle('section', parent=base['Heading2'], fontName=bold_font,
-                                  fontSize=11, leading=14, textColor=colors.white, spaceAfter=0),
-        'task': ParagraphStyle('task', parent=base['BodyText'], fontName=font_name,
-                               fontSize=9.2, leading=12, textColor=colors.HexColor('#222222')),
+                                  fontSize=13, leading=16, textColor=colors.white, spaceAfter=0),
+        # Bigger, bolder task text — designed for a printed sheet hanging on the wall
+        'task': ParagraphStyle('task', parent=base['BodyText'], fontName=bold_font,
+                               fontSize=12, leading=15, textColor=colors.HexColor('#1A1A1A')),
         'num': ParagraphStyle('num', parent=base['BodyText'], fontName=bold_font,
-                              fontSize=9, leading=12, alignment=TA_CENTER,
+                              fontSize=12, leading=15, alignment=TA_CENTER,
                               textColor=colors.HexColor('#1B3A2D')),
         'small': ParagraphStyle('small', parent=base['Normal'], fontName=font_name,
                                 fontSize=8.2, leading=10, textColor=colors.HexColor('#666666')),
@@ -889,53 +905,92 @@ def export_job_pdf(role_key=None):
         story.append(PageBreak())
         role_color = colors.HexColor(_clean_color(role.get('color'), '#7B1FA2'))
         role_header = Table([[Paragraph(escape(role['title']), styles['role']),
-                              Paragraph(f"{len(role['sections'])} sections<br/>{_role_task_count(role)} tasks",
+                              Paragraph(f"{len(role['sections'])} sections · {_role_task_count(role)} tasks<br/>"
+                                        f"Date: ______________ &nbsp; Staff: ______________",
                                         styles['section'])]],
-                            colWidths=[132 * mm, 37 * mm])
+                            colWidths=[110 * mm, 65 * mm])
         role_header.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, -1), role_color),
             ('BOX', (0, 0), (-1, -1), 0, role_color),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 9),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 9),
-            ('LEFTPADDING', (0, 0), (-1, -1), 10),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+            ('TOPPADDING', (0, 0), (-1, -1), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+            ('LEFTPADDING', (0, 0), (-1, -1), 14),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 14),
         ]))
         story.append(role_header)
-        story.append(Spacer(1, 5 * mm))
+        story.append(Spacer(1, 4 * mm))
 
         for section in role['sections']:
             section_color = colors.HexColor(_clean_color(section.get('color'), role.get('color', '#7B1FA2')))
-            sec_header = Table([[Paragraph(escape(section['title']), styles['section'])]], colWidths=[169 * mm])
+            sec_header = Table(
+                [[Paragraph(escape(section['title']).upper(), styles['section']),
+                  Paragraph(f"{len(section.get('tasks', []))} task(s)", styles['section'])]],
+                colWidths=[140 * mm, 35 * mm])
             sec_header.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, -1), section_color),
-                ('TOPPADDING', (0, 0), (-1, -1), 6),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-                ('LEFTPADDING', (0, 0), (-1, -1), 8),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+                ('TOPPADDING', (0, 0), (-1, -1), 8),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+                ('LEFTPADDING', (0, 0), (-1, -1), 12),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 12),
             ]))
             story.append(sec_header)
 
-            task_data = [['#', 'Task']]
+            # Print-friendly: 3 columns — Checkbox | # | Task (bigger bold text)
+            task_data = [['DONE', '#', 'TASK']]
             for i, task in enumerate(section['tasks'], 1):
-                task_data.append([Paragraph(str(i), styles['num']),
+                task_data.append(['', Paragraph(str(i), styles['num']),
                                   Paragraph(escape(task['task_name']), styles['task'])])
             if len(task_data) == 1:
-                task_data.append(['-', Paragraph('No tasks yet.', styles['small'])])
+                task_data.append(['', '-', Paragraph('No tasks yet.', styles['small'])])
 
-            task_table = Table(task_data, colWidths=[12 * mm, 157 * mm], repeatRows=1)
+            task_table = Table(task_data, colWidths=[14 * mm, 12 * mm, 149 * mm], repeatRows=1)
             task_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F0F4F2')),
+                # Header row
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1B3A2D')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
                 ('FONTNAME', (0, 0), (-1, 0), bold_font),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#1B3A2D')),
-                ('GRID', (0, 0), (-1, -1), 0.35, colors.HexColor('#DDDDDD')),
-                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                ('ALIGN', (0, 0), (0, -1), 'CENTER'),
-                ('TOPPADDING', (0, 0), (-1, -1), 5),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#FBFCFC')]),
+                ('FONTSIZE', (0, 0), (-1, 0), 11),
+                ('ALIGN', (0, 0), (1, 0), 'CENTER'),
+                ('ALIGN', (2, 0), (2, 0), 'LEFT'),
+                ('TOPPADDING', (0, 0), (-1, 0), 6),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+                # Body cells
+                ('FONTNAME', (0, 1), (-1, -1), font_name),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('ALIGN', (0, 0), (1, -1), 'CENTER'),
+                ('GRID', (0, 0), (-1, -1), 0.6, colors.HexColor('#888888')),
+                ('TOPPADDING', (0, 1), (-1, -1), 10),
+                ('BOTTOMPADDING', (0, 1), (-1, -1), 10),
+                ('LEFTPADDING', (2, 1), (2, -1), 10),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F4F8F5')]),
+                # Make the checkbox column visually distinct — a thicker outline + light bg
+                ('BACKGROUND', (0, 1), (0, -1), colors.HexColor('#FFFFFF')),
+                ('LINEAFTER', (0, 1), (0, -1), 1.2, colors.HexColor('#1B3A2D')),
+                ('LINEBEFORE', (0, 1), (0, -1), 1.2, colors.HexColor('#1B3A2D')),
             ]))
             story.append(task_table)
-            story.append(Spacer(1, 4 * mm))
+            story.append(Spacer(1, 5 * mm))
+
+        # Sign-off footer per role page — for staff/manager initials at end of shift
+        sign_table = Table([
+            [Paragraph('<b>Staff signature</b>', styles['small']),
+             Paragraph('<b>Time finished</b>', styles['small']),
+             Paragraph('<b>Manager check</b>', styles['small'])],
+            ['', '', ''],
+        ], colWidths=[60 * mm, 50 * mm, 65 * mm])
+        sign_table.setStyle(TableStyle([
+            ('GRID', (0, 0), (-1, -1), 0.6, colors.HexColor('#888888')),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F0F4F2')),
+            ('TOPPADDING', (0, 0), (-1, 0), 6),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+            ('TOPPADDING', (0, 1), (-1, 1), 22),
+            ('BOTTOMPADDING', (0, 1), (-1, 1), 22),
+        ]))
+        story.append(Spacer(1, 4 * mm))
+        story.append(sign_table)
 
     def footer(canvas, doc_obj):
         canvas.saveState()
