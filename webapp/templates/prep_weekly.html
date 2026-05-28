@@ -134,6 +134,10 @@
   <button class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#addWeeklyTaskModal">
     <i class="fas fa-plus me-1"></i>Add Task
   </button>
+  <button type="button" class="btn btn-sm btn-outline-primary"
+          onclick="openAddSection()">
+    <i class="fas fa-layer-group me-1"></i>Add Section
+  </button>
   <button type="button" id="bulkDeleteTasksBtn" class="btn btn-sm btn-outline-danger d-none"
           onclick="deleteSelectedTasks()">
     <i class="fas fa-trash-can me-1"></i>Delete Selected
@@ -368,8 +372,25 @@
         <tr class="station-hdr">
           <td colspan="{{ 11 if is_admin and not sched.locked else 10 }}"
               style="background:{{ task.station.color }}15;color:{{ task.station.color }};border-left:5px solid {{ task.station.color }}">
-            <i class="fas fa-layer-group me-2"></i>{{ task.station.name_en }}
-            <span class="ms-2 fw-normal" style="font-size:0.73rem;opacity:0.75">{{ task.station.name_vi }}</span>
+            <div class="d-flex align-items-center" style="gap:6px">
+              <i class="fas fa-layer-group me-1"></i>
+              <span class="fw-bold">{{ task.station.name_en }}</span>
+              <span class="ms-1 fw-normal" style="font-size:0.73rem;opacity:0.75">{{ task.station.name_vi }}</span>
+              {% if is_admin %}
+              <button type="button" class="btn btn-sm btn-link p-0 ms-2"
+                      style="color:{{ task.station.color }};font-size:0.75rem"
+                      title="Edit section name / colour"
+                      onclick="openEditSection({{ task.station.id }}, '{{ task.station.name_en|e }}', '{{ task.station.name_vi|e }}', '{{ task.station.color }}')">
+                <i class="fas fa-pen"></i>
+              </button>
+              <button type="button" class="btn btn-sm btn-link p-0"
+                      style="color:#C62828;font-size:0.75rem"
+                      title="Delete this section (only if it has no tasks)"
+                      onclick="deleteSection({{ task.station.id }}, '{{ task.station.name_en|e }}')">
+                <i class="fas fa-trash"></i>
+              </button>
+              {% endif %}
+            </div>
           </td>
         </tr>
         {% endif %}
@@ -576,6 +597,48 @@
         <div class="modal-footer py-2">
           <button type="submit" class="btn btn-sm btn-success">
             <i class="fas fa-save me-1"></i>Save & Sync All Weeks
+          </button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ── Add / Edit Section modal ── -->
+<div class="modal fade" id="sectionModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="sectionForm" onsubmit="return submitSection(event)">
+        <div class="modal-header">
+          <h6 class="modal-title" id="sectionModalTitle">
+            <i class="fas fa-layer-group me-1"></i>Add Section
+          </h6>
+          <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="sectionId" value="">
+          <div class="mb-3">
+            <label class="form-label fw-semibold small">Section Name (English) <span class="text-danger">*</span></label>
+            <input type="text" id="sectionNameEn" class="form-control form-control-sm"
+                   required placeholder="e.g. Ordering, Salad Station">
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold small">Section Name (Vietnamese)</label>
+            <input type="text" id="sectionNameVi" class="form-control form-control-sm"
+                   placeholder="e.g. Khu đặt hàng">
+          </div>
+          <div class="mb-1">
+            <label class="form-label fw-semibold small">Header Color</label>
+            <input type="color" id="sectionColor" class="form-control form-control-color"
+                   value="#1565C0" style="width:80px;height:38px">
+            <div class="small text-muted">Used for the coloured bar at the top of this section in the schedule.</div>
+          </div>
+          <div id="sectionFormError" class="alert alert-danger py-2 small mt-2 d-none"></div>
+        </div>
+        <div class="modal-footer py-2">
+          <button type="submit" class="btn btn-sm btn-success">
+            <i class="fas fa-save me-1"></i>Save
           </button>
           <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
         </div>
@@ -1064,5 +1127,72 @@ function switchView(v) {
   const saved = localStorage.getItem('prepView') || 'today';
   switchView(saved);
 })();
+
+{% if is_admin %}
+// ── Sections (add / edit / delete) ──
+function openAddSection() {
+  document.getElementById('sectionId').value = '';
+  document.getElementById('sectionNameEn').value = '';
+  document.getElementById('sectionNameVi').value = '';
+  document.getElementById('sectionColor').value = '#1565C0';
+  document.getElementById('sectionModalTitle').innerHTML =
+    '<i class="fas fa-layer-group me-1"></i>Add Section';
+  document.getElementById('sectionFormError').classList.add('d-none');
+  new bootstrap.Modal(document.getElementById('sectionModal')).show();
+}
+
+function openEditSection(id, nameEn, nameVi, color) {
+  document.getElementById('sectionId').value = id;
+  document.getElementById('sectionNameEn').value = nameEn || '';
+  document.getElementById('sectionNameVi').value = nameVi || '';
+  document.getElementById('sectionColor').value = color || '#1565C0';
+  document.getElementById('sectionModalTitle').innerHTML =
+    '<i class="fas fa-pen me-1"></i>Edit Section';
+  document.getElementById('sectionFormError').classList.add('d-none');
+  new bootstrap.Modal(document.getElementById('sectionModal')).show();
+}
+
+function submitSection(ev) {
+  ev.preventDefault();
+  const id = document.getElementById('sectionId').value;
+  const err = document.getElementById('sectionFormError');
+  err.classList.add('d-none');
+  const fd = new FormData();
+  fd.append('name_en', document.getElementById('sectionNameEn').value.trim());
+  fd.append('name_vi', document.getElementById('sectionNameVi').value.trim());
+  fd.append('color',   document.getElementById('sectionColor').value);
+  const url = id ? `/prep/stations/${id}/edit` : '/prep/stations/add';
+  fetch(url, { method: 'POST', body: fd, headers: {'X-Requested-With':'XMLHttpRequest'} })
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) {
+        err.textContent = d.error;
+        err.classList.remove('d-none');
+        return;
+      }
+      bootstrap.Modal.getInstance(document.getElementById('sectionModal')).hide();
+      location.reload();
+    })
+    .catch(e => {
+      err.textContent = 'Network error: ' + e;
+      err.classList.remove('d-none');
+    });
+  return false;
+}
+
+function deleteSection(id, name) {
+  if (!confirm(`Delete section "${name}"?\n\nThis only works if the section has NO tasks. Move or delete its tasks first.`)) return;
+  fetch(`/prep/stations/${id}/delete`, {
+    method: 'POST',
+    headers: {'X-Requested-With':'XMLHttpRequest'}
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) { alert(d.error); return; }
+      location.reload();
+    })
+    .catch(e => alert('Network error: ' + e));
+}
+{% endif %}
 </script>
 {% endblock %}

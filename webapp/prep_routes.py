@@ -12,13 +12,35 @@ except Exception:
 prep = Blueprint('prep', __name__, url_prefix='/prep')
 DB_PATH    = None
 
-PREP_STATIONS = [
+PREP_STATIONS_SEED = [
     {'id':1,'name_en':'Banh Mi Station',       'name_vi':'Khu bánh mì',             'color':'#FF9800'},
     {'id':2,'name_en':'Pho / Kitchen Station', 'name_vi':'Khu phở / bếp chính',     'color':'#F44336'},
     {'id':3,'name_en':'Drink Station',          'name_vi':'Khu nước uống',           'color':'#00BCD4'},
     {'id':4,'name_en':'Chef / General Prep',    'name_vi':'Sơ chế chung / phụ bếp', 'color':'#4CAF50'},
 ]
-STATIONS_MAP = {s['id']:s for s in PREP_STATIONS}
+# PREP_STATIONS and STATIONS_MAP are kept as module-level mutables so the rest
+# of the code can keep using them like before. _refresh_stations() reloads
+# them from the DB whenever stations are added / edited / deleted.
+PREP_STATIONS = list(PREP_STATIONS_SEED)
+STATIONS_MAP  = {s['id']: s for s in PREP_STATIONS}
+
+
+def _refresh_stations():
+    """Reload PREP_STATIONS / STATIONS_MAP from DB. Mutates in place so all
+    references in this module and templates keep working."""
+    try:
+        with _get_db() as conn:
+            rows = [dict(r) for r in conn.execute(
+                'SELECT id, name_en, name_vi, color FROM prep_stations '
+                'WHERE active=1 ORDER BY sort_order, id').fetchall()]
+    except Exception:
+        return
+    if not rows:
+        return
+    PREP_STATIONS.clear()
+    PREP_STATIONS.extend(rows)
+    STATIONS_MAP.clear()
+    STATIONS_MAP.update({s['id']: s for s in rows})
 
 DAYS       = ['mon','tue','wed','thu','fri','sat','sun']
 DAY_LABELS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
@@ -198,6 +220,14 @@ def init_prep_tables(db_path, staff_list):
                 key        TEXT PRIMARY KEY,
                 applied_at TEXT DEFAULT (datetime('now','localtime'))
             );
+            CREATE TABLE IF NOT EXISTS prep_stations (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                name_en    TEXT NOT NULL,
+                name_vi    TEXT NOT NULL DEFAULT '',
+                color      TEXT NOT NULL DEFAULT '#607D8B',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                active     INTEGER NOT NULL DEFAULT 1
+            );
         ''')
         # Migrate: add move columns if they don't exist yet
         for _col in ['moved_to_day','moved_to_date','moved_from_day','moved_from_date','moved_reason']:
@@ -217,6 +247,15 @@ def init_prep_tables(db_path, staff_list):
                      default_assignee,is_supplier,supplier_name,sort_order)
                     VALUES (?,?,?,?,?,?,?,?,?)''',
                     (t[0],t[1],t[2],t[3],t[4],t[5],t[6],t[7],i))
+
+        # Seed prep_stations from the legacy hardcoded list on first init so
+        # existing data keeps working with the same station ids.
+        if conn.execute('SELECT COUNT(*) as c FROM prep_stations').fetchone()['c'] == 0:
+            for i, s in enumerate(PREP_STATIONS_SEED):
+                conn.execute('''INSERT INTO prep_stations
+                    (id, name_en, name_vi, color, sort_order, active)
+                    VALUES (?, ?, ?, ?, ?, 1)''',
+                    (s['id'], s['name_en'], s['name_vi'], s['color'], i))
         if not conn.execute(
             'SELECT 1 FROM prep_migrations WHERE key=?',
             ('clear_seeded_prep_assignees_v1',)).fetchone():
@@ -232,6 +271,7 @@ def init_prep_tables(db_path, staff_list):
             conn.execute(
                 'INSERT INTO prep_migrations (key) VALUES (?)',
                 ('clear_seeded_prep_assignees_v1',))
+    _refresh_stations()
 
 def _ensure_schedule(week_start_str, conn):
     """Auto-create schedule from templates if it doesn't exist yet. Always called — no manual step needed."""
@@ -1218,6 +1258,86 @@ def add_template():
              active_days, request.form.get('default_assignee',''),
              1 if request.form.get('is_supplier') else 0, request.form.get('supplier_name','')))
     return redirect(url_for('prep.prep_templates_view'))
+
+# ── Stations CRUD ─────────────────────────────────────────────────────────────
+
+def _clean_color(value, fallback='#607D8B'):
+    v = (value or '').strip()
+    if len(v) == 7 and v.startswith('#'):
+        try:
+            int(v[1:], 16)
+            return v.upper()
+        except ValueError:
+            pass
+    return fallback
+
+
+@prep.route('/stations/add', methods=['POST'])
+@_admin_required
+def add_station():
+    name_en = request.form.get('name_en', '').strip()
+    name_vi = request.form.get('name_vi', '').strip()
+    color   = _clean_color(request.form.get('color', ''))
+    if not name_en:
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({'error': 'Section name required'}), 400
+        return redirect(request.referrer or url_for('prep.prep_today'))
+    with _get_db() as conn:
+        next_order = conn.execute(
+            'SELECT COALESCE(MAX(sort_order), -1) + 1 as n FROM prep_stations'
+        ).fetchone()['n']
+        cur = conn.execute('''INSERT INTO prep_stations
+            (name_en, name_vi, color, sort_order, active)
+            VALUES (?, ?, ?, ?, 1)''', (name_en, name_vi, color, next_order))
+        new_id = cur.lastrowid
+    _refresh_stations()
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return jsonify({'ok': True, 'id': new_id, 'name_en': name_en,
+                        'name_vi': name_vi, 'color': color})
+    return redirect(request.referrer or url_for('prep.prep_today'))
+
+
+@prep.route('/stations/<int:sid>/edit', methods=['POST'])
+@_admin_required
+def edit_station(sid):
+    name_en = request.form.get('name_en', '').strip()
+    name_vi = request.form.get('name_vi', '').strip()
+    color   = _clean_color(request.form.get('color', ''))
+    if not name_en:
+        return jsonify({'error': 'Section name required'}), 400
+    with _get_db() as conn:
+        row = conn.execute('SELECT 1 FROM prep_stations WHERE id=?', (sid,)).fetchone()
+        if not row:
+            return jsonify({'error': 'Section not found'}), 404
+        conn.execute('UPDATE prep_stations SET name_en=?, name_vi=?, color=? WHERE id=?',
+                     (name_en, name_vi, color, sid))
+    _refresh_stations()
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return jsonify({'ok': True, 'id': sid, 'name_en': name_en,
+                        'name_vi': name_vi, 'color': color})
+    return redirect(request.referrer or url_for('prep.prep_today'))
+
+
+@prep.route('/stations/<int:sid>/delete', methods=['POST'])
+@_admin_required
+def delete_station(sid):
+    with _get_db() as conn:
+        task_count = conn.execute(
+            'SELECT COUNT(*) as c FROM prep_task_templates WHERE station_id=?',
+            (sid,)).fetchone()['c']
+        if task_count > 0:
+            return jsonify({
+                'error': f'Cannot delete: this section still has {task_count} task(s). '
+                         f'Move or delete those tasks first.'
+            }), 400
+        # Soft delete: mark inactive so any historical data referencing the id
+        # still resolves to a name. Hard delete would orphan past weeks.
+        conn.execute('UPDATE prep_stations SET active=0 WHERE id=?', (sid,))
+    _refresh_stations()
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return jsonify({'ok': True})
+    return redirect(request.referrer or url_for('prep.prep_today'))
+
 
 @prep.route('/templates/<int:tid>/edit', methods=['POST'])
 @_admin_required
