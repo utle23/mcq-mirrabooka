@@ -476,6 +476,514 @@ def send_notification(event_type: str, subject: str, lines: list[str],
             pass
 
 
+# ── Daily digest ──────────────────────────────────────────────────────────────
+
+import secrets
+
+
+def get_or_create_digest_token() -> str:
+    """Return the secret token used to authenticate the public digest cron URL.
+    Creates one on first use."""
+    with _conn() as conn:
+        # Reuse the email_log table's existence as a "table ready" signal; ensure
+        # a tiny key/value table for misc app config exists.
+        conn.execute('''CREATE TABLE IF NOT EXISTS app_config (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL DEFAULT ''
+        )''')
+        row = conn.execute('SELECT value FROM app_config WHERE key=?', ('digest_token',)).fetchone()
+        if row and row['value']:
+            return row['value']
+        new_tok = secrets.token_urlsafe(24)
+        conn.execute('INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)',
+                     ('digest_token', new_tok))
+        return new_tok
+
+
+def regenerate_digest_token() -> str:
+    new_tok = secrets.token_urlsafe(24)
+    with _conn() as conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS app_config (
+            key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')''')
+        conn.execute('INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)',
+                     ('digest_token', new_tok))
+    return new_tok
+
+
+def collect_daily_digest(target_date: str, checklists_meta: dict | None = None,
+                          temperatures_meta: dict | None = None,
+                          issue_categories: dict | None = None) -> dict:
+    """Aggregate everything that happened on `target_date` (YYYY-MM-DD).
+
+    `*_meta` dicts are the same CHECKLISTS / TEMPERATURES / ISSUE_CATEGORIES
+    constants from app.py — passed in so this module doesn't depend on app.
+    """
+    checklists_meta   = checklists_meta or {}
+    temperatures_meta = temperatures_meta or {}
+    issue_categories  = issue_categories or {}
+
+    with _conn() as conn:
+        # ── Checklists: per (type, section) ──
+        chk_rows = [dict(r) for r in conn.execute('''
+            SELECT cs.*,
+                   (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id) as total_tasks,
+                   (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id AND done=1) as done_tasks,
+                   (SELECT COUNT(*) FROM checklist_photos WHERE session_id=cs.id) as photo_count
+            FROM checklist_sessions cs WHERE cs.date=? ORDER BY cs.type, cs.section
+        ''', (target_date,)).fetchall()]
+
+        # Build matrix: which (type, section) pairs got done, which didn't.
+        checklist_matrix = []
+        for chk_key, chk in checklists_meta.items():
+            row = {
+                'key':   chk_key,
+                'title': chk.get('title', chk_key),
+                'color': chk.get('color', '#888'),
+                'opening': None,
+                'closing': None,
+            }
+            for r in chk_rows:
+                if r['type'] == chk_key:
+                    row[r['section']] = r
+            checklist_matrix.append(row)
+
+        chk_total_done = sum(1 for r in chk_rows)
+        chk_total_late = sum(1 for r in chk_rows if r.get('is_late'))
+        chk_verified   = sum(1 for r in chk_rows if r.get('verified'))
+        # Expected = 2 sections per checklist type
+        chk_expected   = 2 * len(checklists_meta) if checklists_meta else 0
+
+        # ── Temperatures ──
+        temp_rows = [dict(r) for r in conn.execute('''
+            SELECT ts.*,
+                   (SELECT COUNT(*) FROM temp_readings WHERE session_id=ts.id) AS reading_count,
+                   (SELECT COUNT(*) FROM temp_readings tr WHERE tr.session_id=ts.id AND tr.discarded='Y') AS discarded
+            FROM temp_sessions ts WHERE ts.date=? ORDER BY ts.type
+        ''', (target_date,)).fetchall()]
+
+        # Out-of-zone readings
+        oos = [dict(r) for r in conn.execute('''
+            SELECT ts.type as temp_type, tr.food_name,
+                   tr.c1_temp, tr.c2_temp, tr.c3_temp, tr.c4_temp, tr.c5_temp
+            FROM temp_readings tr JOIN temp_sessions ts ON ts.id=tr.session_id
+            WHERE ts.date=?''', (target_date,)).fetchall()]
+        oos_flagged = []
+        for r in oos:
+            bad = []
+            for n in range(1, 6):
+                v = r.get(f'c{n}_temp')
+                if v is not None and (v < 5 or v > 60):
+                    bad.append(f'{v}°C')
+            if bad:
+                oos_flagged.append({
+                    'food': r['food_name'],
+                    'type': temperatures_meta.get(r['temp_type'], {}).get('title', r['temp_type']),
+                    'readings': bad,
+                })
+
+        temp_matrix = []
+        for t_key, t_meta in temperatures_meta.items():
+            row = {'key': t_key, 'title': t_meta.get('title', t_key),
+                   'color': t_meta.get('color', '#888'), 'session': None}
+            for r in temp_rows:
+                if r['type'] == t_key:
+                    row['session'] = r
+            temp_matrix.append(row)
+
+        # ── Issues reported today ──
+        issues_today = [dict(r) for r in conn.execute(
+            'SELECT * FROM issue_reports WHERE date=? ORDER BY priority DESC, id DESC',
+            (target_date,)).fetchall()]
+        for it in issues_today:
+            it['category_label'] = issue_categories.get(it['category'], {}).get('label', it['category'])
+
+        # ── Violations logged today ──
+        violations_today = [dict(r) for r in conn.execute('''
+            SELECT sv.*, vr.title as rule_title, vr.category as rule_category
+            FROM staff_violations sv LEFT JOIN violation_rules vr ON vr.id = sv.rule_id
+            WHERE sv.incident_date=? ORDER BY sv.severity DESC, sv.id DESC
+        ''', (target_date,)).fetchall()]
+
+        # ── Training sessions today ──
+        training_today = []
+        try:
+            training_today = [dict(r) for r in conn.execute('''
+                SELECT ts.*,
+                       (SELECT COUNT(*) FROM training_session_items WHERE session_id=ts.id AND status='achieved') AS achieved,
+                       (SELECT COUNT(*) FROM training_session_items WHERE session_id=ts.id AND status='needs_practice') AS practice
+                FROM training_sessions ts WHERE ts.session_date=? ORDER BY ts.id DESC
+            ''', (target_date,)).fetchall()]
+        except sqlite3.OperationalError:
+            pass
+
+        # ── Pastry deliveries (any condition != 'good') ──
+        pastry_alerts = []
+        try:
+            pastry_alerts = [dict(r) for r in conn.execute('''
+                SELECT pd.*, pi.name as item_name
+                FROM pastry_delivery pd LEFT JOIN pastry_items pi ON pi.id=pd.item_id
+                WHERE pd.date=? AND pd.condition NOT IN ('', 'good')
+                ORDER BY pd.id DESC
+            ''', (target_date,)).fetchall()]
+        except sqlite3.OperationalError:
+            pass
+
+    return {
+        'date': target_date,
+        'checklist_matrix': checklist_matrix,
+        'chk_total_done':   chk_total_done,
+        'chk_total_late':   chk_total_late,
+        'chk_verified':     chk_verified,
+        'chk_expected':     chk_expected,
+        'temp_matrix':      temp_matrix,
+        'temp_count':       len(temp_rows),
+        'temp_expected':    len(temperatures_meta) if temperatures_meta else 0,
+        'oos_flagged':      oos_flagged,
+        'issues':           issues_today,
+        'violations':       violations_today,
+        'training':         training_today,
+        'pastry_alerts':    pastry_alerts,
+    }
+
+
+def _digest_kpi_card(label: str, value: str, color: str, sublabel: str = '') -> str:
+    sub = f'<div style="font-size:10px;color:#999;margin-top:2px">{escape(sublabel)}</div>' if sublabel else ''
+    return (
+        f'<td style="padding:6px;width:25%;vertical-align:top">'
+        f'<div style="background:#fff;border:1px solid #eef0f3;border-radius:8px;'
+        f'padding:14px;text-align:center;border-top:3px solid {color}">'
+        f'<div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.1em;font-weight:600">{escape(label)}</div>'
+        f'<div style="font-size:22px;font-weight:800;color:{color};margin-top:4px">{escape(value)}</div>'
+        f'{sub}'
+        f'</div></td>')
+
+
+def _digest_section_html(title: str, color: str, icon_emoji: str, body_html: str) -> str:
+    return (
+        f'<div style="margin-top:22px">'
+        f'<div style="font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:#666;font-weight:700;margin-bottom:8px">'
+        f'<span style="display:inline-block;width:8px;height:8px;background:{color};border-radius:50%;margin-right:8px;vertical-align:middle"></span>'
+        f'{icon_emoji} {escape(title)}'
+        f'</div>'
+        f'{body_html}'
+        f'</div>')
+
+
+def build_digest_html(data: dict, base_url: str = '') -> str:
+    """Render the day's data dict into a polished HTML email."""
+    date_str = data['date']
+    try:
+        date_pretty = datetime.strptime(date_str, '%Y-%m-%d').strftime('%a %d %b %Y')
+    except Exception:
+        date_pretty = date_str
+
+    # Top KPIs
+    chk_pct = round(data['chk_total_done'] / data['chk_expected'] * 100) if data['chk_expected'] else 0
+    kpi_cards = (
+        _digest_kpi_card('Checklists', f"{data['chk_total_done']} / {data['chk_expected']}",
+                         '#2E7D32', f'{chk_pct}% complete') +
+        _digest_kpi_card('Temperature Records', f"{data['temp_count']} / {data['temp_expected']}",
+                         '#D84315', f'{len(data["oos_flagged"])} out-of-zone') +
+        _digest_kpi_card('Issues Reported', str(len(data['issues'])),
+                         '#E65100', f'{sum(1 for i in data["issues"] if i.get("status")=="open")} still open') +
+        _digest_kpi_card('Violations', str(len(data['violations'])),
+                         '#C62828', f'{len(data["training"])} training sessions')
+    )
+
+    # Checklist matrix
+    chk_rows = []
+    for row in data['checklist_matrix']:
+        op = row.get('opening'); cl = row.get('closing')
+        def _cell(sess):
+            if not sess:
+                return ('<td style="padding:8px;text-align:center;background:#fff;border:1px solid #eef0f3;'
+                        'color:#bbb;font-size:12px">— missing</td>')
+            badge = ''
+            if sess.get('is_late'):
+                badge = '<span style="background:#C62828;color:#fff;font-size:9px;padding:1px 6px;border-radius:8px;font-weight:700;margin-left:4px">LATE</span>'
+            elif sess.get('verified'):
+                badge = '<span style="background:#2E7D32;color:#fff;font-size:9px;padding:1px 6px;border-radius:8px;font-weight:700;margin-left:4px">✓ VERIFIED</span>'
+            pct = round(sess['done_tasks'] / sess['total_tasks'] * 100) if sess.get('total_tasks') else 0
+            return (f'<td style="padding:8px;background:#F1F8E9;border:1px solid #C5E1A5;color:#1B5E20;font-size:12px">'
+                    f'<div style="font-weight:700">{pct}%{badge}</div>'
+                    f'<div style="color:#666;font-size:11px;margin-top:2px">'
+                    f'{escape(sess.get("submitted_by") or "—")}'
+                    f'</div></td>')
+        chk_rows.append(
+            f'<tr>'
+            f'<td style="padding:8px;background:#fafafa;border:1px solid #eef0f3;font-weight:700;color:#1A1A2E;font-size:12px">'
+            f'<span style="display:inline-block;width:10px;height:10px;background:{row["color"]};border-radius:2px;margin-right:6px;vertical-align:middle"></span>'
+            f'{escape(row["title"])}</td>'
+            f'{_cell(op)}{_cell(cl)}'
+            f'</tr>'
+        )
+    checklist_html = (
+        '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse">'
+        '<tr>'
+        '<th style="padding:8px;background:#1A1A2E;color:#fff;font-size:11px;text-align:left;border:1px solid #1A1A2E">Station</th>'
+        '<th style="padding:8px;background:#1A1A2E;color:#fff;font-size:11px;text-align:center;border:1px solid #1A1A2E">Opening</th>'
+        '<th style="padding:8px;background:#1A1A2E;color:#fff;font-size:11px;text-align:center;border:1px solid #1A1A2E">Closing</th>'
+        '</tr>'
+        + ''.join(chk_rows) +
+        '</table>'
+    )
+
+    # Temperature
+    temp_rows = []
+    for row in data['temp_matrix']:
+        sess = row.get('session')
+        if sess:
+            disc = sess.get('discarded') or 0
+            label = f'{sess["reading_count"]} foods'
+            if disc:
+                label += f' · {disc} discarded'
+            cell = (f'<td style="padding:8px;background:#F1F8E9;border:1px solid #C5E1A5;font-size:12px">'
+                    f'<div style="font-weight:700;color:#1B5E20">✓ {escape(label)}</div>'
+                    f'<div style="color:#666;font-size:11px;margin-top:2px">by {escape(sess.get("recorded_by") or "—")}</div>'
+                    f'</td>')
+        else:
+            cell = ('<td style="padding:8px;text-align:center;background:#fff;border:1px solid #eef0f3;'
+                    'color:#bbb;font-size:12px">— missing</td>')
+        temp_rows.append(
+            f'<tr>'
+            f'<td style="padding:8px;background:#fafafa;border:1px solid #eef0f3;font-weight:700;color:#1A1A2E;font-size:12px">'
+            f'<span style="display:inline-block;width:10px;height:10px;background:{row["color"]};border-radius:2px;margin-right:6px;vertical-align:middle"></span>'
+            f'{escape(row["title"])}</td>'
+            f'{cell}</tr>'
+        )
+    temp_html = (
+        '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse">'
+        '<tr>'
+        '<th style="padding:8px;background:#1A1A2E;color:#fff;font-size:11px;text-align:left;border:1px solid #1A1A2E">Station</th>'
+        '<th style="padding:8px;background:#1A1A2E;color:#fff;font-size:11px;text-align:center;border:1px solid #1A1A2E">Status</th>'
+        '</tr>' + ''.join(temp_rows) + '</table>'
+    )
+
+    # Out-of-zone temperature alerts
+    oos_html = ''
+    if data['oos_flagged']:
+        oos_lines = ''.join(
+            f'<li style="padding:4px 0;color:#B71C1C"><b>{escape(o["food"])}</b> ({escape(o["type"])}): '
+            f'{escape(", ".join(o["readings"]))}</li>'
+            for o in data['oos_flagged'][:20]
+        )
+        oos_html = (
+            f'<div style="background:#FFEBEE;border-left:3px solid #C62828;padding:10px 14px;border-radius:6px;margin-top:8px">'
+            f'<div style="font-size:11px;font-weight:700;color:#B71C1C;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">'
+            f'⚠ Out-of-zone temperature readings ({len(data["oos_flagged"])})</div>'
+            f'<ul style="margin:0;padding-left:18px;font-size:13px">{oos_lines}</ul>'
+            f'</div>'
+        )
+
+    # Issues
+    issues_html = ''
+    if data['issues']:
+        rows = []
+        for it in data['issues']:
+            pri_color = {'urgent': '#C62828', 'high': '#E65100', 'normal': '#1565C0', 'low': '#757575'}.get(
+                (it.get('priority') or 'normal').lower(), '#1565C0')
+            status_color = {'open': '#C62828', 'in_progress': '#E65100', 'resolved': '#2E7D32'}.get(
+                it.get('status'), '#757575')
+            rows.append(
+                f'<tr>'
+                f'<td style="padding:8px;border-bottom:1px solid #eef0f3;font-size:12px">'
+                f'<span style="background:{pri_color};color:#fff;font-size:9px;font-weight:700;padding:2px 8px;border-radius:10px">{escape((it.get("priority") or "normal").upper())}</span></td>'
+                f'<td style="padding:8px;border-bottom:1px solid #eef0f3;font-size:12px">{escape(it.get("category_label") or "")}</td>'
+                f'<td style="padding:8px;border-bottom:1px solid #eef0f3;font-size:12px"><b>{escape(it.get("title") or "")}</b><div style="color:#666;font-size:11px">{escape((it.get("description") or "")[:120])}{"…" if len(it.get("description") or "") > 120 else ""}</div></td>'
+                f'<td style="padding:8px;border-bottom:1px solid #eef0f3;font-size:12px">{escape(it.get("reported_by") or "—")}</td>'
+                f'<td style="padding:8px;border-bottom:1px solid #eef0f3;font-size:12px"><span style="color:{status_color};font-weight:700">{escape((it.get("status") or "open").replace("_"," ").title())}</span></td>'
+                f'</tr>'
+            )
+        issues_html = (
+            '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;border:1px solid #eef0f3;border-radius:6px;overflow:hidden">'
+            '<tr><th style="padding:8px;background:#FFF3E0;font-size:11px;text-align:left">Priority</th>'
+            '<th style="padding:8px;background:#FFF3E0;font-size:11px;text-align:left">Category</th>'
+            '<th style="padding:8px;background:#FFF3E0;font-size:11px;text-align:left">Issue</th>'
+            '<th style="padding:8px;background:#FFF3E0;font-size:11px;text-align:left">Reporter</th>'
+            '<th style="padding:8px;background:#FFF3E0;font-size:11px;text-align:left">Status</th></tr>'
+            + ''.join(rows) + '</table>'
+        )
+    else:
+        issues_html = '<div style="padding:14px;background:#F1F8E9;border-radius:6px;color:#1B5E20;font-size:13px">✓ No issues reported today.</div>'
+
+    # Violations
+    viol_html = ''
+    if data['violations']:
+        rows = []
+        for v in data['violations']:
+            sev_color = {'minor': '#1565C0', 'moderate': '#E65100',
+                         'serious': '#C62828', 'critical': '#B71C1C'}.get(v.get('severity'), '#757575')
+            rows.append(
+                f'<tr>'
+                f'<td style="padding:8px;border-bottom:1px solid #eef0f3;font-size:12px">'
+                f'<span style="background:{sev_color};color:#fff;font-size:9px;font-weight:700;padding:2px 8px;border-radius:10px">{escape((v.get("severity") or "").upper())}</span></td>'
+                f'<td style="padding:8px;border-bottom:1px solid #eef0f3;font-size:12px"><b>{escape(v.get("staff_name") or "—")}</b></td>'
+                f'<td style="padding:8px;border-bottom:1px solid #eef0f3;font-size:12px">{escape(v.get("rule_title") or "—")}</td>'
+                f'<td style="padding:8px;border-bottom:1px solid #eef0f3;font-size:12px;color:#666">{escape((v.get("description") or "")[:100])}{"…" if len(v.get("description") or "") > 100 else ""}</td>'
+                f'</tr>'
+            )
+        viol_html = (
+            '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;border:1px solid #eef0f3;border-radius:6px;overflow:hidden">'
+            '<tr><th style="padding:8px;background:#FFEBEE;font-size:11px;text-align:left">Severity</th>'
+            '<th style="padding:8px;background:#FFEBEE;font-size:11px;text-align:left">Staff</th>'
+            '<th style="padding:8px;background:#FFEBEE;font-size:11px;text-align:left">Rule</th>'
+            '<th style="padding:8px;background:#FFEBEE;font-size:11px;text-align:left">Details</th></tr>'
+            + ''.join(rows) + '</table>'
+        )
+    else:
+        viol_html = '<div style="padding:14px;background:#F1F8E9;border-radius:6px;color:#1B5E20;font-size:13px">✓ No violations logged today.</div>'
+
+    # Training
+    training_html = ''
+    if data['training']:
+        rows = []
+        for t in data['training']:
+            rating_label = (t.get('overall_rating') or '').replace('_', ' ').title() or '—'
+            rows.append(
+                f'<tr>'
+                f'<td style="padding:8px;border-bottom:1px solid #eef0f3;font-size:12px"><b>{escape(t.get("trainee_name") or "—")}</b></td>'
+                f'<td style="padding:8px;border-bottom:1px solid #eef0f3;font-size:12px">{escape(t.get("trainee_role") or "—")}</td>'
+                f'<td style="padding:8px;border-bottom:1px solid #eef0f3;font-size:12px;color:#666">by {escape(t.get("trainer_name") or "—")}</td>'
+                f'<td style="padding:8px;border-bottom:1px solid #eef0f3;font-size:12px"><span style="color:#2E7D32;font-weight:700">{t.get("achieved", 0)}</span> achieved · <span style="color:#E65100">{t.get("practice", 0)}</span> practice</td>'
+                f'<td style="padding:8px;border-bottom:1px solid #eef0f3;font-size:12px">{escape(rating_label)}</td>'
+                f'</tr>'
+            )
+        training_html = (
+            '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;border:1px solid #eef0f3;border-radius:6px;overflow:hidden">'
+            '<tr><th style="padding:8px;background:#F3E5F5;font-size:11px;text-align:left">Trainee</th>'
+            '<th style="padding:8px;background:#F3E5F5;font-size:11px;text-align:left">Role</th>'
+            '<th style="padding:8px;background:#F3E5F5;font-size:11px;text-align:left">Trainer</th>'
+            '<th style="padding:8px;background:#F3E5F5;font-size:11px;text-align:left">Topics</th>'
+            '<th style="padding:8px;background:#F3E5F5;font-size:11px;text-align:left">Rating</th></tr>'
+            + ''.join(rows) + '</table>'
+        )
+
+    # Pastry delivery alerts
+    pastry_html = ''
+    if data['pastry_alerts']:
+        items = ''.join(
+            f'<li style="padding:4px 0"><b>{escape(p.get("item_name") or "—")}</b>: '
+            f'condition <span style="background:#FB8C00;color:#fff;padding:1px 7px;border-radius:8px;font-weight:700;font-size:11px">{escape((p.get("condition") or "").upper())}</span>'
+            f' — {escape(p.get("notes") or "no notes")}</li>'
+            for p in data['pastry_alerts']
+        )
+        pastry_html = (
+            '<div style="background:#FFF3E0;border-left:3px solid #FB8C00;padding:10px 14px;border-radius:6px">'
+            '<ul style="margin:0;padding-left:18px;font-size:13px">' + items + '</ul></div>'
+        )
+
+    # Link
+    link_html = ''
+    if base_url:
+        link_html = (
+            f'<div style="margin-top:26px;text-align:center">'
+            f'<a href="{escape(base_url.rstrip("/"))}/" style="display:inline-block;background:#1A1A2E;color:#fff;'
+            f'text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:700;font-size:14px">Open MCQ Web →</a>'
+            f'</div>')
+
+    sections = []
+    sections.append(_digest_section_html('Daily Checklists', '#2E7D32', '📋', checklist_html))
+    sections.append(_digest_section_html('Temperature Records', '#D84315', '🌡', temp_html + (f'<div style="margin-top:8px">{oos_html}</div>' if oos_html else '')))
+    sections.append(_digest_section_html('Issues Reported', '#E65100', '⚠', issues_html))
+    sections.append(_digest_section_html('Staff Violations', '#C62828', '🚨', viol_html))
+    if training_html:
+        sections.append(_digest_section_html('Training Sessions', '#6A1B9A', '🎓', training_html))
+    if pastry_html:
+        sections.append(_digest_section_html('Pastry Delivery Alerts', '#FB8C00', '🍞', pastry_html))
+
+    return f'''<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MCQ Daily Digest — {escape(date_pretty)}</title></head>
+<body style="margin:0;padding:0;background:#eef1f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif">
+<table cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#eef1f4">
+<tr><td align="center" style="padding:28px 12px">
+<table cellpadding="0" cellspacing="0" border="0" width="680" style="max-width:680px;background:#ffffff;
+        border-radius:14px;overflow:hidden;box-shadow:0 4px 24px rgba(20,30,50,.08)">
+
+  <tr><td style="background:linear-gradient(135deg,#1A1A2E 0%,#0D0D1A 100%);padding:26px 30px;color:#fff">
+    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.2em;opacity:.7;font-weight:600">
+      MCQ Mirrabooka Cafe
+    </div>
+    <div style="font-size:22px;font-weight:700;margin-top:6px">Daily Operations Digest</div>
+    <div style="font-size:14px;opacity:.85;margin-top:4px">{escape(date_pretty)}</div>
+  </td></tr>
+
+  <tr><td style="padding:18px 22px">
+    <table cellpadding="0" cellspacing="0" border="0" width="100%"><tr>{kpi_cards}</tr></table>
+
+    {''.join(sections)}
+
+    {link_html}
+  </td></tr>
+
+  <tr><td style="padding:18px 28px 22px;background:#fafbfc;border-top:1px solid #eef0f3;
+          color:#90969f;font-size:11px;text-align:center;line-height:1.6">
+    <div style="font-weight:600;color:#5a6068">MCQ Mirrabooka Cafe management system</div>
+    <div>Automatic daily digest · generated {datetime.now().strftime('%a %d %b %Y · %H:%M')}</div>
+  </td></tr>
+
+</table>
+</td></tr></table>
+</body></html>'''
+
+
+def send_daily_digest(target_date: str, checklists_meta: dict,
+                       temperatures_meta: dict, issue_categories: dict) -> tuple[bool, str]:
+    """Build + send the digest synchronously. Returns (ok, message).
+    Sends to recipients who have ANY event opt-in enabled."""
+    settings = get_settings()
+    if not _is_configured(settings):
+        return False, 'Email service not configured.'
+    # Anyone who would receive at least one event type also gets the digest.
+    with _conn() as conn:
+        rows = conn.execute('''SELECT email FROM email_recipients WHERE active=1 AND (
+            notify_checklist=1 OR notify_temperature=1 OR notify_violation=1 OR
+            notify_issue=1 OR notify_prep=1 OR notify_training=1 OR
+            notify_pastry=1 OR notify_jobs=1) ORDER BY email''').fetchall()
+    recipients = [r['email'] for r in rows]
+    if not recipients:
+        return False, 'No active recipients.'
+
+    data = collect_daily_digest(target_date,
+                                 checklists_meta=checklists_meta,
+                                 temperatures_meta=temperatures_meta,
+                                 issue_categories=issue_categories)
+    html = build_digest_html(data, base_url=settings.get('base_url') or '')
+
+    try:
+        date_pretty = datetime.strptime(target_date, '%Y-%m-%d').strftime('%a %d %b %Y')
+    except Exception:
+        date_pretty = target_date
+
+    text = (f'MCQ Mirrabooka — Daily Operations Digest\n'
+            f'{date_pretty}\n\n'
+            f'Checklists done: {data["chk_total_done"]} / {data["chk_expected"]} '
+            f'(late: {data["chk_total_late"]}, verified: {data["chk_verified"]})\n'
+            f'Temperatures done: {data["temp_count"]} / {data["temp_expected"]} '
+            f'(out-of-zone readings: {len(data["oos_flagged"])})\n'
+            f'Issues reported: {len(data["issues"])}\n'
+            f'Violations logged: {len(data["violations"])}\n'
+            f'Training sessions: {len(data["training"])}\n'
+            f'Pastry alerts: {len(data["pastry_alerts"])}\n\n'
+            f'Open MCQ Web: {settings.get("base_url") or "(set base URL in Email Settings)"}\n')
+
+    payload = {
+        'sender':      {'name': settings.get('from_name') or 'MCQ Mirrabooka',
+                        'email': settings['sender_email']},
+        'to':          [{'email': r} for r in recipients],
+        'subject':     f'[MCQ] Daily Digest — {date_pretty}',
+        'htmlContent': html,
+        'textContent': text,
+    }
+    ok, msg = _brevo_post(payload, settings['brevo_api_key'])
+    _log('digest', f'Daily Digest — {date_pretty}', recipients,
+         'sent' if ok else 'failed', '' if ok else msg)
+    if ok:
+        return True, f'Digest sent to {len(recipients)} recipient(s).'
+    return False, msg
+
+
 def send_test_email(to_email: str) -> tuple[bool, str]:
     """Synchronous test send. Returns (success, message)."""
     settings = get_settings()

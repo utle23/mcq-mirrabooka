@@ -2,8 +2,22 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>{% block title %}MCQ Mirrabooka{% endblock %} — Restaurant Management</title>
+
+<!-- PWA / Install on phone -->
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#C0392B">
+<meta name="application-name" content="MCQ Cafe">
+<link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/logo.png">
+<link rel="shortcut icon" href="/static/logo.png">
+<!-- iOS Safari "Add to Home Screen" -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="MCQ Cafe">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
 <link href="/static/style.css" rel="stylesheet">
@@ -174,6 +188,14 @@
       {% endif %}
 
       <div class="sidebar-footer">
+        <a href="#" id="pwa-install-btn" onclick="installPwa();return false;"
+           class="nav-link-item" style="display:none;border-left-color:#1565C0;color:#1565C0">
+          <i class="fas fa-mobile-screen fa-fw"></i><span>Install MCQ App</span>
+        </a>
+        <a href="#" onclick="installPwa();return false;"
+           class="nav-link-item d-md-none" style="border-left-color:#1565C0;color:#1565C0">
+          <i class="fas fa-mobile-screen fa-fw"></i><span>Add to Home Screen</span>
+        </a>
         <a href="/logout" class="nav-link-item logout-btn">
           <i class="fas fa-sign-out-alt fa-fw"></i><span>Logout</span>
         </a>
@@ -253,6 +275,42 @@ function closeLightbox(){
   document.getElementById('lightbox-img').src = '';
 }
 document.addEventListener('keydown', e => { if(e.key==='Escape') closeLightbox(); });
+
+// ── PWA: Service worker + install prompt ──
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/static/sw.js', { scope: '/' })
+      .catch(err => console.warn('SW registration failed:', err));
+  });
+}
+
+// Chrome / Edge: capture the install event and offer a custom "Install MCQ app" button
+let _deferredPwaPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  _deferredPwaPrompt = e;
+  const btn = document.getElementById('pwa-install-btn');
+  if (btn) btn.style.display = 'inline-flex';
+});
+function installPwa() {
+  if (!_deferredPwaPrompt) {
+    // iOS Safari: no beforeinstallprompt — show manual instructions instead.
+    alert('To install MCQ Cafe on your phone:\n\n' +
+          '• iPhone (Safari): tap the Share button (□↑) → "Add to Home Screen"\n' +
+          '• Android (Chrome): tap the ⋮ menu → "Install app" / "Add to Home Screen"');
+    return;
+  }
+  _deferredPwaPrompt.prompt();
+  _deferredPwaPrompt.userChoice.finally(() => {
+    _deferredPwaPrompt = null;
+    const btn = document.getElementById('pwa-install-btn');
+    if (btn) btn.style.display = 'none';
+  });
+}
+window.addEventListener('appinstalled', () => {
+  const btn = document.getElementById('pwa-install-btn');
+  if (btn) btn.style.display = 'none';
+});
 </script>
 {% block scripts %}{% endblock %}
 </body>

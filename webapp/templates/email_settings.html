@@ -251,6 +251,59 @@
   </div>
 </div>
 
+<!-- DAILY DIGEST -->
+<div class="card-section">
+  <div class="card-section-head">
+    <i class="fas fa-clock"></i>
+    <span class="fw-semibold">Daily Digest (7 PM end-of-day summary)</span>
+  </div>
+  <div class="card-section-body">
+    <p class="text-muted small mb-3">
+      One comprehensive email per day summarising every checklist, temperature record, issue, violation, training session and pastry alert — sent to every active recipient. Saves your inbox from per-event emails while giving you the full picture.
+    </p>
+
+    <!-- Send now / preview -->
+    <div class="d-flex gap-2 flex-wrap mb-3 align-items-end">
+      <div>
+        <label class="form-label small fw-semibold mb-1">For date</label>
+        <input type="date" id="digestDate" class="form-control form-control-sm" value="{{ today }}">
+      </div>
+      <button type="button" class="btn btn-sm btn-success" onclick="sendDigestNow()">
+        <i class="fas fa-paper-plane me-1"></i>Send digest now
+      </button>
+      <a id="digestPreview" href="/admin/email-settings/digest/preview?date={{ today }}" target="_blank"
+         class="btn btn-sm btn-outline-secondary">
+        <i class="fas fa-eye me-1"></i>Preview HTML
+      </a>
+    </div>
+    <div id="digestResult" class="small mb-3"></div>
+
+    <!-- Automatic scheduling URL -->
+    <div class="p-3" style="background:#f7f9fb;border-radius:8px;border-left:3px solid #1565C0">
+      <div class="fw-semibold small mb-2"><i class="fas fa-link me-1"></i>Cron URL (for daily automation)</div>
+      <div class="input-group input-group-sm mb-2">
+        <input type="text" class="form-control" id="cronUrl" readonly
+               value="{{ (settings.base_url or 'https://YOUR-DOMAIN') }}/cron/daily-digest?token={{ digest_token }}">
+        <button class="btn btn-outline-primary" type="button" onclick="copyCronUrl()">
+          <i class="fas fa-copy"></i> Copy
+        </button>
+        <button class="btn btn-outline-warning" type="button" onclick="regenerateToken()"
+                title="Invalidate the old URL and generate a new one">
+          <i class="fas fa-rotate"></i>
+        </button>
+      </div>
+      <div class="text-muted small">
+        <strong>To schedule daily at 7 PM:</strong>
+        <ol class="mb-0 mt-1 ps-3" style="font-size:0.82rem">
+          <li><strong>If you have PythonAnywhere paid plan:</strong> go to <em>Tasks</em> tab → "Scheduled task" → command <code>curl "&lt;cron URL&gt;"</code> → time <code>19:00</code>.</li>
+          <li><strong>If you're on free tier:</strong> sign up at <a href="https://cron-job.org/" target="_blank">cron-job.org</a> (free) → "Create cronjob" → paste the URL above → set time 19:00 Perth/Mirrabooka time → save.</li>
+          <li>Test once now using "Send digest now" before scheduling.</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- RECENT LOG -->
 {% if log %}
 <div class="card-section">
@@ -315,6 +368,63 @@ function sendTest() {
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+}
+
+function sendDigestNow() {
+  const d = document.getElementById('digestDate').value;
+  const result = document.getElementById('digestResult');
+  if (!confirm(`Send daily digest email for ${d} to all active recipients now?`)) return;
+  result.innerHTML = '<span class="text-muted"><i class="fas fa-spinner fa-spin me-1"></i>Generating and sending digest…</span>';
+  const fd = new FormData();
+  fd.append('date', d);
+  fetch('/admin/email-settings/digest/send-now', { method: 'POST', body: fd })
+    .then(r => r.json())
+    .then(data => {
+      if (data.ok) {
+        result.innerHTML = '<span class="text-success"><i class="fas fa-check-circle me-1"></i>' + escapeHtml(data.message) + '</span>';
+      } else {
+        result.innerHTML = '<span class="text-danger"><i class="fas fa-circle-exclamation me-1"></i>' + escapeHtml(data.message) + '</span>';
+      }
+    })
+    .catch(err => {
+      result.innerHTML = '<span class="text-danger">Network error: ' + err + '</span>';
+    });
+}
+
+// Keep the preview link in sync with the date picker.
+document.addEventListener('DOMContentLoaded', () => {
+  const dateInp = document.getElementById('digestDate');
+  if (dateInp) {
+    dateInp.addEventListener('change', () => {
+      const link = document.getElementById('digestPreview');
+      link.href = '/admin/email-settings/digest/preview?date=' + encodeURIComponent(dateInp.value);
+    });
+  }
+});
+
+function copyCronUrl() {
+  const inp = document.getElementById('cronUrl');
+  inp.select(); inp.setSelectionRange(0, 99999);
+  navigator.clipboard.writeText(inp.value).then(() => {
+    alert('Cron URL copied. Paste into cron-job.org or PythonAnywhere scheduled task.');
+  }).catch(() => {
+    document.execCommand('copy');
+    alert('Cron URL copied.');
+  });
+}
+
+function regenerateToken() {
+  if (!confirm('Regenerate the cron URL token? This will INVALIDATE the old URL — any scheduled task using it will need to be updated.')) return;
+  fetch('/admin/email-settings/digest/regenerate-token', { method: 'POST' })
+    .then(r => r.json())
+    .then(d => {
+      if (d.token) {
+        alert('New token generated. Updating the URL field — copy and update your cron job!');
+        location.reload();
+      } else {
+        alert('Error: ' + (d.error || 'unknown'));
+      }
+    });
 }
 </script>
 {% endblock %}

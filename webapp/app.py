@@ -604,6 +604,32 @@ def init_db():
                 (rule['code'], rule['title'], rule['category'], rule['severity'],
                  rule['description'], rule['default_action'], rule['color'], rule['icon'], i))
 
+        # ── Indexes for hot query paths ─────────────────────────────────────
+        # Adding these makes /analytics, /manager, /history scale to 100k+ rows
+        # without slowdown. Safe to run on every boot — CREATE INDEX IF NOT EXISTS
+        # is idempotent and only does work the first time.
+        for ddl in [
+            'CREATE INDEX IF NOT EXISTS idx_chk_date           ON checklist_sessions(date)',
+            'CREATE INDEX IF NOT EXISTS idx_chk_type_section_date ON checklist_sessions(type, section, date)',
+            'CREATE INDEX IF NOT EXISTS idx_chk_submitted_by   ON checklist_sessions(submitted_by)',
+            'CREATE INDEX IF NOT EXISTS idx_chk_responsible    ON checklist_sessions(responsible)',
+            'CREATE INDEX IF NOT EXISTS idx_chktasks_session   ON checklist_tasks(session_id)',
+            'CREATE INDEX IF NOT EXISTS idx_chkphotos_session  ON checklist_photos(session_id)',
+            'CREATE INDEX IF NOT EXISTS idx_temp_date          ON temp_sessions(date)',
+            'CREATE INDEX IF NOT EXISTS idx_temp_type_date     ON temp_sessions(type, date)',
+            'CREATE INDEX IF NOT EXISTS idx_tempreadings_sess  ON temp_readings(session_id)',
+            'CREATE INDEX IF NOT EXISTS idx_issue_date         ON issue_reports(date)',
+            'CREATE INDEX IF NOT EXISTS idx_issue_status       ON issue_reports(status)',
+            'CREATE INDEX IF NOT EXISTS idx_viol_date          ON staff_violations(incident_date)',
+            'CREATE INDEX IF NOT EXISTS idx_viol_staff         ON staff_violations(staff_name)',
+            'CREATE INDEX IF NOT EXISTS idx_viol_status        ON staff_violations(status)',
+            'CREATE INDEX IF NOT EXISTS idx_audit_ts           ON audit_log(timestamp)',
+        ]:
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError:
+                pass
+
         # Seed temporary birthday data for staff so the giveaway workflow is usable now.
         gift_ideas = [
             'MCQ meal voucher',
@@ -626,6 +652,50 @@ def init_db():
                     (name, f'2000-{month:02d}-{day:02d}',
                      gift_ideas[seed % len(gift_ideas)], 'planned',
                      'Temporary birthday data - update when the real birthday is confirmed.'))
+
+def save_uploaded_photo(file_storage, dest_path, max_dim=1280, quality=82):
+    """Save an uploaded image, downscaling + re-encoding as JPEG when oversized.
+
+    Reduces phone photos (typically 3-5 MB, 4000×3000) down to ~150-300 KB
+    while preserving enough detail for health-inspection evidence. Falls back
+    to a plain file save if Pillow is unavailable or the image is corrupt.
+
+    Returns the FINAL filename written (may differ from dest_path if extension changed).
+    """
+    try:
+        from PIL import Image, ImageOps   # type: ignore
+    except Exception:
+        file_storage.save(dest_path)
+        return os.path.basename(dest_path)
+
+    try:
+        file_storage.stream.seek(0)
+    except Exception:
+        pass
+
+    try:
+        img = Image.open(file_storage.stream)
+        img = ImageOps.exif_transpose(img)   # respect phone rotation metadata
+        if img.mode in ('RGBA', 'LA', 'P'):
+            img = img.convert('RGB')
+        w, h = img.size
+        if max(w, h) > max_dim:
+            ratio = max_dim / float(max(w, h))
+            img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+        # Always save resized photos as JPEG — smaller and universally supported.
+        base, _ = os.path.splitext(dest_path)
+        final_path = base + '.jpg'
+        img.save(final_path, 'JPEG', quality=quality, optimize=True, progressive=True)
+        return os.path.basename(final_path)
+    except Exception:
+        # If decoding failed (corrupt / unsupported), fall back to original bytes.
+        try:
+            file_storage.stream.seek(0)
+        except Exception:
+            pass
+        file_storage.save(dest_path)
+        return os.path.basename(dest_path)
+
 
 def log_action(action, record_type, record_id, user_name, details=''):
     try:
@@ -1330,9 +1400,12 @@ def checklist_save(chk_type):
                 except: pass
             conn.execute('DELETE FROM checklist_photos WHERE session_id=?', (sid,))
             for i, f in new_photos:
-                ext  = os.path.splitext(f.filename)[1].lower()
+                ext   = os.path.splitext(f.filename)[1].lower()
                 fname = f'{sid}_{i}_{uuid.uuid4().hex[:8]}{ext}'
-                f.save(os.path.join(UPLOAD_FOLDER, fname))
+                dest  = os.path.join(UPLOAD_FOLDER, fname)
+                # save_uploaded_photo resizes large phone photos before writing;
+                # it may rewrite as .jpg, so use the returned filename.
+                fname = save_uploaded_photo(f, dest)
                 fsize = os.path.getsize(os.path.join(UPLOAD_FOLDER, fname))
                 conn.execute(
                     'INSERT INTO checklist_photos (session_id,filename,original_name,photo_number,file_size,uploaded_by) VALUES (?,?,?,?,?,?)',
@@ -3190,14 +3263,14 @@ def report_issue():
         reported_by = request.form.get('reported_by', '').strip()
         priority    = request.form.get('priority', 'normal')
         if category and title and description and reported_by:
-            # Handle optional photo
+            # Handle optional photo (resized to <=1280px JPEG)
             photo_fname = None
             f = request.files.get('photo')
             if f and f.filename and f.filename.strip():
                 ext = os.path.splitext(f.filename)[1].lower().lstrip('.')
                 if ext in ALLOWED_EXT:
-                    photo_fname = f'issue_{uuid.uuid4().hex[:12]}.{ext}'
-                    f.save(os.path.join(UPLOAD_FOLDER, photo_fname))
+                    initial = f'issue_{uuid.uuid4().hex[:12]}.{ext}'
+                    photo_fname = save_uploaded_photo(f, os.path.join(UPLOAD_FOLDER, initial))
             with get_db() as conn:
                 cur = conn.execute('''
                     INSERT INTO issue_reports (category,title,description,reported_by,branch,date,priority,photo)
@@ -3478,6 +3551,50 @@ def email_log_clear():
     return redirect(url_for('email_settings'))
 
 
+# ── Daily digest ─────────────────────────────────────────────────────────────
+
+@app.route('/admin/email-settings/digest/send-now', methods=['POST'])
+@admin_required
+def email_digest_send_now():
+    target_date = request.form.get('date', date.today().isoformat())
+    ok, msg = email_service.send_daily_digest(
+        target_date, CHECKLISTS, TEMPERATURES, ISSUE_CATEGORIES)
+    return jsonify({'ok': ok, 'message': msg})
+
+
+@app.route('/admin/email-settings/digest/preview')
+@admin_required
+def email_digest_preview():
+    """Render the digest HTML in the browser (no send)."""
+    target_date = request.args.get('date', date.today().isoformat())
+    data = email_service.collect_daily_digest(
+        target_date, CHECKLISTS, TEMPERATURES, ISSUE_CATEGORIES)
+    settings = email_service.get_settings()
+    html = email_service.build_digest_html(data, base_url=settings.get('base_url') or '')
+    return html
+
+
+@app.route('/admin/email-settings/digest/regenerate-token', methods=['POST'])
+@admin_required
+def email_digest_regenerate_token():
+    new_tok = email_service.regenerate_digest_token()
+    return jsonify({'ok': True, 'token': new_tok})
+
+
+@app.route('/cron/daily-digest')
+def cron_daily_digest():
+    """Public endpoint for external cron services to trigger the digest.
+    Authenticated by a secret token passed as ?token= ."""
+    expected = email_service.get_or_create_digest_token()
+    given = request.args.get('token', '')
+    if not given or given != expected:
+        return jsonify({'error': 'forbidden'}), 403
+    target_date = request.args.get('date', date.today().isoformat())
+    ok, msg = email_service.send_daily_digest(
+        target_date, CHECKLISTS, TEMPERATURES, ISSUE_CATEGORIES)
+    return jsonify({'ok': ok, 'date': target_date, 'message': msg})
+
+
 # ─── Email Notifications (admin) ───────────────────────────────────────────────
 
 @app.route('/admin/email-settings', methods=['GET'])
@@ -3486,9 +3603,12 @@ def email_settings():
     settings = email_service.get_settings()
     recipients = email_service.list_recipients()
     log = email_service.get_recent_log(30)
+    digest_token = email_service.get_or_create_digest_token()
     return render_template('email_settings.html',
         settings=settings, recipients=recipients, log=log,
-        event_types=email_service.EVENT_TYPES)
+        event_types=email_service.EVENT_TYPES,
+        digest_token=digest_token,
+        today=date.today().isoformat())
 
 
 @app.route('/admin/email-settings/save', methods=['POST'])
