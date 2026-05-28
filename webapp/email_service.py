@@ -223,6 +223,48 @@ PILL_KEYS = {'status': '#1565C0', 'severity': '#C62828', 'priority': '#E65100',
              'out-of-zone readings': '#C62828'}
 
 
+def _logo_bar_html(brand_subtitle: str = '') -> str:
+    """White header strip with the restaurant logo + brand name.
+    The logo URL comes from settings.base_url + /static/logo.png so the email
+    client can fetch it. If base_url is empty, falls back to a text-only header.
+    """
+    settings = get_settings()
+    base_url = (settings.get('base_url') or '').rstrip('/')
+    sub_html = (f'<div style="font-size:11px;color:#888;letter-spacing:.1em;'
+                f'text-transform:uppercase;margin-top:2px">{escape(brand_subtitle)}</div>'
+                if brand_subtitle else '')
+
+    if base_url:
+        logo_url = f'{base_url}/static/logo.png'
+        logo_img = (f'<img src="{escape(logo_url)}" alt="MCQ Mirrabooka Cafe" '
+                    f'width="54" height="54" style="display:block;border:0;'
+                    f'border-radius:8px;background:#fff">')
+    else:
+        # Fallback: a small badge "MCQ" if we have no public URL.
+        logo_img = ('<div style="width:54px;height:54px;background:#fff;'
+                    'border-radius:8px;display:inline-flex;align-items:center;'
+                    'justify-content:center;font-family:Arial Black,sans-serif;'
+                    'font-weight:900;font-size:20px;letter-spacing:.5px;'
+                    'color:#1A1A2E">MCQ</div>')
+
+    return (
+        f'<tr><td style="background:#ffffff;padding:14px 22px;'
+        f'border-bottom:1px solid #eef0f3">'
+        f'<table cellpadding="0" cellspacing="0" border="0" style="border-collapse:separate">'
+        f'<tr>'
+        f'<td style="vertical-align:middle;padding-right:14px">{logo_img}</td>'
+        f'<td style="vertical-align:middle">'
+        f'<div style="font-family:Arial Black,sans-serif;font-size:17px;font-weight:900;'
+        f'color:#1A1A2E;line-height:1.1">MCQ MIRRABOOKA <span style="color:#C0392B">CAFE</span></div>'
+        f'<div style="font-size:10px;color:#888;letter-spacing:.15em;'
+        f'text-transform:uppercase;margin-top:2px">Vietnamese Street Food</div>'
+        f'{sub_html}'
+        f'</td>'
+        f'</tr></table>'
+        f'</td></tr>'
+    )
+
+
 def _build_html(event_label: str, color: str, title: str, lines: list[str],
                 link: str = '', actor: str = '') -> str:
     dark = _darken(color, 0.75)
@@ -306,6 +348,8 @@ def _build_html(event_label: str, color: str, title: str, lines: list[str],
             f'box-shadow:0 2px 8px rgba(0,0,0,.12)">View full details in app  →</a>'
             f'</div>')
 
+    logo_bar = _logo_bar_html()
+
     return f'''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -319,11 +363,10 @@ def _build_html(event_label: str, color: str, title: str, lines: list[str],
       <table cellpadding="0" cellspacing="0" border="0" width="620" style="max-width:620px;background:#ffffff;
               border-radius:14px;overflow:hidden;box-shadow:0 4px 24px rgba(20,30,50,.08)">
 
-        <tr><td style="background:linear-gradient(135deg,{color} 0%,{dark} 100%);padding:24px 28px;color:#fff">
-          <div style="font-size:11px;text-transform:uppercase;letter-spacing:.18em;opacity:.82;font-weight:600">
-            MCQ Mirrabooka Cafe
-          </div>
-          <div style="font-size:13px;text-transform:uppercase;letter-spacing:.1em;opacity:.95;margin-top:6px;font-weight:600">
+        {logo_bar}
+
+        <tr><td style="background:linear-gradient(135deg,{color} 0%,{dark} 100%);padding:22px 28px;color:#fff">
+          <div style="font-size:12px;text-transform:uppercase;letter-spacing:.18em;opacity:.92;font-weight:600">
             {escape(event_label)}
           </div>
           <div style="font-size:20px;font-weight:700;margin-top:8px;line-height:1.35">{escape(title)}</div>
@@ -891,6 +934,8 @@ def build_digest_html(data: dict, base_url: str = '') -> str:
     if pastry_html:
         sections.append(_digest_section_html('Pastry Delivery Alerts', '#FB8C00', '🍞', pastry_html))
 
+    logo_bar = _logo_bar_html()
+
     return f'''<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -901,12 +946,14 @@ def build_digest_html(data: dict, base_url: str = '') -> str:
 <table cellpadding="0" cellspacing="0" border="0" width="680" style="max-width:680px;background:#ffffff;
         border-radius:14px;overflow:hidden;box-shadow:0 4px 24px rgba(20,30,50,.08)">
 
-  <tr><td style="background:linear-gradient(135deg,#1A1A2E 0%,#0D0D1A 100%);padding:26px 30px;color:#fff">
-    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.2em;opacity:.7;font-weight:600">
-      MCQ Mirrabooka Cafe
+  {logo_bar}
+
+  <tr><td style="background:linear-gradient(135deg,#1A1A2E 0%,#0D0D1A 100%);padding:24px 30px;color:#fff">
+    <div style="font-size:12px;text-transform:uppercase;letter-spacing:.2em;opacity:.85;font-weight:600">
+      Daily Operations Digest
     </div>
-    <div style="font-size:22px;font-weight:700;margin-top:6px">Daily Operations Digest</div>
-    <div style="font-size:14px;opacity:.85;margin-top:4px">{escape(date_pretty)}</div>
+    <div style="font-size:22px;font-weight:700;margin-top:6px">{escape(date_pretty)}</div>
+    <div style="font-size:13px;opacity:.7;margin-top:4px">Summary of every event from today</div>
   </td></tr>
 
   <tr><td style="padding:18px 22px">
