@@ -76,6 +76,27 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
 .nav-link-item.active { background: rgba(82,183,136,0.18); color: var(--accent); border-left-color: var(--accent) !important; font-weight: 600; }
 .nav-link-item .fa-fw { width: 18px; text-align: center; font-size: 14px; }
 .sidebar-footer { position: absolute; bottom: 0; left: 0; right: 0; border-top: 1px solid rgba(255,255,255,0.08); background: var(--sidebar-bg); }
+.sidebar-footer-row { display: flex; gap: 6px; padding: 8px; }
+.sidebar-footer-row .footer-pill {
+  flex: 1;
+  border-left: none !important;
+  border-radius: 8px;
+  padding: 9px 8px;
+  text-align: center;
+  font-size: 0.78rem;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  background: rgba(255,255,255,0.05);
+  white-space: nowrap;
+}
+.sidebar-footer-row .footer-pill:hover { background: rgba(255,255,255,0.12); }
+.sidebar-footer-row .install-pill { color: #7FD8FF; }
+.sidebar-footer-row .install-pill:hover { background: rgba(21,101,192,0.25); color: #fff; }
+.sidebar-footer-row .logout-btn { color: #ff8080 !important; }
+.sidebar-footer-row .logout-btn:hover { background: rgba(255,80,80,0.18) !important; }
+.sidebar-footer-row .footer-pill .fa-fw { width: auto; font-size: 13px; }
+/* Collapsed sidebar — stack vertically and hide labels via the existing rule */
+.sidebar.collapsed .sidebar-footer-row { flex-direction: column; padding: 6px; }
+.sidebar.collapsed .sidebar-footer-row .footer-pill { padding: 10px 6px; }
 .logout-btn { color: #ff8080 !important; }
 .logout-btn:hover { background: rgba(255,80,80,0.12) !important; }
 

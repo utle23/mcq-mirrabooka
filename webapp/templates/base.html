@@ -187,16 +187,13 @@
       </a>
       {% endif %}
 
-      <div class="sidebar-footer">
+      <div class="sidebar-footer sidebar-footer-row">
         <a href="#" id="pwa-install-btn" onclick="installPwa();return false;"
-           class="nav-link-item" style="display:none;border-left-color:#1565C0;color:#1565C0">
-          <i class="fas fa-mobile-screen fa-fw"></i><span>Install MCQ App</span>
+           class="nav-link-item footer-pill install-pill"
+           title="Install MCQ Cafe as an app on this device">
+          <i class="fas fa-mobile-screen fa-fw"></i><span>Install App</span>
         </a>
-        <a href="#" onclick="installPwa();return false;"
-           class="nav-link-item d-md-none" style="border-left-color:#1565C0;color:#1565C0">
-          <i class="fas fa-mobile-screen fa-fw"></i><span>Add to Home Screen</span>
-        </a>
-        <a href="/logout" class="nav-link-item logout-btn">
+        <a href="/logout" class="nav-link-item logout-btn footer-pill">
           <i class="fas fa-sign-out-alt fa-fw"></i><span>Logout</span>
         </a>
       </div>
