@@ -24,40 +24,41 @@ DAYS       = ['mon','tue','wed','thu','fri','sat','sun']
 DAY_LABELS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
 DAY_LONG   = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
 ALL_DAYS   = 'mon,tue,wed,thu,fri,sat,sun'
+SEEDED_PREP_ASSIGNEES = ('NGUYEN, THI NGOC PHUC', 'Thang Nguyen', 'MA, THANH PHUNG')
 
 # (station_id, en, vi, time, active_days, assignee, is_supplier, supplier_name)
 PREP_TASKS_SEED = [
-    (1,'Prepare ham / cha lua',          'Chuẩn bị ham / chả lụa',          '',ALL_DAYS,            'NGUYEN, THI NGOC PHUC',0,''),
-    (1,'Prepare gio thu',                'Chuẩn bị giò thủ',                '',ALL_DAYS,            'NGUYEN, THI NGOC PHUC',0,''),
-    (1,'Prepare pickles',                'Chuẩn bị đồ chua',               '',ALL_DAYS,            'NGUYEN, THI NGOC PHUC',0,''),
-    (1,'Prepare banh mi sauce',          'Chuẩn bị sốt bánh mì',           '',ALL_DAYS,            'NGUYEN, THI NGOC PHUC',0,''),
-    (1,'Prepare soy sauce',              'Chuẩn bị nước tương',            '',ALL_DAYS,            'NGUYEN, THI NGOC PHUC',0,''),
-    (1,'Check pate',                     'Kiểm tra pate',                  '',ALL_DAYS,            'NGUYEN, THI NGOC PHUC',1,'Morley'),
-    (1,'Wash and prepare coriander',     'Rửa và chuẩn bị ngò',            '',ALL_DAYS,            'NGUYEN, THI NGOC PHUC',0,''),
-    (1,'Slice cucumber',                 'Cắt dưa leo',                    '',ALL_DAYS,            'NGUYEN, THI NGOC PHUC',0,''),
-    (1,'Prepare chilli',                 'Chuẩn bị ớt',                   '',ALL_DAYS,            'NGUYEN, THI NGOC PHUC',0,''),
-    (1,'Refill mayo',                    'Châm thêm sốt mayo',             '',ALL_DAYS,            'NGUYEN, THI NGOC PHUC',0,''),
-    (1,'Refill butter',                  'Châm thêm bơ',                   '',ALL_DAYS,            'NGUYEN, THI NGOC PHUC',0,''),
-    (2,'Start the pho broth',            'Lên xương nấu nước phở',         '','mon,wed,fri',       'Thang Nguyen',          0,''),
-    (2,'Finish the pho broth',           'Ra nước phở / hoàn thiện nước phở','','tue,thu,sat',    'Thang Nguyen',          0,''),
-    (2,'Prepare brisket / beef shin',    'Chuẩn bị nạm / bắp bò',         '','sat',              'Thang Nguyen',          0,''),
-    (2,'Prepare xa xiu meat for banh mi','Chuẩn bị xá xíu thịt bánh mì',  '','tue,thu,sat',      'Thang Nguyen',          0,''),
-    (2,'Prepare pork hock / ribs',       'Chuẩn bị giò heo / sườn',       '','mon',              'Thang Nguyen',          0,''),
-    (2,'Check bun bo sauce',             'Kiểm tra sốt bún bò',           '',ALL_DAYS,            'Thang Nguyen',          1,'Morley'),
-    (2,'Check pickled com tam',          'Kiểm tra đồ chua cơm tấm',      '',ALL_DAYS,            'Thang Nguyen',          1,'Morley'),
-    (2,'Prepare goi cuon',               'Chuẩn bị gỏi cuốn',             '','mon',              'Thang Nguyen',          0,''),
-    (2,'Prepare stir-fry sauce',         'Chuẩn bị sốt xào',              '','tue,fri,sat',      'Thang Nguyen',          0,''),
-    (2,'Prepare com tam meat',           'Chuẩn bị thịt cơm tấm',         '','mon,fri',          'Thang Nguyen',          0,''),
-    (2,'Marinate chicken',               'Ướp gà',                        '','mon,tue,wed,sat,sun','Thang Nguyen',        0,''),
-    (2,'Prepare crispy roast pork',      'Chuẩn bị heo quay',              '',ALL_DAYS,            'Thang Nguyen',          0,''),
-    (2,'Slice pork / beef',              'Cắt thịt heo / thịt bò',        '',ALL_DAYS,            'Thang Nguyen',          0,''),
-    (2,'Prepare tofu',                   'Chuẩn bị đậu hũ',               '','mon,thu',          'Thang Nguyen',          0,''),
-    (2,'Slice brown onion',              'Cắt hành tây nâu',              '',ALL_DAYS,            'MA, THANH PHUNG',       0,''),
+    (1,'Prepare ham / cha lua',          'Chuẩn bị ham / chả lụa',          '',ALL_DAYS,            '',0,''),
+    (1,'Prepare gio thu',                'Chuẩn bị giò thủ',                '',ALL_DAYS,            '',0,''),
+    (1,'Prepare pickles',                'Chuẩn bị đồ chua',               '',ALL_DAYS,            '',0,''),
+    (1,'Prepare banh mi sauce',          'Chuẩn bị sốt bánh mì',           '',ALL_DAYS,            '',0,''),
+    (1,'Prepare soy sauce',              'Chuẩn bị nước tương',            '',ALL_DAYS,            '',0,''),
+    (1,'Check pate',                     'Kiểm tra pate',                  '',ALL_DAYS,            '',1,'Morley'),
+    (1,'Wash and prepare coriander',     'Rửa và chuẩn bị ngò',            '',ALL_DAYS,            '',0,''),
+    (1,'Slice cucumber',                 'Cắt dưa leo',                    '',ALL_DAYS,            '',0,''),
+    (1,'Prepare chilli',                 'Chuẩn bị ớt',                   '',ALL_DAYS,            '',0,''),
+    (1,'Refill mayo',                    'Châm thêm sốt mayo',             '',ALL_DAYS,            '',0,''),
+    (1,'Refill butter',                  'Châm thêm bơ',                   '',ALL_DAYS,            '',0,''),
+    (2,'Start the pho broth',            'Lên xương nấu nước phở',         '','mon,wed,fri',       '',0,''),
+    (2,'Finish the pho broth',           'Ra nước phở / hoàn thiện nước phở','','tue,thu,sat',    '',0,''),
+    (2,'Prepare brisket / beef shin',    'Chuẩn bị nạm / bắp bò',         '','sat',              '',0,''),
+    (2,'Prepare xa xiu meat for banh mi','Chuẩn bị xá xíu thịt bánh mì',  '','tue,thu,sat',      '',0,''),
+    (2,'Prepare pork hock / ribs',       'Chuẩn bị giò heo / sườn',       '','mon',              '',0,''),
+    (2,'Check bun bo sauce',             'Kiểm tra sốt bún bò',           '',ALL_DAYS,            '',1,'Morley'),
+    (2,'Check pickled com tam',          'Kiểm tra đồ chua cơm tấm',      '',ALL_DAYS,            '',1,'Morley'),
+    (2,'Prepare goi cuon',               'Chuẩn bị gỏi cuốn',             '','mon',              '',0,''),
+    (2,'Prepare stir-fry sauce',         'Chuẩn bị sốt xào',              '','tue,fri,sat',      '',0,''),
+    (2,'Prepare com tam meat',           'Chuẩn bị thịt cơm tấm',         '','mon,fri',          '',0,''),
+    (2,'Marinate chicken',               'Ướp gà',                        '','mon,tue,wed,sat,sun','',0,''),
+    (2,'Prepare crispy roast pork',      'Chuẩn bị heo quay',              '',ALL_DAYS,            '',0,''),
+    (2,'Slice pork / beef',              'Cắt thịt heo / thịt bò',        '',ALL_DAYS,            '',0,''),
+    (2,'Prepare tofu',                   'Chuẩn bị đậu hũ',               '','mon,thu',          '',0,''),
+    (2,'Slice brown onion',              'Cắt hành tây nâu',              '',ALL_DAYS,            '',0,''),
     (3,'Prepare black coffee base',      'Chuẩn bị cà phê đen base',      '',ALL_DAYS,            '',                      0,''),
     (3,'Cut fruit',                      'Cắt trái cây',                  '',ALL_DAYS,            '',                      0,''),
-    (4,'Cut spring onion',               'Cắt hành lá',                   '',ALL_DAYS,            'MA, THANH PHUNG',       0,''),
-    (4,'Soak the glutinous rice',        'Ngâm gạo nếp',                  '',ALL_DAYS,            'MA, THANH PHUNG',       0,''),
-    (4,'Soak the rice noodles',          'Ngâm bún',                      '',ALL_DAYS,            'MA, THANH PHUNG',       0,''),
+    (4,'Cut spring onion',               'Cắt hành lá',                   '',ALL_DAYS,            '',0,''),
+    (4,'Soak the glutinous rice',        'Ngâm gạo nếp',                  '',ALL_DAYS,            '',0,''),
+    (4,'Soak the rice noodles',          'Ngâm bún',                      '',ALL_DAYS,            '',0,''),
 ]
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -193,6 +194,10 @@ def init_prep_tables(db_path, staff_list):
                 issue_flag     INTEGER DEFAULT 0,
                 UNIQUE(weekly_task_id, date)
             );
+            CREATE TABLE IF NOT EXISTS prep_migrations (
+                key        TEXT PRIMARY KEY,
+                applied_at TEXT DEFAULT (datetime('now','localtime'))
+            );
         ''')
         # Migrate: add move columns if they don't exist yet
         for _col in ['moved_to_day','moved_to_date','moved_from_day','moved_from_date','moved_reason']:
@@ -212,6 +217,21 @@ def init_prep_tables(db_path, staff_list):
                      default_assignee,is_supplier,supplier_name,sort_order)
                     VALUES (?,?,?,?,?,?,?,?,?)''',
                     (t[0],t[1],t[2],t[3],t[4],t[5],t[6],t[7],i))
+        if not conn.execute(
+            'SELECT 1 FROM prep_migrations WHERE key=?',
+            ('clear_seeded_prep_assignees_v1',)).fetchone():
+            placeholders = ','.join('?' for _ in SEEDED_PREP_ASSIGNEES)
+            conn.execute(
+                f"UPDATE prep_task_templates SET default_assignee='' "
+                f"WHERE default_assignee IN ({placeholders})",
+                SEEDED_PREP_ASSIGNEES)
+            conn.execute(
+                f"UPDATE prep_weekly_tasks SET assigned_to='' "
+                f"WHERE assigned_to IN ({placeholders})",
+                SEEDED_PREP_ASSIGNEES)
+            conn.execute(
+                'INSERT INTO prep_migrations (key) VALUES (?)',
+                ('clear_seeded_prep_assignees_v1',))
 
 def _ensure_schedule(week_start_str, conn):
     """Auto-create schedule from templates if it doesn't exist yet. Always called — no manual step needed."""
