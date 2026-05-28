@@ -377,7 +377,13 @@
               <span class="fw-bold">{{ task.station.name_en }}</span>
               <span class="ms-1 fw-normal" style="font-size:0.73rem;opacity:0.75">{{ task.station.name_vi }}</span>
               {% if is_admin %}
-              <button type="button" class="btn btn-sm btn-link p-0 ms-2"
+              <a href="/prep/weekly/{{ week_start }}/export/pdf?station={{ task.station.id }}"
+                 class="btn btn-sm btn-link p-0 ms-2"
+                 style="color:#C62828;font-size:0.75rem"
+                 title="Export this section as PDF (wall print)">
+                <i class="fas fa-file-pdf"></i>
+              </a>
+              <button type="button" class="btn btn-sm btn-link p-0"
                       style="color:{{ task.station.color }};font-size:0.75rem"
                       title="Edit section name / colour"
                       onclick="openEditSection({{ task.station.id }}, '{{ task.station.name_en|e }}', '{{ task.station.name_vi|e }}', '{{ task.station.color }}')">

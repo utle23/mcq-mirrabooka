@@ -1,5 +1,5 @@
 from flask import Blueprint, render_template, request, redirect, url_for, session, jsonify, send_file
-import sqlite3
+import sqlite3, re
 from io import BytesIO
 from datetime import datetime, date, timedelta
 from functools import wraps
@@ -847,15 +847,26 @@ def weekly_export_pdf(week_start):
     week_start = ws_date.isoformat()
     week_dates = get_week_dates(week_start)
 
+    # Optional ?station=<id> filter — export only that one section.
+    try:
+        station_filter = int(request.args.get('station', '') or 0)
+    except (TypeError, ValueError):
+        station_filter = 0
+    filter_station_obj = STATIONS_MAP.get(station_filter) if station_filter else None
+
     with _get_db() as conn:
         _ensure_schedule(week_start, conn)
         sched = conn.execute('SELECT * FROM prep_weekly_schedules WHERE week_start=?', (week_start,)).fetchone()
         sched = dict(sched) if sched else None
         tasks = []
         if sched:
-            for wt in conn.execute(
-                    'SELECT * FROM prep_weekly_tasks WHERE schedule_id=? ORDER BY station_id, scheduled_time, id',
-                    (sched['id'],)).fetchall():
+            sql = 'SELECT * FROM prep_weekly_tasks WHERE schedule_id=?'
+            params = [sched['id']]
+            if station_filter:
+                sql += ' AND station_id=?'
+                params.append(station_filter)
+            sql += ' ORDER BY station_id, scheduled_time, id'
+            for wt in conn.execute(sql, params).fetchall():
                 wt = dict(wt)
                 wt['station']  = STATIONS_MAP.get(wt['station_id'], {})
                 wt['fmt_time'] = fmt_time(wt.get('scheduled_time'))
@@ -893,8 +904,13 @@ def weekly_export_pdf(week_start):
     total_req  = sum(1 for t in tasks for d in DAYS if t['days'].get(d, {}).get('is_required') and t['days'][d].get('status') != 'moved')
     total_done = sum(1 for t in tasks for d in DAYS if t['days'].get(d, {}).get('status') == 'done')
 
+    if filter_station_obj:
+        title_text = f"MCQ MIRRABOOKA - {filter_station_obj.get('name_en', '').upper()}"
+    else:
+        title_text = 'MCQ MIRRABOOKA - WEEKLY PREP SCHEDULE'
+
     story = [
-        Paragraph('MCQ MIRRABOOKA - WEEKLY PREP SCHEDULE', styles['title']),
+        Paragraph(title_text, styles['title']),
         Paragraph(f"Week: {week_start} to {week_dates[-1]}   |   Tasks: {len(tasks)}   |   "
                   f"Done: {total_done} / {total_req}   |   "
                   f"Status: {'LOCKED' if sched and sched.get('locked') else 'ACTIVE'}",
@@ -1044,7 +1060,12 @@ def weekly_export_pdf(week_start):
 
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
     buf.seek(0)
-    fname = f'MCQ_Weekly_Prep_{week_start}.pdf'
+    if filter_station_obj:
+        slug = re.sub(r'[^A-Za-z0-9]+', '_',
+                      filter_station_obj.get('name_en', f'station{station_filter}')).strip('_')
+        fname = f'MCQ_Weekly_Prep_{week_start}_{slug}.pdf'
+    else:
+        fname = f'MCQ_Weekly_Prep_{week_start}.pdf'
     return send_file(buf, mimetype='application/pdf', as_attachment=True, download_name=fname)
 
 
