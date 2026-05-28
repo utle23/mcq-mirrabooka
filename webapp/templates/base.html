@@ -78,12 +78,6 @@
       <a href="/prep/weekly/{{ week_start_nav }}" class="nav-link-item {% if 'prep_weekly' in current_ep or current_ep=='prep.prep_today' %}active{% endif %}" style="border-left-color:#2196F3">
         <i class="fas fa-calendar-week fa-fw"></i><span>Weekly Prep Schedule</span>
       </a>
-      {% if is_admin %}
-      <a href="/prep/templates" class="nav-link-item {% if 'prep_templates' in current_ep %}active{% endif %}" style="border-left-color:#607D8B">
-        <i class="fas fa-tasks fa-fw"></i><span>Task Templates</span>
-      </a>
-      {% endif %}
-
       {% if is_admin %}<div class="nav-section-label">MANAGEMENT</div>{% endif %}
 
       {% if is_admin %}

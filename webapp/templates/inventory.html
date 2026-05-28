@@ -40,6 +40,9 @@
 .item-original { font-size: 0.7rem; color: #aaa; }
 .cost-val { font-weight: 700; color: #1565C0; }
 .cost-na  { color: #ccc; font-size: 0.72rem; }
+.margin-val { font-weight: 800; color: #2E7D32; font-size: 0.75rem; }
+.margin-loss { font-weight: 800; color: #C62828; font-size: 0.75rem; }
+.margin-sub { display:block; color:#888; font-size:0.62rem; line-height:1.1; }
 .btn-edit-row { opacity: 0; transition: opacity .15s; }
 tr:hover .btn-edit-row { opacity: 1; }
 .inv-empty { text-align: center; padding: 60px 20px; color: #bbb; }
@@ -123,6 +126,7 @@ tr:hover .btn-edit-row { opacity: 1; }
           <th style="width:90px" class="text-end">Cost / Unit</th>
           <th style="width:100px" class="text-end">Cost / Carton</th>
           <th style="width:70px" class="text-center">Qty/Ctn</th>
+          <th style="width:105px" class="text-end" title="Cost / Unit × Qty/Ctn minus Cost / Carton">Margin</th>
           <th style="width:100px">Code</th>
           {% if selected_cat == 'All' or not selected_cat %}
           <th style="width:140px">Category</th>
@@ -137,7 +141,7 @@ tr:hover .btn-edit-row { opacity: 1; }
         {% if (selected_cat == 'All' or not selected_cat) and item.category != ns.cur_cat %}
         {% set ns.cur_cat = item.category %}
         <tr class="cat-header-row">
-          <td colspan="{{ 10 if is_admin else 9 }}">
+          <td colspan="{{ 11 if is_admin else 10 }}">
             <i class="{{ category_icons.get(item.category, 'fas fa-tag') }} me-2"></i>{{ item.category }}
           </td>
         </tr>
@@ -171,6 +175,16 @@ tr:hover .btn-edit-row { opacity: 1; }
           </td>
           <td class="text-center text-muted" style="font-size:0.77rem">
             {{ item.qty_carton if item.qty_carton else '—' }}
+          </td>
+          <td class="text-end">
+            {% if item.carton_margin is not none %}
+            <span class="{{ 'margin-val' if item.carton_margin >= 0 else 'margin-loss' }}">
+              {{ '+' if item.carton_margin >= 0 else '-' }}${{ "%.2f"|format(item.carton_margin_abs) }}
+            </span>
+            <span class="margin-sub">{{ "%.1f"|format(item.carton_margin_pct) }}%</span>
+            {% else %}
+            <span class="cost-na">—</span>
+            {% endif %}
           </td>
           <td>
             {% if item.code %}

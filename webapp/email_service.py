@@ -21,7 +21,7 @@ import threading
 import traceback
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from html import escape
 
 DB_PATH: str | None = None
@@ -40,6 +40,15 @@ EVENT_TYPES = [
     ('jobs',        'Job Schedule',           'fa-id-badge',       '#7B1FA2'),
 ]
 VALID_EVENTS = {e[0] for e in EVENT_TYPES}
+
+PREP_DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+PREP_DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+PREP_STATIONS = {
+    1: {'name_en': 'Banh Mi Station', 'name_vi': 'Khu banh mi', 'color': '#FF9800'},
+    2: {'name_en': 'Pho / Kitchen Station', 'name_vi': 'Khu pho / bep chinh', 'color': '#F44336'},
+    3: {'name_en': 'Drink Station', 'name_vi': 'Khu nuoc uong', 'color': '#00BCD4'},
+    4: {'name_en': 'Chef / General Prep', 'name_vi': 'So che chung / phu bep', 'color': '#4CAF50'},
+}
 
 
 # ── DB setup ───────────────────────────────────────────────────────────────────
@@ -511,6 +520,37 @@ def _send_sync(event_type: str, subject: str, lines: list[str],
         _log(event_type, subject, recipients, 'failed', ' | '.join(failures) or 'no recipients')
 
 
+def _send_html_sync(event_type: str, subject: str, html_body: str, text_body: str,
+                    recipients: list[str], settings: dict) -> None:
+    """Send a pre-rendered HTML notification, one POST per recipient."""
+    sent_to: list[str] = []
+    failures: list[str] = []
+    for recipient in recipients:
+        payload = {
+            'sender': {
+                'name':  settings.get('from_name') or 'MCQ Mirrabooka',
+                'email': settings['sender_email'],
+            },
+            'to':          [{'email': recipient}],
+            'subject':     f'[MCQ] {subject}',
+            'htmlContent': html_body,
+            'textContent': text_body or subject,
+        }
+        ok, msg = _brevo_post(payload, settings['brevo_api_key'])
+        if ok:
+            sent_to.append(recipient)
+        else:
+            failures.append(f'{recipient}: {msg}')
+
+    if sent_to and not failures:
+        _log(event_type, subject, sent_to, 'sent')
+    elif sent_to and failures:
+        _log(event_type, subject, recipients, 'partial',
+             f'Sent to {len(sent_to)}, failed for {len(failures)}: ' + ' | '.join(failures))
+    else:
+        _log(event_type, subject, recipients, 'failed', ' | '.join(failures) or 'no recipients')
+
+
 def send_notification(event_type: str, subject: str, lines: list[str],
                        link_path: str = '', actor: str = '') -> None:
     """Fire-and-forget notification. Never raises."""
@@ -534,6 +574,371 @@ def send_notification(event_type: str, subject: str, lines: list[str],
             _log(event_type, subject, [], 'queue_failed', f'{type(e).__name__}: {e}')
         except Exception:
             pass
+
+
+def send_html_notification(event_type: str, subject: str, html_body: str,
+                           text_body: str = '') -> None:
+    """Fire-and-forget notification using already-rendered HTML. Never raises."""
+    try:
+        if event_type not in VALID_EVENTS:
+            return
+        settings = get_settings()
+        if not settings.get('enabled') or not _is_configured(settings):
+            return
+        recipients = _recipients_for_event(event_type)
+        if not recipients:
+            return
+        t = threading.Thread(
+            target=_send_html_sync,
+            args=(event_type, subject, html_body, text_body, recipients, settings),
+            daemon=True,
+        )
+        t.start()
+    except Exception as e:
+        try:
+            _log(event_type, subject, [], 'queue_failed', f'{type(e).__name__}: {e}')
+        except Exception:
+            pass
+
+
+# ── Weekly prep email rendering ───────────────────────────────────────────────
+
+def _prep_week_start(value: str | date | None = None) -> date:
+    if isinstance(value, date):
+        d = value
+    elif isinstance(value, str) and value:
+        try:
+            d = datetime.strptime(value, '%Y-%m-%d').date()
+        except Exception:
+            d = date.today()
+    else:
+        d = date.today()
+    return d - timedelta(days=d.weekday())
+
+
+def _prep_fmt_time(value: str | None) -> str:
+    if not value:
+        return ''
+    try:
+        h, m = map(int, value.split(':'))
+        return f'{h % 12 or 12}:{m:02d} {"AM" if h < 12 else "PM"}'
+    except Exception:
+        return value
+
+
+def collect_weekly_prep(week_start: str | date | None = None) -> dict:
+    """Collect one full weekly prep schedule. `week_start` can be any date in the week."""
+    ws = _prep_week_start(week_start)
+    week_start_str = ws.isoformat()
+    week_dates = [(ws + timedelta(days=i)).isoformat() for i in range(7)]
+    empty = {
+        'week_start': week_start_str,
+        'week_end': week_dates[-1],
+        'week_dates': week_dates,
+        'schedule': None,
+        'tasks': [],
+        'total_required': 0,
+        'total_done': 0,
+        'total_pending': 0,
+        'total_issues': 0,
+        'total_moved': 0,
+        'day_stats': [],
+        'station_stats': [],
+    }
+
+    try:
+        with _conn() as conn:
+            sched = conn.execute(
+                'SELECT * FROM prep_weekly_schedules WHERE week_start=?',
+                (week_start_str,)).fetchone()
+            if not sched:
+                return empty
+
+            tasks = []
+            for wt in conn.execute('''
+                SELECT * FROM prep_weekly_tasks
+                WHERE schedule_id=?
+                ORDER BY station_id, scheduled_time, sort_order, id
+            ''', (sched['id'],)).fetchall():
+                task = dict(wt)
+                task['station'] = PREP_STATIONS.get(task['station_id'], {
+                    'name_en': f"Station {task['station_id']}",
+                    'name_vi': '',
+                    'color': '#607D8B',
+                })
+                task['fmt_time'] = _prep_fmt_time(task.get('scheduled_time'))
+                rows = conn.execute('''
+                    SELECT * FROM prep_daily_status
+                    WHERE weekly_task_id=?
+                    ORDER BY date
+                ''', (task['id'],)).fetchall()
+                task['days'] = {r['day_of_week']: dict(r) for r in rows}
+                tasks.append(task)
+    except sqlite3.OperationalError:
+        return empty
+
+    day_stats = []
+    station_map: dict[int, dict] = {}
+    total_required = total_done = total_pending = total_issues = total_moved = 0
+    for idx, day in enumerate(PREP_DAYS):
+        stat = {'day': day, 'label': PREP_DAY_LABELS[idx], 'date': week_dates[idx],
+                'required': 0, 'done': 0, 'pending': 0, 'issues': 0}
+        for task in tasks:
+            ds = task['days'].get(day, {})
+            st_id = task['station_id']
+            if st_id not in station_map:
+                station_map[st_id] = {
+                    'station_id': st_id,
+                    'station': task['station'],
+                    'required': 0,
+                    'done': 0,
+                    'pending': 0,
+                    'issues': 0,
+                }
+            if not ds.get('is_required'):
+                continue
+            if ds.get('status') == 'moved':
+                total_moved += 1
+                continue
+
+            stat['required'] += 1
+            station_map[st_id]['required'] += 1
+            total_required += 1
+            if ds.get('status') == 'done':
+                stat['done'] += 1
+                station_map[st_id]['done'] += 1
+                total_done += 1
+            else:
+                stat['pending'] += 1
+                station_map[st_id]['pending'] += 1
+                total_pending += 1
+            if ds.get('issue_flag'):
+                stat['issues'] += 1
+                station_map[st_id]['issues'] += 1
+                total_issues += 1
+        stat['pct'] = round(stat['done'] / max(stat['required'], 1) * 100)
+        day_stats.append(stat)
+
+    station_stats = sorted(station_map.values(), key=lambda r: r['station_id'])
+    for row in station_stats:
+        row['pct'] = round(row['done'] / max(row['required'], 1) * 100)
+
+    return {
+        **empty,
+        'schedule': dict(sched),
+        'tasks': tasks,
+        'total_required': total_required,
+        'total_done': total_done,
+        'total_pending': total_pending,
+        'total_issues': total_issues,
+        'total_moved': total_moved,
+        'day_stats': day_stats,
+        'station_stats': station_stats,
+    }
+
+
+def _prep_badge(text: str, bg: str, color: str = '#fff') -> str:
+    return (f'<span style="display:inline-block;background:{bg};color:{color};'
+            f'font-size:10px;font-weight:800;padding:3px 7px;border-radius:10px;'
+            f'line-height:1.1;white-space:nowrap">{escape(text)}</span>')
+
+
+def _prep_cell_html(task: dict, ds: dict) -> str:
+    if not ds or not ds.get('is_required'):
+        return '<span style="color:#BDBDBD;font-weight:700">-</span>'
+    note = (ds.get('note') or '').strip()
+    note_html = (f'<div style="font-size:10px;color:#6D4C41;margin-top:3px;line-height:1.25">'
+                 f'{escape(note[:80])}{"..." if len(note) > 80 else ""}</div>') if note else ''
+    if ds.get('issue_flag'):
+        return _prep_badge('ISSUE', '#C62828') + note_html
+    if ds.get('status') == 'done':
+        by = ds.get('done_by') or ''
+        by_html = f'<div style="font-size:10px;color:#1B5E20;margin-top:2px">{escape(by)}</div>' if by else ''
+        return _prep_badge('DONE', '#2E7D32') + by_html + note_html
+    if ds.get('status') == 'moved':
+        label = 'MOVED'
+        if ds.get('moved_to_day'):
+            label += f" -> {ds['moved_to_day'].upper()}"
+        return _prep_badge(label, '#F57C00') + note_html
+    if task.get('is_supplier'):
+        return _prep_badge('ORDER', '#1565C0') + note_html
+    return _prep_badge('PENDING', '#ECEFF1', '#455A64') + note_html
+
+
+def build_prep_week_section_html(data: dict, base_url: str = '') -> str:
+    if not data.get('schedule'):
+        return ('<div style="padding:14px;background:#FFF8E1;border-left:3px solid #F9A825;'
+                'border-radius:6px;color:#6D4C00;font-size:13px">'
+                'No weekly prep schedule exists for this week yet.</div>')
+
+    pct = round(data['total_done'] / max(data['total_required'], 1) * 100)
+    cards = (
+        _digest_kpi_card('Weekly prep', f"{data['total_done']} / {data['total_required']}",
+                         '#1565C0', f'{pct}% complete') +
+        _digest_kpi_card('Pending', str(data['total_pending']),
+                         '#E65100', 'remaining tasks') +
+        _digest_kpi_card('Issues', str(data['total_issues']),
+                         '#C62828', 'flagged prep cells') +
+        _digest_kpi_card('Moved', str(data['total_moved']),
+                         '#7B1FA2', 'moved earlier')
+    )
+
+    day_rows = ''.join(
+        f'<tr>'
+        f'<td style="padding:7px;border-bottom:1px solid #eef0f3;font-size:11px;font-weight:700">'
+        f'{escape(d["label"])}<div style="color:#888;font-size:10px;font-weight:400">{escape(d["date"])}</div></td>'
+        f'<td style="padding:7px;border-bottom:1px solid #eef0f3;text-align:center;font-size:12px;font-weight:800;color:#1565C0">{d["done"]}/{d["required"]}</td>'
+        f'<td style="padding:7px;border-bottom:1px solid #eef0f3;text-align:center;font-size:12px;color:#E65100">{d["pending"]}</td>'
+        f'<td style="padding:7px;border-bottom:1px solid #eef0f3;text-align:center;font-size:12px;color:#C62828">{d["issues"]}</td>'
+        f'</tr>'
+        for d in data.get('day_stats', [])
+    )
+    day_html = (
+        '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;margin-top:8px">'
+        '<tr><th style="padding:7px;background:#E3F2FD;font-size:10px;text-align:left">Day</th>'
+        '<th style="padding:7px;background:#E3F2FD;font-size:10px;text-align:center">Done</th>'
+        '<th style="padding:7px;background:#E3F2FD;font-size:10px;text-align:center">Pending</th>'
+        '<th style="padding:7px;background:#E3F2FD;font-size:10px;text-align:center">Issues</th></tr>'
+        + day_rows + '</table>'
+    )
+
+    headers = (
+        '<tr>'
+        '<th style="padding:7px;background:#1A1A2E;color:#fff;font-size:10px;text-align:left;border:1px solid #dfe5eb">Time</th>'
+        '<th style="padding:7px;background:#1A1A2E;color:#fff;font-size:10px;text-align:left;border:1px solid #dfe5eb">Task / Staff</th>'
+        + ''.join(
+            f'<th style="padding:7px;background:#1A1A2E;color:#fff;font-size:10px;text-align:center;border:1px solid #dfe5eb">'
+            f'{escape(PREP_DAY_LABELS[i])}<div style="font-size:9px;font-weight:400;opacity:.75">{escape(data["week_dates"][i][5:])}</div></th>'
+            for i in range(7)
+        ) + '</tr>'
+    )
+
+    rows = []
+    current_station = None
+    for task in data.get('tasks', []):
+        station = task.get('station') or {}
+        if task.get('station_id') != current_station:
+            current_station = task.get('station_id')
+            rows.append(
+                f'<tr><td colspan="9" style="padding:8px 10px;background:{station.get("color", "#607D8B")}18;'
+                f'color:{station.get("color", "#607D8B")};font-size:12px;font-weight:800;border:1px solid #dfe5eb">'
+                f'{escape(station.get("name_en") or "Station")}'
+                f'<span style="font-weight:400;color:#666;margin-left:8px">{escape(station.get("name_vi") or "")}</span>'
+                f'</td></tr>'
+            )
+        supplier = ''
+        if task.get('is_supplier'):
+            supplier = f'<div style="margin-top:3px">{_prep_badge("SUPPLIER: " + (task.get("supplier_name") or "Supplier"), "#1565C0")}</div>'
+        rows.append(
+            '<tr>'
+            f'<td style="padding:7px;border:1px solid #dfe5eb;font-size:11px;font-weight:700;color:#1B4332;white-space:nowrap">{escape(task.get("fmt_time") or "-")}</td>'
+            f'<td style="padding:7px;border:1px solid #dfe5eb;font-size:11px;line-height:1.3">'
+            f'<div style="font-weight:800;color:#1A1A2E">{escape(task.get("task_name_en") or "")}</div>'
+            f'<div style="color:#777;font-size:10px">{escape(task.get("task_name_vi") or "")}</div>'
+            f'<div style="color:#1565C0;font-size:10px;margin-top:2px">Staff: {escape(task.get("assigned_to") or "-")}</div>'
+            f'{supplier}</td>'
+            + ''.join(
+                f'<td style="padding:6px;border:1px solid #dfe5eb;text-align:center;vertical-align:middle;font-size:11px">'
+                f'{_prep_cell_html(task, task.get("days", {}).get(day, {}))}</td>'
+                for day in PREP_DAYS
+            )
+            + '</tr>'
+        )
+
+    schedule_table = (
+        '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;margin-top:14px">'
+        + headers + ''.join(rows) + '</table>'
+    )
+
+    link_html = ''
+    if base_url:
+        link_html = (
+            f'<div style="margin-top:14px;text-align:center">'
+            f'<a href="{escape(base_url.rstrip("/"))}/prep/weekly/{escape(data["week_start"])}" '
+            f'style="display:inline-block;background:#1565C0;color:#fff;text-decoration:none;'
+            f'padding:10px 22px;border-radius:8px;font-weight:700;font-size:13px">Open weekly prep in app</a>'
+            f'</div>')
+
+    return (
+        f'<div style="font-size:12px;color:#666;margin-bottom:8px">'
+        f'Week {escape(data["week_start"])} to {escape(data["week_end"])}'
+        f' - {len(data.get("tasks", []))} tasks'
+        f' - {"LOCKED" if data.get("schedule", {}).get("locked") else "ACTIVE"}'
+        f'</div>'
+        f'<table cellpadding="0" cellspacing="0" border="0" width="100%"><tr>{cards}</tr></table>'
+        f'{day_html}{schedule_table}{link_html}'
+    )
+
+
+def build_prep_weekly_email_html(data: dict, subject: str, actor: str = '',
+                                 changed_count: int = 0, base_url: str = '') -> str:
+    actor_html = f'<div style="font-size:12px;opacity:.8;margin-top:4px">Saved by {escape(actor)}</div>' if actor else ''
+    changed_html = ''
+    if changed_count:
+        changed_html = (
+            f'<div style="margin-top:14px;background:#E8F5E9;border-left:3px solid #2E7D32;'
+            f'padding:10px 14px;border-radius:6px;color:#1B5E20;font-size:13px">'
+            f'{changed_count} prep status change(s) were saved. The full week schedule is below.</div>'
+        )
+    logo_bar = _logo_bar_html('Weekly Prep Schedule')
+    section_html = build_prep_week_section_html(data, base_url=base_url)
+    return f'''<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{escape(subject)}</title></head>
+<body style="margin:0;padding:0;background:#eef1f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif">
+<table cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#eef1f4">
+<tr><td align="center" style="padding:24px 10px">
+<table cellpadding="0" cellspacing="0" border="0" width="960" style="max-width:960px;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 4px 24px rgba(20,30,50,.08)">
+  {logo_bar}
+  <tr><td style="background:linear-gradient(135deg,#1565C0 0%,#0D47A1 100%);padding:24px 30px;color:#fff">
+    <div style="font-size:12px;text-transform:uppercase;letter-spacing:.18em;opacity:.9;font-weight:700">Weekly Prep Schedule</div>
+    <div style="font-size:23px;font-weight:800;margin-top:7px;line-height:1.25">{escape(subject)}</div>
+    {actor_html}
+  </td></tr>
+  <tr><td style="padding:20px 22px 24px">
+    {changed_html}
+    {section_html}
+  </td></tr>
+  <tr><td style="padding:16px 26px 20px;background:#fafbfc;border-top:1px solid #eef0f3;color:#90969f;font-size:11px;text-align:center;line-height:1.6">
+    <div style="font-weight:600;color:#5a6068">MCQ Mirrabooka Cafe management system</div>
+    <div>Automatic weekly prep email - generated {datetime.now().strftime('%a %d %b %Y - %H:%M')}</div>
+  </td></tr>
+</table>
+</td></tr></table>
+</body></html>'''
+
+
+def build_prep_weekly_text(data: dict, actor: str = '', changed_count: int = 0) -> str:
+    lines = [
+        'MCQ Mirrabooka - Weekly Prep Schedule',
+        f"Week: {data.get('week_start')} to {data.get('week_end')}",
+        f"Saved by: {actor or '-'}",
+        f"Changes saved: {changed_count}",
+        f"Done: {data.get('total_done', 0)} / {data.get('total_required', 0)}",
+        f"Pending: {data.get('total_pending', 0)}",
+        f"Issues: {data.get('total_issues', 0)}",
+        '',
+    ]
+    for day in data.get('day_stats', []):
+        lines.append(
+            f"{day['label']} {day['date']}: {day['done']}/{day['required']} done, "
+            f"{day['pending']} pending, {day['issues']} issues"
+        )
+    return '\n'.join(lines)
+
+
+def send_prep_weekly_schedule(week_start: str | date, subject: str | None = None,
+                              actor: str = '', changed_count: int = 0) -> None:
+    """Send the full weekly prep schedule to recipients subscribed to prep."""
+    data = collect_weekly_prep(week_start)
+    settings = get_settings()
+    base_url = settings.get('base_url') or ''
+    subject = subject or f"Weekly prep schedule - {data['week_start']} to {data['week_end']}"
+    html = build_prep_weekly_email_html(
+        data, subject=subject, actor=actor, changed_count=changed_count, base_url=base_url)
+    text = build_prep_weekly_text(data, actor=actor, changed_count=changed_count)
+    send_html_notification('prep', subject, html, text)
 
 
 # ── Daily digest ──────────────────────────────────────────────────────────────
@@ -688,6 +1093,8 @@ def collect_daily_digest(target_date: str, checklists_meta: dict | None = None,
         except sqlite3.OperationalError:
             pass
 
+    prep_week = collect_weekly_prep(target_date)
+
     return {
         'date': target_date,
         'checklist_matrix': checklist_matrix,
@@ -703,6 +1110,7 @@ def collect_daily_digest(target_date: str, checklists_meta: dict | None = None,
         'violations':       violations_today,
         'training':         training_today,
         'pastry_alerts':    pastry_alerts,
+        'prep_week':        prep_week,
     }
 
 
@@ -932,6 +1340,8 @@ def build_digest_html(data: dict, base_url: str = '') -> str:
             '<ul style="margin:0;padding-left:18px;font-size:13px">' + items + '</ul></div>'
         )
 
+    prep_html = build_prep_week_section_html(data.get('prep_week') or {}, base_url=base_url)
+
     # Link
     link_html = ''
     if base_url:
@@ -944,6 +1354,7 @@ def build_digest_html(data: dict, base_url: str = '') -> str:
     sections = []
     sections.append(_digest_section_html('Daily Checklists', '#2E7D32', '📋', checklist_html))
     sections.append(_digest_section_html('Temperature Records', '#D84315', '🌡', temp_html + (f'<div style="margin-top:8px">{oos_html}</div>' if oos_html else '')))
+    sections.append(_digest_section_html('Weekly Prep Schedule', '#1565C0', 'Prep', prep_html))
     sections.append(_digest_section_html('Issues Reported', '#E65100', '⚠', issues_html))
     sections.append(_digest_section_html('Staff Violations', '#C62828', '🚨', viol_html))
     if training_html:
@@ -1028,6 +1439,10 @@ def send_daily_digest(target_date: str, checklists_meta: dict,
             f'(out-of-zone readings: {len(data["oos_flagged"])})\n'
             f'Issues reported: {len(data["issues"])}\n'
             f'Violations logged: {len(data["violations"])}\n'
+            f'Weekly prep: {data.get("prep_week", {}).get("total_done", 0)} / '
+            f'{data.get("prep_week", {}).get("total_required", 0)} done '
+            f'(pending: {data.get("prep_week", {}).get("total_pending", 0)}, '
+            f'issues: {data.get("prep_week", {}).get("total_issues", 0)})\n'
             f'Training sessions: {len(data["training"])}\n'
             f'Pastry alerts: {len(data["pastry_alerts"])}\n\n'
             f'Open MCQ Web: {settings.get("base_url") or "(set base URL in Email Settings)"}\n')

@@ -105,6 +105,9 @@ def fmt_time(t):
     except:
         return t
 
+def _form_active_days():
+    return ','.join([d for d in request.form.getlist('active_days') if d in DAYS])
+
 # ── DB Init ────────────────────────────────────────────────────────────────────
 
 def _get_staff():
@@ -247,6 +250,146 @@ def _build_schedule(week_start_str, conn):
                              (wt_id,d))
     return sid
 
+def _sync_week_from_templates(week_start_str, conn):
+    """Apply current task templates to one weekly schedule without deleting completed work."""
+    ws = get_week_start(datetime.strptime(week_start_str, '%Y-%m-%d').date())
+    week_start_str = ws.isoformat()
+    week_dates = [(ws + timedelta(days=i)).isoformat() for i in range(7)]
+    _ensure_schedule(week_start_str, conn)
+    sched = conn.execute(
+        'SELECT * FROM prep_weekly_schedules WHERE week_start=?',
+        (week_start_str,)).fetchone()
+    if not sched:
+        return {'updated': 0, 'added': 0, 'inactive': 0}
+    if sched['locked']:
+        return {'updated': 0, 'added': 0, 'inactive': 0, 'locked': 1}
+
+    schedule_id = sched['id']
+    templates = [dict(r) for r in conn.execute('''
+        SELECT * FROM prep_task_templates
+        WHERE active=1
+        ORDER BY station_id, sort_order, id
+    ''').fetchall()]
+    existing = {
+        r['template_id']: dict(r)
+        for r in conn.execute(
+            'SELECT * FROM prep_weekly_tasks WHERE schedule_id=? AND template_id IS NOT NULL',
+            (schedule_id,)).fetchall()
+    }
+
+    updated = added = 0
+    active_template_ids = set()
+    for order, t in enumerate(templates):
+        active_template_ids.add(t['id'])
+        active_days = [d for d in (t['active_days'] or '').split(',') if d in DAYS]
+        current = existing.get(t['id'])
+        if current:
+            wt_id = current['id']
+            conn.execute('''UPDATE prep_weekly_tasks
+                SET task_name_en=?, task_name_vi=?, station_id=?, scheduled_time=?,
+                    assigned_to=?, active_days=?, is_supplier=?, supplier_name=?, sort_order=?
+                WHERE id=?''',
+                (t['task_name_en'], t['task_name_vi'], t['station_id'], t['default_time'],
+                 t['default_assignee'], ','.join(active_days), t['is_supplier'],
+                 t['supplier_name'], order, wt_id))
+            updated += 1
+        else:
+            cur = conn.execute('''INSERT INTO prep_weekly_tasks
+                (schedule_id,template_id,task_name_en,task_name_vi,station_id,
+                 scheduled_time,assigned_to,active_days,is_supplier,supplier_name,sort_order)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
+                (schedule_id, t['id'], t['task_name_en'], t['task_name_vi'], t['station_id'],
+                 t['default_time'], t['default_assignee'], ','.join(active_days),
+                 t['is_supplier'], t['supplier_name'], order))
+            wt_id = cur.lastrowid
+            added += 1
+
+        for idx, day in enumerate(DAYS):
+            d = week_dates[idx]
+            required = 1 if day in active_days else 0
+            row = conn.execute('''
+                SELECT id, status FROM prep_daily_status
+                WHERE weekly_task_id=? AND date=?
+            ''', (wt_id, d)).fetchone()
+            if row:
+                if required:
+                    status = 'pending' if row['status'] == 'na' else row['status']
+                    conn.execute('''UPDATE prep_daily_status
+                        SET day_of_week=?, is_required=1, scheduled_time=?, status=?
+                        WHERE id=?''',
+                        (day, t['default_time'], status, row['id']))
+                else:
+                    conn.execute('''UPDATE prep_daily_status
+                        SET day_of_week=?, is_required=0, scheduled_time=?, status='na',
+                            moved_to_day=NULL, moved_to_date=NULL, moved_from_day=NULL,
+                            moved_from_date=NULL, moved_reason=NULL
+                        WHERE id=?''',
+                        (day, t['default_time'], row['id']))
+            else:
+                conn.execute('''INSERT INTO prep_daily_status
+                    (weekly_task_id,date,day_of_week,is_required,scheduled_time,status)
+                    VALUES (?,?,?,?,?,?)''',
+                    (wt_id, d, day, required, t['default_time'],
+                     'pending' if required else 'na'))
+
+            if t['is_supplier'] and required:
+                conn.execute('INSERT OR IGNORE INTO prep_supplier_status (weekly_task_id,date) VALUES (?,?)',
+                             (wt_id, d))
+
+        if not t['is_supplier']:
+            conn.execute('DELETE FROM prep_supplier_status WHERE weekly_task_id=?', (wt_id,))
+        else:
+            supplier_dates = [d for idx, d in enumerate(week_dates) if DAYS[idx] in active_days]
+            if supplier_dates:
+                conn.execute(f'''DELETE FROM prep_supplier_status
+                    WHERE weekly_task_id=? AND date NOT IN ({','.join('?' for _ in supplier_dates)})''',
+                    [wt_id] + supplier_dates)
+            else:
+                conn.execute('DELETE FROM prep_supplier_status WHERE weekly_task_id=?', (wt_id,))
+
+    inactive = 0
+    for wt in conn.execute(
+        'SELECT * FROM prep_weekly_tasks WHERE schedule_id=? AND template_id IS NOT NULL',
+        (schedule_id,)).fetchall():
+        if wt['template_id'] in active_template_ids:
+            continue
+        activity = conn.execute('''
+            SELECT
+              (SELECT COUNT(*) FROM prep_daily_status
+               WHERE weekly_task_id=? AND (status='done' OR issue_flag=1 OR COALESCE(note,'')!='')) +
+              (SELECT COUNT(*) FROM prep_supplier_status
+               WHERE weekly_task_id=? AND (ordered=1 OR received=1 OR issue_flag=1 OR COALESCE(note,'')!='')) as c
+        ''', (wt['id'], wt['id'])).fetchone()['c']
+        if activity:
+            conn.execute('''UPDATE prep_weekly_tasks
+                SET active_days='', sort_order=9999
+                WHERE id=?''', (wt['id'],))
+            conn.execute('''UPDATE prep_daily_status
+                SET is_required=0, status=CASE WHEN status='done' THEN status ELSE 'na' END
+                WHERE weekly_task_id=?''', (wt['id'],))
+        else:
+            conn.execute('DELETE FROM prep_weekly_tasks WHERE id=?', (wt['id'],))
+        inactive += 1
+
+    return {'updated': updated, 'added': added, 'inactive': inactive}
+
+def _sync_all_unlocked_weeks_from_templates(conn):
+    totals = {'weeks': 0, 'updated': 0, 'added': 0, 'inactive': 0}
+    schedules = conn.execute('''
+        SELECT week_start FROM prep_weekly_schedules
+        WHERE locked=0
+        ORDER BY week_start
+    ''').fetchall()
+    for sched in schedules:
+        stats = _sync_week_from_templates(sched['week_start'], conn)
+        if stats.get('locked'):
+            continue
+        totals['weeks'] += 1
+        totals['updated'] += stats.get('updated', 0)
+        totals['added'] += stats.get('added', 0)
+        totals['inactive'] += stats.get('inactive', 0)
+    return totals
+
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
 @prep.route('/')
@@ -313,6 +456,8 @@ def prep_weekly_view(week_start):
     prev_week      = (ws_date - timedelta(days=7)).isoformat()
     next_week      = (ws_date + timedelta(days=7)).isoformat()
     station_filter = request.args.get('station','')
+    if station_filter and not station_filter.isdigit():
+        station_filter = ''
     today          = date.today().isoformat()
     with _get_db() as conn:
         _ensure_schedule(week_start, conn)
@@ -339,6 +484,7 @@ def prep_weekly_view(week_start):
         sched=sched, tasks=tasks,
         week_start=week_start, week_end=week_dates[-1],
         week_dates=week_dates, prev_week=prev_week, next_week=next_week,
+        week_start_nav=get_week_start().isoformat(),
         days=DAYS, day_labels=DAY_LABELS,
         stations=PREP_STATIONS, station_filter=station_filter,
         is_admin=_is_admin(), today=today, staff_list=_get_staff(),
@@ -366,6 +512,148 @@ def prep_create_schedule(week_start):
             actor=session.get('role','admin'),
         )
     return redirect(url_for('prep.prep_weekly_view', week_start=week_start))
+
+@prep.route('/weekly/<week_start>/apply-templates', methods=['POST'])
+@_admin_required
+def apply_templates_to_week(week_start):
+    try:
+        ws_date = datetime.strptime(week_start, '%Y-%m-%d').date()
+    except Exception:
+        ws_date = get_week_start()
+    week_start = get_week_start(ws_date).isoformat()
+    with _get_db() as conn:
+        _ensure_schedule(week_start, conn)
+        sched = conn.execute('SELECT locked FROM prep_weekly_schedules WHERE week_start=?', (week_start,)).fetchone()
+        if sched and sched['locked']:
+            return redirect(url_for('prep.prep_weekly_view', week_start=week_start, template_locked=1))
+        stats = _sync_all_unlocked_weeks_from_templates(conn)
+    return redirect(url_for('prep.prep_weekly_view',
+        week_start=week_start,
+        templates_applied=1,
+        weeks=stats.get('weeks', 0),
+        updated=stats.get('updated', 0),
+        added=stats.get('added', 0),
+        inactive=stats.get('inactive', 0)))
+
+@prep.route('/weekly/<week_start>/template-add', methods=['POST'])
+@_admin_required
+def weekly_add_template(week_start):
+    try:
+        ws_date = datetime.strptime(week_start, '%Y-%m-%d').date()
+    except Exception:
+        ws_date = get_week_start()
+    week_start = get_week_start(ws_date).isoformat()
+    active_days = _form_active_days()
+    station_id = int(request.form.get('station_id', 1) or 1)
+    is_supplier = 1 if request.form.get('is_supplier') else 0
+    with _get_db() as conn:
+        next_order = conn.execute('''
+            SELECT COALESCE(MAX(sort_order), -1) + 1
+            FROM prep_task_templates
+            WHERE station_id=?
+        ''', (station_id,)).fetchone()[0]
+        conn.execute('''INSERT INTO prep_task_templates
+            (task_name_en,task_name_vi,station_id,default_time,active_days,
+             default_assignee,is_supplier,supplier_name,sort_order,active)
+            VALUES (?,?,?,?,?,?,?,?,?,1)''',
+            (request.form.get('task_name_en','').strip(),
+             request.form.get('task_name_vi','').strip(),
+             station_id,
+             request.form.get('default_time','').strip(),
+             active_days,
+             request.form.get('default_assignee','').strip(),
+             is_supplier,
+             request.form.get('supplier_name','').strip() if is_supplier else '',
+             next_order))
+        _ensure_schedule(week_start, conn)
+        stats = _sync_all_unlocked_weeks_from_templates(conn)
+    return redirect(url_for('prep.prep_weekly_view',
+        week_start=week_start, template_added=1,
+        weeks=stats.get('weeks', 0),
+        updated=stats.get('updated', 0),
+        added=stats.get('added', 0),
+        inactive=stats.get('inactive', 0)))
+
+@prep.route('/weekly-task/<int:task_id>/template-edit', methods=['POST'])
+@_admin_required
+def weekly_edit_task_template(task_id):
+    active_days = _form_active_days()
+    station_id = int(request.form.get('station_id', 1) or 1)
+    is_supplier = 1 if request.form.get('is_supplier') else 0
+    with _get_db() as conn:
+        task = conn.execute('''SELECT wt.*, ws.week_start
+            FROM prep_weekly_tasks wt
+            JOIN prep_weekly_schedules ws ON ws.id=wt.schedule_id
+            WHERE wt.id=?''', (task_id,)).fetchone()
+        if not task:
+            return redirect(url_for('prep.prep_weekly_view', week_start=get_week_start().isoformat()))
+        template_id = task['template_id']
+        if not template_id:
+            next_order = conn.execute('''
+                SELECT COALESCE(MAX(sort_order), -1) + 1
+                FROM prep_task_templates WHERE station_id=?
+            ''', (station_id,)).fetchone()[0]
+            cur = conn.execute('''INSERT INTO prep_task_templates
+                (task_name_en,task_name_vi,station_id,default_time,active_days,
+                 default_assignee,is_supplier,supplier_name,sort_order,active)
+                VALUES (?,?,?,?,?,?,?,?,?,1)''',
+                (request.form.get('task_name_en','').strip(),
+                 request.form.get('task_name_vi','').strip(),
+                 station_id,
+                 request.form.get('default_time','').strip(),
+                 active_days,
+                 request.form.get('default_assignee','').strip(),
+                 is_supplier,
+                 request.form.get('supplier_name','').strip() if is_supplier else '',
+                 next_order))
+            template_id = cur.lastrowid
+            conn.execute('UPDATE prep_weekly_tasks SET template_id=? WHERE id=?', (template_id, task_id))
+        else:
+            conn.execute('''UPDATE prep_task_templates
+                SET task_name_en=?, task_name_vi=?, station_id=?, default_time=?,
+                    active_days=?, default_assignee=?, is_supplier=?, supplier_name=?, active=1
+                WHERE id=?''',
+                (request.form.get('task_name_en','').strip(),
+                 request.form.get('task_name_vi','').strip(),
+                 station_id,
+                 request.form.get('default_time','').strip(),
+                 active_days,
+                 request.form.get('default_assignee','').strip(),
+                 is_supplier,
+                 request.form.get('supplier_name','').strip() if is_supplier else '',
+                 template_id))
+        stats = _sync_all_unlocked_weeks_from_templates(conn)
+        week_start = task['week_start']
+    return redirect(url_for('prep.prep_weekly_view',
+        week_start=week_start, template_saved=1,
+        weeks=stats.get('weeks', 0),
+        updated=stats.get('updated', 0),
+        added=stats.get('added', 0),
+        inactive=stats.get('inactive', 0)))
+
+@prep.route('/weekly-task/<int:task_id>/template-archive', methods=['POST'])
+@_admin_required
+def weekly_archive_task_template(task_id):
+    with _get_db() as conn:
+        task = conn.execute('''SELECT wt.*, ws.week_start
+            FROM prep_weekly_tasks wt
+            JOIN prep_weekly_schedules ws ON ws.id=wt.schedule_id
+            WHERE wt.id=?''', (task_id,)).fetchone()
+        if not task:
+            return redirect(url_for('prep.prep_weekly_view', week_start=get_week_start().isoformat()))
+        if task['template_id']:
+            conn.execute('UPDATE prep_task_templates SET active=0 WHERE id=?', (task['template_id'],))
+            stats = _sync_all_unlocked_weeks_from_templates(conn)
+        else:
+            conn.execute('DELETE FROM prep_weekly_tasks WHERE id=?', (task_id,))
+            stats = {'weeks': 1, 'updated': 0, 'added': 0, 'inactive': 1}
+        week_start = task['week_start']
+    return redirect(url_for('prep.prep_weekly_view',
+        week_start=week_start, template_archived=1,
+        weeks=stats.get('weeks', 0),
+        updated=stats.get('updated', 0),
+        added=stats.get('added', 0),
+        inactive=stats.get('inactive', 0)))
 
 @prep.route('/weekly/<week_start>/report')
 @_admin_required
@@ -414,7 +702,7 @@ def weekly_export_pdf(week_start):
     from html import escape
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_CENTER
-    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.pagesizes import A3, landscape
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import mm
     from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
@@ -451,61 +739,93 @@ def weekly_export_pdf(week_start):
         font_name, bold_font = 'Helvetica', 'Helvetica-Bold'
 
     buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
-                            leftMargin=8*mm, rightMargin=8*mm,
-                            topMargin=10*mm, bottomMargin=10*mm)
+    page_size = landscape(A3)
+    doc = SimpleDocTemplate(buf, pagesize=page_size,
+                            leftMargin=10*mm, rightMargin=10*mm,
+                            topMargin=10*mm, bottomMargin=9*mm)
     base = getSampleStyleSheet()
     styles = {
-        'title': ParagraphStyle('title', parent=base['Title'], fontName=bold_font, fontSize=15,
-                                leading=18, textColor=colors.HexColor('#1B4332'), alignment=TA_CENTER),
-        'sub':   ParagraphStyle('sub', parent=base['Normal'], fontName=font_name, fontSize=9,
-                                leading=11, textColor=colors.HexColor('#555555'), alignment=TA_CENTER),
-        'cell':  ParagraphStyle('cell', parent=base['BodyText'], fontName=font_name, fontSize=7.5,
-                                leading=9, textColor=colors.HexColor('#222222')),
-        'station': ParagraphStyle('station', parent=base['Normal'], fontName=bold_font, fontSize=9.5,
-                                leading=12, textColor=colors.white, alignment=TA_CENTER),
+        'title': ParagraphStyle('title', parent=base['Title'], fontName=bold_font, fontSize=25,
+                                leading=29, textColor=colors.HexColor('#143D2A'), alignment=TA_CENTER,
+                                spaceAfter=2*mm),
+        'sub': ParagraphStyle('sub', parent=base['Normal'], fontName=bold_font, fontSize=12.5,
+                              leading=15, textColor=colors.HexColor('#333333'), alignment=TA_CENTER),
+        'task': ParagraphStyle('task', parent=base['BodyText'], fontName=bold_font, fontSize=10.5,
+                               leading=12.5, textColor=colors.HexColor('#111111')),
+        'note': ParagraphStyle('note', parent=base['BodyText'], fontName=font_name, fontSize=8,
+                               leading=9.5, textColor=colors.HexColor('#6D4C41')),
+        'station': ParagraphStyle('station', parent=base['Normal'], fontName=bold_font, fontSize=12,
+                                  leading=14, textColor=colors.white, alignment=TA_CENTER),
     }
 
     total_req  = sum(1 for t in tasks for d in DAYS if t['days'].get(d, {}).get('is_required') and t['days'][d].get('status') != 'moved')
     total_done = sum(1 for t in tasks for d in DAYS if t['days'].get(d, {}).get('status') == 'done')
 
     story = [
-        Paragraph('MCQ MIRRABOOKA — Weekly Prep Schedule', styles['title']),
-        Paragraph(f"Week: {week_start}  →  {week_dates[-1]}   |   Tasks: {len(tasks)}   |   "
+        Paragraph('MCQ MIRRABOOKA - WEEKLY PREP SCHEDULE', styles['title']),
+        Paragraph(f"Week: {week_start} to {week_dates[-1]}   |   Tasks: {len(tasks)}   |   "
                   f"Done: {total_done} / {total_req}   |   "
-                  f"Status: {'LOCKED' if sched and sched.get('locked') else 'Active'}",
+                  f"Status: {'LOCKED' if sched and sched.get('locked') else 'ACTIVE'}",
                   styles['sub']),
-        Spacer(1, 4*mm),
+        Spacer(1, 5*mm),
     ]
 
-    # Build the table: Station | Task | Time | Assigned | Mon..Sun
-    headers = ['Station', 'Task (EN / VI)', 'Time', 'Assigned']
+    # Wall-print table: section header rows, task/time/staff/notes columns, then Mon-Sun checkboxes.
+    day_vi = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN']
+    headers = ['TASK', 'TIME', 'STAFF', 'NOTES']
     for i, d in enumerate(DAY_LABELS):
-        headers.append(f'{d}\n{week_dates[i][5:]}')
+        headers.append(f'{d.upper()} / {day_vi[i]}\n{week_dates[i][5:]}')
     rows = [headers]
 
     cur_station = None
+    station_row_indexes = []
+    task_row_indexes = []
     for t in tasks:
         st = t['station']
-        st_cell = st.get('name_en', '') if t['station_id'] != cur_station else ''
-        cur_station = t['station_id']
-        task_p = Paragraph(f"<b>{escape(t['task_name_en'] or '')}</b><br/>{escape(t['task_name_vi'] or '')}", styles['cell'])
-        row = [st_cell, task_p, t['fmt_time'] or '-', t['assigned_to'] or '-']
+        if t['station_id'] != cur_station:
+            station_row_indexes.append(len(rows))
+            rows.append([
+                Paragraph(
+                    f"{escape(st.get('name_en', 'SECTION'))}"
+                    f"{' - ' + escape(st.get('name_vi', '')) if st.get('name_vi') else ''}",
+                    styles['station']),
+            ] + [''] * 10)
+            cur_station = t['station_id']
+
+        supplier = ''
+        if t.get('is_supplier'):
+            supplier = f"<br/><font color='#0D47A1'><b>Supplier:</b> {escape(t.get('supplier_name') or 'Supplier')}</font>"
+        task_p = Paragraph(
+            f"<b>{escape(t['task_name_en'] or '')}</b><br/>"
+            f"<font color='#555555'>{escape(t['task_name_vi'] or '')}</font>"
+            f"{supplier}",
+            styles['task'])
+        time_p = Paragraph(f"<b>{escape(t['fmt_time'] or '-')}</b>", styles['note'])
+        staff_p = Paragraph(escape(t.get('assigned_to') or '-'), styles['note'])
+
+        notes = []
+        for i, d in enumerate(DAYS):
+            ds = t['days'].get(d, {})
+            note = (ds.get('note') or '').strip()
+            if note:
+                notes.append(f"<b>{DAY_LABELS[i]}:</b> {escape(note)}")
+        notes_p = Paragraph('<br/>'.join(notes) if notes else '____________________', styles['note'])
+
+        task_row_indexes.append(len(rows))
+        row = [task_p, time_p, staff_p, notes_p]
         for d in DAYS:
             ds = t['days'].get(d, {})
             if not ds.get('is_required'):
                 row.append('—')
             elif ds.get('status') == 'done':
-                row.append('✓')
+                row.append('☑')
             elif ds.get('status') == 'moved':
                 row.append('→ ' + (ds.get('moved_to_day','') or '').upper())
-            elif t.get('is_supplier'):
-                row.append('Order')
             else:
-                row.append('•')
+                row.append('☐')
         rows.append(row)
 
-    col_widths = [28*mm, 70*mm, 16*mm, 30*mm] + [18*mm]*7
+    col_widths = [76*mm, 22*mm, 36*mm, 52*mm] + [30*mm]*7
     table = Table(rows, colWidths=col_widths, repeatRows=1)
 
     style_cmds = [
@@ -513,16 +833,42 @@ def weekly_export_pdf(week_start):
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('FONTNAME', (0, 0), (-1, 0), bold_font),
         ('FONTNAME', (0, 1), (-1, -1), font_name),
-        ('FONTSIZE', (0, 0), (-1, 0), 8),
-        ('FONTSIZE', (0, 1), (-1, -1), 7.5),
-        ('ALIGN', (2, 0), (-1, -1), 'CENTER'),
+        ('FONTSIZE', (0, 0), (-1, 0), 9.5),
+        ('FONTSIZE', (4, 1), (-1, -1), 10.5),
+        ('LEADING', (4, 1), (-1, -1), 12),
+        ('ALIGN', (1, 0), (2, -1), 'CENTER'),
+        ('ALIGN', (4, 0), (-1, -1), 'CENTER'),
+        ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+        ('ALIGN', (3, 0), (3, -1), 'LEFT'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('GRID', (0, 0), (-1, -1), 0.35, colors.HexColor('#CCCCCC')),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('GRID', (0, 0), (-1, -1), 0.65, colors.HexColor('#9EAAA2')),
+        ('LINEBELOW', (0, 0), (-1, 0), 1.2, colors.HexColor('#143D2A')),
+        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 5),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 5),
     ]
-    # Color status cells.
-    for ri, t in enumerate(tasks, start=1):
+
+    for ri in station_row_indexes:
+        style_cmds.extend([
+            ('SPAN', (0, ri), (-1, ri)),
+            ('BACKGROUND', (0, ri), (-1, ri), colors.HexColor('#1B4332')),
+            ('TEXTCOLOR', (0, ri), (-1, ri), colors.white),
+            ('FONTNAME', (0, ri), (-1, ri), bold_font),
+            ('FONTSIZE', (0, ri), (-1, ri), 12),
+            ('TOPPADDING', (0, ri), (-1, ri), 6),
+            ('BOTTOMPADDING', (0, ri), (-1, ri), 6),
+        ])
+
+    for idx, t in enumerate(tasks):
+        ri = task_row_indexes[idx]
+        style_cmds.extend([
+            ('BACKGROUND', (0, ri), (2, ri), colors.HexColor('#FAFBFC')),
+            ('BACKGROUND', (3, ri), (3, ri), colors.HexColor('#FFFDE7')),
+            ('FONTNAME', (0, ri), (0, ri), bold_font),
+            ('TOPPADDING', (0, ri), (-1, ri), 6),
+            ('BOTTOMPADDING', (0, ri), (-1, ri), 6),
+        ])
         for di, d in enumerate(DAYS):
             ds = t['days'].get(d, {})
             col = 4 + di
@@ -540,29 +886,27 @@ def weekly_export_pdf(week_start):
                 style_cmds.append(('TEXTCOLOR', (col, ri), (col, ri), colors.HexColor('#1565C0')))
             else:
                 style_cmds.append(('BACKGROUND', (col, ri), (col, ri), colors.HexColor('#F8FFF8')))
-        if ri % 2 == 0:
-            for c in range(0, 4):
-                style_cmds.append(('BACKGROUND', (c, ri), (c, ri), colors.HexColor('#FAFBFC')))
 
     table.setStyle(TableStyle(style_cmds))
     story.append(table)
-    story.append(Spacer(1, 4*mm))
+    story.append(Spacer(1, 5*mm))
 
     legend = Paragraph(
-        '<font color="#1B5E20">✓ done</font> &nbsp; '
-        '<font color="#E65100">→ moved</font> &nbsp; '
-        '<font color="#1565C0">Order = supplier</font> &nbsp; '
-        '<font color="#222">• pending</font> &nbsp; '
-        '<font color="#BBB">— not required</font>',
+        '<b>Legend:</b> '
+        '<font color="#1B5E20">☑ Done</font> &nbsp;&nbsp; '
+        '<font color="#222222">☐ To do / tick when complete</font> &nbsp;&nbsp; '
+        '<font color="#1565C0">Supplier shown in task details</font> &nbsp;&nbsp; '
+        '<font color="#E65100">→ moved earlier</font> &nbsp;&nbsp; '
+        '<font color="#999999">— not required / no checkbox</font>',
         styles['sub'])
     story.append(legend)
 
     def footer(canvas, doc_obj):
         canvas.saveState()
-        canvas.setFont(font_name, 7.5)
+        canvas.setFont(font_name, 9)
         canvas.setFillColor(colors.HexColor('#666666'))
-        canvas.drawString(8*mm, 6*mm, 'MCQ Mirrabooka Cafe - Weekly Prep Schedule')
-        canvas.drawRightString(landscape(A4)[0] - 8*mm, 6*mm,
+        canvas.drawString(10*mm, 6*mm, 'MCQ Mirrabooka Cafe - Weekly Prep Schedule - wall print')
+        canvas.drawRightString(page_size[0] - 10*mm, 6*mm,
                                f'Generated {datetime.now().strftime("%Y-%m-%d %H:%M")}   Page {doc_obj.page}')
         canvas.restoreState()
 
@@ -598,19 +942,43 @@ def lock_week(week_start):
 def weekly_batch_save():
     items = request.get_json() or []
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    changed_by_week = {}
     with _get_db() as conn:
         for item in items:
             sid = item.get('id')
             done = item.get('done', False)
             if not sid:
                 continue
-            row = conn.execute('SELECT status FROM prep_daily_status WHERE id=?', (sid,)).fetchone()
+            row = conn.execute('''
+                SELECT status, date, day_of_week
+                FROM prep_daily_status
+                WHERE id=?
+            ''', (sid,)).fetchone()
             if not row or row['status'] == 'moved':
                 continue
             new_status = 'done' if done else 'pending'
+            if row['status'] == new_status:
+                continue
             done_at = now if done else None
-            conn.execute('UPDATE prep_daily_status SET status=?, done_at=? WHERE id=?',
-                         (new_status, done_at, sid))
+            done_by = session.get('staff_name') or session.get('username') or session.get('role', '')
+            conn.execute('UPDATE prep_daily_status SET status=?, done_by=?, done_at=? WHERE id=?',
+                         (new_status, done_by if done else None, done_at, sid))
+            try:
+                day_idx = DAYS.index(row['day_of_week'])
+                ws = (datetime.strptime(row['date'], '%Y-%m-%d').date()
+                      - timedelta(days=day_idx)).isoformat()
+                changed_by_week[ws] = changed_by_week.get(ws, 0) + 1
+            except Exception:
+                pass
+    if email_service and hasattr(email_service, 'send_prep_weekly_schedule'):
+        for ws, changed_count in changed_by_week.items():
+            week_end = get_week_dates(ws)[-1]
+            email_service.send_prep_weekly_schedule(
+                ws,
+                subject=f'Weekly prep schedule saved - {ws} to {week_end}',
+                actor=session.get('role', ''),
+                changed_count=changed_count,
+            )
     return jsonify({'ok': True})
 
 @prep.route('/daily/<int:status_id>/toggle', methods=['POST'])
@@ -747,7 +1115,7 @@ def prep_templates_view():
 @prep.route('/templates/add', methods=['POST'])
 @_admin_required
 def add_template():
-    active_days = ','.join(request.form.getlist('active_days') or DAYS)
+    active_days = _form_active_days()
     with _get_db() as conn:
         conn.execute('''INSERT INTO prep_task_templates
             (task_name_en,task_name_vi,station_id,default_time,active_days,
@@ -762,7 +1130,8 @@ def add_template():
 @prep.route('/templates/<int:tid>/edit', methods=['POST'])
 @_admin_required
 def edit_template(tid):
-    active_days = ','.join(request.form.getlist('active_days') or DAYS)
+    active_days = _form_active_days()
+    is_supplier = 1 if request.form.get('is_supplier') else 0
     with _get_db() as conn:
         conn.execute('''UPDATE prep_task_templates SET
             task_name_en=?,task_name_vi=?,station_id=?,default_time=?,active_days=?,
@@ -770,7 +1139,19 @@ def edit_template(tid):
             (request.form.get('task_name_en',''), request.form.get('task_name_vi',''),
              int(request.form.get('station_id',1)), request.form.get('default_time',''),
              active_days, request.form.get('default_assignee',''),
-             1 if request.form.get('is_supplier') else 0, request.form.get('supplier_name',''), tid))
+             is_supplier, request.form.get('supplier_name',''), tid))
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return jsonify({'ok': True})
+    return redirect(url_for('prep.prep_templates_view'))
+
+
+@prep.route('/templates/<int:tid>/delete', methods=['POST'])
+@_admin_required
+def delete_template(tid):
+    with _get_db() as conn:
+        conn.execute('DELETE FROM prep_task_templates WHERE id=?', (tid,))
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return jsonify({'ok': True})
     return redirect(url_for('prep.prep_templates_view'))
 
 @prep.route('/templates/<int:tid>/toggle', methods=['POST'])

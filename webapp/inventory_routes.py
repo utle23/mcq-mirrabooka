@@ -422,6 +422,31 @@ def _admin_required(f):
     return decorated
 
 
+def _add_carton_margin(item: dict) -> dict:
+    """Carton margin compares carton cost against buying the same qty as units."""
+    try:
+        cost_unit = float(item.get('cost_unit') or 0)
+        cost_carton = float(item.get('cost_carton') or 0)
+        qty_carton = int(item.get('qty_carton') or 0)
+    except (TypeError, ValueError):
+        cost_unit = cost_carton = 0
+        qty_carton = 0
+
+    unit_total = cost_unit * qty_carton
+    if unit_total > 0 and cost_carton > 0:
+        margin = unit_total - cost_carton
+        item['carton_margin'] = margin
+        item['carton_margin_abs'] = abs(margin)
+        item['carton_margin_pct'] = (margin / unit_total) * 100
+        item['carton_unit_cost'] = cost_carton / qty_carton if qty_carton else None
+    else:
+        item['carton_margin'] = None
+        item['carton_margin_abs'] = None
+        item['carton_margin_pct'] = None
+        item['carton_unit_cost'] = None
+    return item
+
+
 # ── DB Init ────────────────────────────────────────────────────────────────────
 
 def init_inventory_tables(db_path):
@@ -486,7 +511,7 @@ def inventory_list():
         cat_counts = {r['category']: r['cnt'] for r in cat_counts_raw}
         total = sum(cat_counts.values())
 
-    items = [dict(r) for r in rows]
+    items = [_add_carton_margin(dict(r)) for r in rows]
 
     # Client-side search applied server-side too for non-JS fallback
     if search:
@@ -614,7 +639,7 @@ def export_excel():
                 'SELECT * FROM inventory_items WHERE active=1 ORDER BY category, name'
             ).fetchall()
 
-    items = [dict(r) for r in rows]
+    items = [_add_carton_margin(dict(r)) for r in rows]
     if search:
         sl = search.lower()
         items = [i for i in items if sl in i['name'].lower()
@@ -638,7 +663,7 @@ def export_excel():
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
     # ── Title row ──
-    ws.merge_cells('A1:I1')
+    ws.merge_cells('A1:J1')
     title_cell = ws['A1']
     title_cell.value = f'MCQ Mirrabooka — Item List   (exported {date.today().strftime("%d %b %Y")})'
     title_cell.font = Font(bold=True, size=13, color=HEADER_TXT)
@@ -648,7 +673,8 @@ def export_excel():
 
     # ── Column headers (row 2) ──
     headers = ['#', 'Item Name', 'Original / Full Description', 'Brand',
-               'Unit Size', 'Cost / Unit ($)', 'Cost / Carton ($)', 'Qty / Carton', 'Code']
+               'Unit Size', 'Cost / Unit ($)', 'Cost / Carton ($)', 'Qty / Carton',
+               'Margin / Carton', 'Code']
     for col, h in enumerate(headers, 1):
         c = ws.cell(row=2, column=col, value=h)
         c.font = Font(bold=True, color=HEADER_TXT, size=10)
@@ -658,7 +684,7 @@ def export_excel():
     ws.row_dimensions[2].height = 22
 
     # ── Column widths ──
-    col_widths = [5, 28, 42, 18, 12, 16, 18, 13, 14]
+    col_widths = [5, 28, 42, 18, 12, 16, 18, 13, 18, 14]
     for i, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -672,7 +698,7 @@ def export_excel():
         if item['category'] != cur_cat:
             cur_cat = item['category']
             icon = CATEGORY_ICONS.get(cur_cat, '')
-            ws.merge_cells(f'A{data_row}:I{data_row}')
+            ws.merge_cells(f'A{data_row}:J{data_row}')
             cat_cell = ws[f'A{data_row}']
             cat_cell.value = f'  {cur_cat}'
             cat_cell.font = Font(bold=True, color=CAT_TXT, size=10)
@@ -694,6 +720,8 @@ def export_excel():
             item['cost_unit'] or None,
             item['cost_carton'] or None,
             item['qty_carton'] or None,
+            (f"{item['carton_margin']:.2f} ({item['carton_margin_pct']:.1f}%)"
+             if item.get('carton_margin') is not None else ''),
             item['code'] or '',
         ]
         for col, val in enumerate(values, 1):
@@ -703,7 +731,7 @@ def export_excel():
             c.alignment = Alignment(vertical='center')
             if col == 2:
                 c.font = Font(bold=True, color='1B3A2D', size=9)
-            elif col in (3, 4, 5, 9):
+            elif col in (3, 4, 5, 10):
                 c.font = Font(color='666666', size=9)
             elif col in (6, 7) and val is not None:
                 c.font = Font(bold=True, color='1565C0', size=9)
@@ -711,13 +739,16 @@ def export_excel():
                 c.alignment = Alignment(horizontal='right', vertical='center')
             elif col == 8 and val is not None:
                 c.alignment = Alignment(horizontal='center', vertical='center')
+            elif col == 9 and val:
+                c.font = Font(bold=True, color='2E7D32' if item['carton_margin'] >= 0 else 'C62828', size=9)
+                c.alignment = Alignment(horizontal='right', vertical='center')
             else:
                 c.font = Font(size=9)
         ws.row_dimensions[data_row].height = 16
         data_row += 1
 
     # ── Total row ──
-    ws.merge_cells(f'A{data_row}:E{data_row}')
+    ws.merge_cells(f'A{data_row}:F{data_row}')
     tot = ws[f'A{data_row}']
     tot.value = f'Total: {len(items)} items'
     tot.font = Font(bold=True, size=10, color=GREEN_DARK)

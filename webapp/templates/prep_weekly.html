@@ -129,6 +129,17 @@
   </form>
   {% endif %}
   {% if is_admin %}
+  {% if not sched.locked %}
+  <button class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#addWeeklyTaskModal">
+    <i class="fas fa-plus me-1"></i>Add Task
+  </button>
+  <form method="POST" action="/prep/weekly/{{ week_start }}/apply-templates" class="d-inline">
+    <button type="submit" class="btn btn-sm btn-primary"
+            onclick="return confirm('Apply current task setup to all unlocked weeks? This updates task names, time, staff, active days, and supplier settings across weekly schedules.')">
+      <i class="fas fa-rotate me-1"></i>Apply to All Weeks
+    </button>
+  </form>
+  {% endif %}
   <a href="/prep/weekly/{{ week_start }}/report" target="_blank" class="btn btn-sm btn-outline-success">
     <i class="fas fa-file-alt me-1"></i>Export Report
   </a>
@@ -157,6 +168,35 @@
     </button>
   </div>
 </div>
+
+{% if request.args.get('templates_applied') %}
+<div class="alert alert-success py-2 mb-3">
+  <i class="fas fa-check-circle me-1"></i>
+  Task setup applied to {{ request.args.get('weeks', 0) }} unlocked week(s):
+  {{ request.args.get('updated', 0) }} updated,
+  {{ request.args.get('added', 0) }} added,
+  {{ request.args.get('inactive', 0) }} inactive/template-removed task(s) handled.
+</div>
+{% elif request.args.get('template_added') %}
+<div class="alert alert-success py-2 mb-3">
+  <i class="fas fa-check-circle me-1"></i>
+  Task added and synced to {{ request.args.get('weeks', 0) }} unlocked week(s).
+</div>
+{% elif request.args.get('template_saved') %}
+<div class="alert alert-success py-2 mb-3">
+  <i class="fas fa-check-circle me-1"></i>
+  Task setup saved and synced to {{ request.args.get('weeks', 0) }} unlocked week(s).
+</div>
+{% elif request.args.get('template_archived') %}
+<div class="alert alert-warning py-2 mb-3">
+  <i class="fas fa-box-archive me-1"></i>
+  Task archived and synced to {{ request.args.get('weeks', 0) }} unlocked week(s).
+</div>
+{% elif request.args.get('template_locked') %}
+<div class="alert alert-warning py-2 mb-3">
+  <i class="fas fa-lock me-1"></i>This week is locked, so templates were not applied.
+</div>
+{% endif %}
 
 <!-- Unsaved changes bar -->
 <div id="save-bar" class="d-none mb-3 px-3 py-2 d-flex align-items-center gap-3 rounded"
@@ -350,6 +390,30 @@
                 <ul class="dropdown-menu dropdown-menu-end shadow-sm" style="font-size:0.8rem;min-width:170px">
                   <li>
                     <a class="dropdown-item" href="#"
+                       data-id="{{ task.id }}"
+                       data-en="{{ task.task_name_en|e }}"
+                       data-vi="{{ task.task_name_vi|e }}"
+                       data-station="{{ task.station_id }}"
+                       data-time="{{ task.scheduled_time or '' }}"
+                       data-days="{{ task.active_days or '' }}"
+                       data-assignee="{{ task.assigned_to or '' }}"
+                       data-supplier="{{ '1' if task.is_supplier else '0' }}"
+                       data-sname="{{ task.supplier_name or '' }}"
+                       onclick="openWeeklyTaskEdit(this.dataset);return false">
+                      <i class="fas fa-pen me-2 text-primary"></i>Edit Task Setup
+                    </a>
+                  </li>
+                  <li>
+                    <form method="POST" action="/prep/weekly-task/{{ task.id }}/template-archive">
+                      <button class="dropdown-item text-danger" type="submit"
+                              onclick="return confirm('Archive this task from task setup and sync all unlocked weeks?')">
+                        <i class="fas fa-box-archive me-2"></i>Archive Task
+                      </button>
+                    </form>
+                  </li>
+                  <li><hr class="dropdown-divider"></li>
+                  <li>
+                    <a class="dropdown-item" href="#"
                        onclick="openMovePrep({{ task.id }});return false">
                       <i class="fas fa-arrow-left me-2 text-purple" style="color:#7B1FA2"></i>Move Prep Earlier
                     </a>
@@ -467,6 +531,61 @@
 </div><!-- /view-week -->
 {% endif %}
 
+{% if is_admin %}
+<!-- ── Add task setup modal ── -->
+<div class="modal fade" id="addWeeklyTaskModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="POST" action="/prep/weekly/{{ week_start }}/template-add">
+        <div class="modal-header">
+          <h6 class="modal-title"><i class="fas fa-plus me-1"></i>Add Prep Task</h6>
+          <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="alert alert-info py-2 small">
+            Saving adds this task to the master setup and syncs it to all unlocked weekly schedules.
+          </div>
+          {% set fid = 'weekly_add' %}
+          {% include 'prep_task_form.html' %}
+        </div>
+        <div class="modal-footer py-2">
+          <button type="submit" class="btn btn-sm btn-success">
+            <i class="fas fa-save me-1"></i>Save & Sync All Weeks
+          </button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ── Edit task setup modal ── -->
+<div class="modal fade" id="weeklyTaskEditModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="POST" id="weeklyTaskEditForm">
+        <div class="modal-header">
+          <h6 class="modal-title"><i class="fas fa-pen me-1"></i>Edit Prep Task Setup</h6>
+          <button type="button" class="btn-close btn-sm" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body" id="weeklyTaskEditBody">
+          <div class="alert alert-warning py-2 small">
+            Saving updates the master task setup and syncs it to all unlocked weekly schedules.
+          </div>
+          {% set fid = 'weekly_edit' %}
+          {% include 'prep_task_form.html' %}
+        </div>
+        <div class="modal-footer py-2">
+          <button type="submit" class="btn btn-sm btn-success">
+            <i class="fas fa-save me-1"></i>Save & Sync All Weeks
+          </button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endif %}
 
 <!-- ── Issue / Note modal ── -->
 <div class="modal fade" id="issueModal" tabindex="-1">
@@ -598,6 +717,28 @@ const _DAYS      = {{ days|tojson }};
 const _DAY_LBLS  = {{ day_labels|tojson }};
 let _moveSid     = null;
 let _moveTaskId  = null;
+
+function openWeeklyTaskEdit(d) {
+  const form = document.getElementById('weeklyTaskEditForm');
+  const body = document.getElementById('weeklyTaskEditBody');
+  if (!form || !body) return;
+  form.action = `/prep/weekly-task/${d.id}/template-edit`;
+  body.querySelector('[name=task_name_en]').value    = d.en || '';
+  body.querySelector('[name=task_name_vi]').value    = d.vi || '';
+  body.querySelector('[name=station_id]').value      = d.station || 1;
+  body.querySelector('[name=default_time]').value    = d.time || '';
+  body.querySelector('[name=default_assignee]').value = d.assignee || '';
+  body.querySelector('[name=supplier_name]').value   = d.sname || '';
+  const isSupplier = d.supplier === '1';
+  body.querySelector('[name=is_supplier]').checked = isSupplier;
+  const supplierRow = body.querySelector('.supplier-row');
+  if (supplierRow) supplierRow.classList.toggle('d-none', !isSupplier);
+  const activeDays = (d.days || '').split(',').map(s => s.trim()).filter(Boolean);
+  body.querySelectorAll('[name=active_days]').forEach(cb => {
+    cb.checked = activeDays.includes(cb.value);
+  });
+  new bootstrap.Modal(document.getElementById('weeklyTaskEditModal')).show();
+}
 
 function openMovePrep(taskId) {
   const t = MOVE_DATA[taskId];
