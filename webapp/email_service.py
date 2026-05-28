@@ -469,6 +469,10 @@ def _brevo_post(payload: dict, api_key: str, timeout: int = 30) -> tuple[bool, s
 
 def _send_sync(event_type: str, subject: str, lines: list[str],
                link_path: str, actor: str, recipients: list[str], settings: dict) -> None:
+    """Send the notification — one POST per recipient.
+    Sending separately keeps each recipient's email private (they don't see
+    others in the To: field) and isolates failures so one bad address can't
+    block the rest of the team from getting the email."""
     label_color = next(((lbl, color) for k, lbl, _, color in EVENT_TYPES if k == event_type),
                        (event_type.title(), '#1A1A2E'))
     label, color = label_color
@@ -479,19 +483,32 @@ def _send_sync(event_type: str, subject: str, lines: list[str],
     html_body = _build_html(label, color, subject, lines, link, actor)
     text_body = _build_text(label, subject, lines, link, actor)
 
-    payload = {
-        'sender': {
-            'name':  settings.get('from_name') or 'MCQ Mirrabooka',
-            'email': settings['sender_email'],
-        },
-        'to':          [{'email': r} for r in recipients],
-        'subject':     f'[MCQ] {subject}',
-        'htmlContent': html_body,
-        'textContent': text_body,
-    }
+    sent_to: list[str] = []
+    failures: list[str] = []
+    for recipient in recipients:
+        payload = {
+            'sender': {
+                'name':  settings.get('from_name') or 'MCQ Mirrabooka',
+                'email': settings['sender_email'],
+            },
+            'to':          [{'email': recipient}],
+            'subject':     f'[MCQ] {subject}',
+            'htmlContent': html_body,
+            'textContent': text_body,
+        }
+        ok, msg = _brevo_post(payload, settings['brevo_api_key'])
+        if ok:
+            sent_to.append(recipient)
+        else:
+            failures.append(f'{recipient}: {msg}')
 
-    ok, msg = _brevo_post(payload, settings['brevo_api_key'])
-    _log(event_type, subject, recipients, 'sent' if ok else 'failed', '' if ok else msg)
+    if sent_to and not failures:
+        _log(event_type, subject, sent_to, 'sent')
+    elif sent_to and failures:
+        _log(event_type, subject, recipients, 'partial',
+             f'Sent to {len(sent_to)}, failed for {len(failures)}: ' + ' | '.join(failures))
+    else:
+        _log(event_type, subject, recipients, 'failed', ' | '.join(failures) or 'no recipients')
 
 
 def send_notification(event_type: str, subject: str, lines: list[str],
@@ -1015,20 +1032,36 @@ def send_daily_digest(target_date: str, checklists_meta: dict,
             f'Pastry alerts: {len(data["pastry_alerts"])}\n\n'
             f'Open MCQ Web: {settings.get("base_url") or "(set base URL in Email Settings)"}\n')
 
-    payload = {
-        'sender':      {'name': settings.get('from_name') or 'MCQ Mirrabooka',
-                        'email': settings['sender_email']},
-        'to':          [{'email': r} for r in recipients],
-        'subject':     f'[MCQ] Daily Digest — {date_pretty}',
-        'htmlContent': html,
-        'textContent': text,
-    }
-    ok, msg = _brevo_post(payload, settings['brevo_api_key'])
-    _log('digest', f'Daily Digest — {date_pretty}', recipients,
-         'sent' if ok else 'failed', '' if ok else msg)
-    if ok:
-        return True, f'Digest sent to {len(recipients)} recipient(s).'
-    return False, msg
+    # Send one email per recipient so each person's address stays private
+    # and a bad address doesn't abort the whole batch.
+    sent_to: list[str] = []
+    failures: list[str] = []
+    for recipient in recipients:
+        payload = {
+            'sender':      {'name': settings.get('from_name') or 'MCQ Mirrabooka',
+                            'email': settings['sender_email']},
+            'to':          [{'email': recipient}],
+            'subject':     f'[MCQ] Daily Digest — {date_pretty}',
+            'htmlContent': html,
+            'textContent': text,
+        }
+        ok, msg = _brevo_post(payload, settings['brevo_api_key'])
+        if ok:
+            sent_to.append(recipient)
+        else:
+            failures.append(f'{recipient}: {msg}')
+
+    subj = f'Daily Digest — {date_pretty}'
+    if sent_to and not failures:
+        _log('digest', subj, sent_to, 'sent')
+        return True, f'Digest sent to {len(sent_to)} recipient(s).'
+    if sent_to and failures:
+        _log('digest', subj, recipients, 'partial',
+             f'Sent to {len(sent_to)}, failed for {len(failures)}: ' + ' | '.join(failures))
+        return True, (f'Digest sent to {len(sent_to)} recipient(s), '
+                      f'{len(failures)} failed: ' + ' | '.join(failures)[:200])
+    _log('digest', subj, recipients, 'failed', ' | '.join(failures) or 'unknown')
+    return False, ' | '.join(failures) or 'unknown error'
 
 
 def send_test_email(to_email: str) -> tuple[bool, str]:
