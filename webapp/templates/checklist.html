@@ -118,6 +118,7 @@
               <th>Task</th>
               <th style="width:80px" class="text-center">Done?</th>
               <th>Note</th>
+              {% if is_admin %}<th style="width:50px" class="text-center">Del</th>{% endif %}
             </tr>
           </thead>
           <tbody id="task-tbody">
@@ -166,6 +167,15 @@
                        placeholder="Optional note..."
                        value="{{ et.note if et and et.note else '' }}">
               </td>
+              {% if is_admin %}
+              <td class="text-center">
+                <button type="button" class="btn btn-sm btn-outline-danger"
+                        title="Delete this task from the checklist template"
+                        onclick="deleteChecklistTask({{ i }})">
+                  <i class="fas fa-trash"></i>
+                </button>
+              </td>
+              {% endif %}
             </tr>
             {% endfor %}
           </tbody>
@@ -475,6 +485,33 @@ async function addChecklistTask() {
   }
 }
 
+async function deleteChecklistTask(i) {
+  const textEl = document.getElementById('taskname-text-' + i);
+  const taskName = textEl ? textEl.textContent : 'this task';
+  if (!confirm(`Delete "${taskName}" from the ${CHK_SECTION} checklist template?\n\nThis is permanent and affects all future ${CHK_SECTION} checklists.`)) return;
+
+  const fd = new FormData();
+  fd.append('chk_type', CHK_TYPE);
+  fd.append('section', CHK_SECTION);
+  fd.append('order', i);
+  try {
+    const res = await fetch('/admin/checklist-task/delete', {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      body: fd
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      alert('Failed to delete: ' + (data.error || 'unknown'));
+      return;
+    }
+    // Reload so task_order numbering stays in sync with the server.
+    location.reload();
+  } catch(e) {
+    alert('Network error deleting task');
+  }
+}
+
 function appendChecklistTaskRow(i, name) {
   const tbody = document.getElementById('task-tbody');
   const row = document.createElement('tr');
@@ -515,6 +552,13 @@ function appendChecklistTaskRow(i, name) {
     <td>
       <input type="text" name="note_${i}" class="form-control form-control-sm"
              placeholder="Optional note..." value="">
+    </td>
+    <td class="text-center">
+      <button type="button" class="btn btn-sm btn-outline-danger"
+              title="Delete this task from the checklist template"
+              onclick="deleteChecklistTask(${i})">
+        <i class="fas fa-trash"></i>
+      </button>
     </td>`;
   tbody.appendChild(row);
 }

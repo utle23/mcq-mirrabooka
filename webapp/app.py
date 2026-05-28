@@ -1221,6 +1221,35 @@ def add_checklist_task():
         ''', (chk_type, section)).fetchone()['c']
     return jsonify({'ok': True, 'order': total - 1, 'name': name})
 
+
+@app.route('/admin/checklist-task/delete', methods=['POST'])
+@admin_required
+def delete_checklist_task():
+    """Delete a task from a checklist template by its (chk_type, section, task_order)
+    and renumber remaining task_orders so they stay contiguous."""
+    chk_type = request.form.get('chk_type', '').strip()
+    section  = request.form.get('section', '').strip()
+    order    = request.form.get('order', '')
+    if chk_type not in CHECKLISTS or section not in ('opening', 'closing'):
+        return jsonify({'error': 'invalid'}), 400
+    try:
+        order = int(order)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'invalid order'}), 400
+
+    with get_db() as conn:
+        conn.execute('''DELETE FROM checklist_task_templates
+            WHERE chk_type=? AND section=? AND task_order=?''',
+            (chk_type, section, order))
+        # Pull rows above the deleted slot down by 1 so task_order stays contiguous.
+        # SQLite handles UNIQUE constraint within a single UPDATE statement atomically,
+        # so direct decrement is safe here (the deleted slot is empty).
+        conn.execute('''UPDATE checklist_task_templates
+            SET task_order = task_order - 1
+            WHERE chk_type=? AND section=? AND task_order > ?''',
+            (chk_type, section, order))
+    return jsonify({'ok': True})
+
 @app.route('/checklist/<chk_type>/save', methods=['POST'])
 @login_required
 def checklist_save(chk_type):
@@ -1457,6 +1486,29 @@ def add_temperature_food():
             (temp_type, food_order, food_name) VALUES (?,?,?)''',
             (temp_type, next_order, name))
     return jsonify({'ok': True, 'order': next_order, 'name': name})
+
+
+@app.route('/admin/temperature-food/delete', methods=['POST'])
+@admin_required
+def delete_temperature_food():
+    """Delete a food row from a temperature template by (temp_type, food_order)
+    and renumber rows above it so food_order stays contiguous."""
+    temp_type = request.form.get('temp_type', '').strip()
+    order     = request.form.get('order', '')
+    if temp_type not in TEMPERATURES:
+        return jsonify({'error': 'invalid'}), 400
+    try:
+        order = int(order)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'invalid order'}), 400
+
+    with get_db() as conn:
+        conn.execute('''DELETE FROM temp_food_templates
+            WHERE temp_type=? AND food_order=?''', (temp_type, order))
+        conn.execute('''UPDATE temp_food_templates
+            SET food_order = food_order - 1
+            WHERE temp_type=? AND food_order > ?''', (temp_type, order))
+    return jsonify({'ok': True})
 
 @app.route('/temperature/<temp_type>/save', methods=['POST'])
 @login_required

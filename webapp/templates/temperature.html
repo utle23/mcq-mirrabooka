@@ -90,6 +90,7 @@
               <th colspan="2">Check 4</th>
               <th colspan="2">Check 5</th>
               <th style="width:80px">Discard?</th>
+              {% if is_admin %}<th style="width:50px">Del</th>{% endif %}
             </tr>
             <tr class="table-secondary text-center small">
               <th></th>
@@ -99,6 +100,7 @@
               <th>Time</th><th>°C</th>
               <th>Time</th><th>°C</th>
               <th>Y / N</th>
+              {% if is_admin %}<th></th>{% endif %}
             </tr>
           </thead>
           <tbody id="temp-food-tbody">
@@ -156,6 +158,15 @@
                   <option value="Y" {% if er and er.get('discarded')=='Y' %}selected{% endif %}>Y</option>
                 </select>
               </td>
+              {% if is_admin %}
+              <td class="text-center p-1">
+                <button type="button" class="btn btn-sm btn-outline-danger"
+                        title="Delete this food item from the template"
+                        onclick="deleteTempFood({{ i }})">
+                  <i class="fas fa-trash"></i>
+                </button>
+              </td>
+              {% endif %}
             </tr>
             {% endfor %}
           </tbody>
@@ -281,6 +292,32 @@ async function saveFoodName(i) {
   }
 }
 
+async function deleteTempFood(i) {
+  const textEl = document.getElementById('food-text-' + i);
+  const foodName = textEl ? textEl.textContent : 'this food item';
+  if (!confirm(`Delete "${foodName}" from this temperature record template?\n\nThis is permanent and affects all future temperature records of this type.`)) return;
+
+  const fd = new FormData();
+  fd.append('temp_type', TEMP_TYPE);
+  fd.append('order', i);
+  try {
+    const res = await fetch('/admin/temperature-food/delete', {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      body: fd
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      alert('Failed to delete: ' + (data.error || 'unknown'));
+      return;
+    }
+    // Reload so food_order numbering stays in sync with the server.
+    location.reload();
+  } catch(e) {
+    alert('Network error deleting food item');
+  }
+}
+
 async function addTempFood() {
   const input = document.getElementById('new-temp-food');
   const name = input.value.trim();
@@ -354,6 +391,13 @@ function appendTempFoodRow(i, name) {
         <option value="N" selected>N</option>
         <option value="Y">Y</option>
       </select>
+    </td>
+    <td class="text-center p-1">
+      <button type="button" class="btn btn-sm btn-outline-danger"
+              title="Delete this food item from the template"
+              onclick="deleteTempFood(${i})">
+        <i class="fas fa-trash"></i>
+      </button>
     </td>`;
   tbody.appendChild(row);
 }
