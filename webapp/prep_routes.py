@@ -675,6 +675,78 @@ def weekly_archive_task_template(task_id):
         added=stats.get('added', 0),
         inactive=stats.get('inactive', 0)))
 
+@prep.route('/weekly/<week_start>/tasks/bulk-delete', methods=['POST'])
+@_admin_required
+def weekly_bulk_delete_tasks(week_start):
+    try:
+        ws_date = datetime.strptime(week_start, '%Y-%m-%d').date()
+    except Exception:
+        ws_date = get_week_start()
+    week_start = get_week_start(ws_date).isoformat()
+
+    payload = request.get_json(silent=True) or {}
+    raw_ids = payload.get('task_ids') or request.form.getlist('task_ids')
+    task_ids = []
+    for raw in raw_ids:
+        try:
+            task_ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    task_ids = sorted(set(task_ids))
+    if not task_ids:
+        return jsonify({'error': 'No tasks selected.'}), 400
+
+    with _get_db() as conn:
+        _ensure_schedule(week_start, conn)
+        sched = conn.execute(
+            'SELECT * FROM prep_weekly_schedules WHERE week_start=?',
+            (week_start,)).fetchone()
+        if not sched:
+            return jsonify({'error': 'Weekly schedule not found.'}), 404
+        if sched['locked']:
+            return jsonify({'error': 'This week is locked. Unlock or choose an active week first.'}), 400
+
+        placeholders = ','.join('?' for _ in task_ids)
+        tasks = conn.execute(f'''
+            SELECT id, template_id
+            FROM prep_weekly_tasks
+            WHERE schedule_id=? AND id IN ({placeholders})
+        ''', [sched['id']] + task_ids).fetchall()
+        if not tasks:
+            return jsonify({'error': 'Selected tasks were not found in this week.'}), 404
+
+        template_ids = sorted({t['template_id'] for t in tasks if t['template_id']})
+        loose_ids = sorted({t['id'] for t in tasks if not t['template_id']})
+
+        if template_ids:
+            tpl_placeholders = ','.join('?' for _ in template_ids)
+            conn.execute(
+                f'UPDATE prep_task_templates SET active=0 WHERE id IN ({tpl_placeholders})',
+                template_ids)
+        if loose_ids:
+            loose_placeholders = ','.join('?' for _ in loose_ids)
+            conn.execute(
+                f'DELETE FROM prep_weekly_tasks WHERE id IN ({loose_placeholders})',
+                loose_ids)
+
+        stats = _sync_all_unlocked_weeks_from_templates(conn)
+
+    return jsonify({
+        'ok': True,
+        'deleted': len(tasks),
+        'stats': stats,
+        'redirect': url_for(
+            'prep.prep_weekly_view',
+            week_start=week_start,
+            tasks_deleted=1,
+            deleted=len(tasks),
+            weeks=stats.get('weeks', 0),
+            updated=stats.get('updated', 0),
+            added=stats.get('added', 0),
+            inactive=stats.get('inactive', 0),
+        ),
+    })
+
 @prep.route('/weekly/<week_start>/report')
 @_admin_required
 def weekly_report(week_start):

@@ -7,6 +7,7 @@
 /* ── Layout ── */
 .weekly-table { min-width: 860px; font-size: 0.8rem; border-collapse: separate; border-spacing: 0; }
 .weekly-table th, .weekly-table td { vertical-align: middle; }
+.select-col { width: 34px; text-align: center; }
 .task-col  { min-width: 175px; }
 .time-col  { width: 62px; text-align: center; }
 .staff-col { width: 105px; }
@@ -133,6 +134,11 @@
   <button class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#addWeeklyTaskModal">
     <i class="fas fa-plus me-1"></i>Add Task
   </button>
+  <button type="button" id="bulkDeleteTasksBtn" class="btn btn-sm btn-outline-danger d-none"
+          onclick="deleteSelectedTasks()">
+    <i class="fas fa-trash-can me-1"></i>Delete Selected
+    <span class="badge bg-danger ms-1" id="selectedTaskCount">0</span>
+  </button>
   <form method="POST" action="/prep/weekly/{{ week_start }}/apply-templates" class="d-inline">
     <button type="submit" class="btn btn-sm btn-primary"
             onclick="return confirm('Apply current task setup to all unlocked weeks? This updates task names, time, staff, active days, and supplier settings across weekly schedules.')">
@@ -191,6 +197,12 @@
 <div class="alert alert-warning py-2 mb-3">
   <i class="fas fa-box-archive me-1"></i>
   Task archived and synced to {{ request.args.get('weeks', 0) }} unlocked week(s).
+</div>
+{% elif request.args.get('tasks_deleted') %}
+<div class="alert alert-warning py-2 mb-3">
+  <i class="fas fa-trash-can me-1"></i>
+  {{ request.args.get('deleted', 0) }} task(s) deleted/archived and synced to
+  {{ request.args.get('weeks', 0) }} unlocked week(s).
 </div>
 {% elif request.args.get('template_locked') %}
 <div class="alert alert-warning py-2 mb-3">
@@ -317,6 +329,12 @@
     <table class="table table-bordered weekly-table mb-0">
       <thead class="table-dark">
         <tr>
+          {% if is_admin and not sched.locked %}
+          <th class="select-col">
+            <input class="form-check-input" type="checkbox" title="Select all tasks"
+                   onchange="toggleAllTaskSelection(this)">
+          </th>
+          {% endif %}
           <th class="time-col">Time</th>
           <th class="task-col">Task</th>
           <th class="staff-col">Staff</th>
@@ -348,7 +366,7 @@
         {% if task.station.name_en != ns.station %}
         {% set ns.station = task.station.name_en %}
         <tr class="station-hdr">
-          <td colspan="10"
+          <td colspan="{{ 11 if is_admin and not sched.locked else 10 }}"
               style="background:{{ task.station.color }}15;color:{{ task.station.color }};border-left:5px solid {{ task.station.color }}">
             <i class="fas fa-layer-group me-2"></i>{{ task.station.name_en }}
             <span class="ms-2 fw-normal" style="font-size:0.73rem;opacity:0.75">{{ task.station.name_vi }}</span>
@@ -357,6 +375,13 @@
         {% endif %}
 
         <tr>
+          {% if is_admin and not sched.locked %}
+          <td class="select-col">
+            <input class="form-check-input task-select-cb" type="checkbox"
+                   value="{{ task.id }}" onchange="updateSelectedTaskCount()"
+                   title="Select this task for delete">
+          </td>
+          {% endif %}
           <!-- Time (admin: clickable) -->
           <td class="time-col fw-semibold" style="color:#1B4332;font-size:0.78rem">
             {% if is_admin %}
@@ -522,7 +547,7 @@
 
         </tr>
         {% else %}
-        <tr><td colspan="10" class="text-center text-muted py-3">No tasks found.</td></tr>
+        <tr><td colspan="{{ 11 if is_admin and not sched.locked else 10 }}" class="text-center text-muted py-3">No tasks found.</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -715,8 +740,65 @@ MOVE_DATA[{{ task.id }}] = {
 {% endif %}
 const _DAYS      = {{ days|tojson }};
 const _DAY_LBLS  = {{ day_labels|tojson }};
+const _WEEK_START = {{ week_start|tojson }};
 let _moveSid     = null;
 let _moveTaskId  = null;
+
+function updateSelectedTaskCount() {
+  const count = document.querySelectorAll('.task-select-cb:checked').length;
+  const btn = document.getElementById('bulkDeleteTasksBtn');
+  const badge = document.getElementById('selectedTaskCount');
+  if (badge) badge.textContent = count;
+  if (btn) btn.classList.toggle('d-none', count === 0);
+  const all = document.querySelector('thead .select-col input[type="checkbox"]');
+  const boxes = document.querySelectorAll('.task-select-cb');
+  if (all) {
+    all.checked = boxes.length > 0 && count === boxes.length;
+    all.indeterminate = count > 0 && count < boxes.length;
+  }
+}
+
+function toggleAllTaskSelection(cb) {
+  document.querySelectorAll('.task-select-cb').forEach(box => {
+    box.checked = cb.checked;
+  });
+  updateSelectedTaskCount();
+}
+
+function deleteSelectedTasks() {
+  const ids = Array.from(document.querySelectorAll('.task-select-cb:checked'))
+    .map(cb => parseInt(cb.value))
+    .filter(Boolean);
+  if (!ids.length) return;
+  if (Object.keys(_dirty).length > 0) {
+    alert('Please save or undo prep checkbox changes before deleting tasks.');
+    return;
+  }
+  const msg = `Delete ${ids.length} selected task(s) from task setup and sync all unlocked weeks? ` +
+              'Completed records and issue notes are preserved as inactive history.';
+  if (!confirm(msg)) return;
+
+  const btn = document.getElementById('bulkDeleteTasksBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Deleting...';
+  }
+  fetch(`/prep/weekly/${_WEEK_START}/tasks/bulk-delete`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+    body: JSON.stringify({task_ids: ids})
+  }).then(r => r.json()).then(data => {
+    if (data.error) {
+      alert(data.error);
+      location.reload();
+      return;
+    }
+    window.location.href = data.redirect || `/prep/weekly/${_WEEK_START}`;
+  }).catch(() => {
+    alert('Network error. Please try again.');
+    location.reload();
+  });
+}
 
 function openWeeklyTaskEdit(d) {
   const form = document.getElementById('weeklyTaskEditForm');
