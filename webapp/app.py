@@ -213,22 +213,48 @@ TEMPERATURES = {
         'short': 'Banh Mi',
         'color': '#FF9800',
         'badge': 'warning',
+        # Each food has 'kind' = 'hot' (must hold >= 60°C) or 'cold' (must hold <= 5°C).
+        # Only hot foods at Banh Mi: roast pork, roast chicken, stir-fry beef/pork/tofu,
+        # plus beef brisket. Everything else (deli meats, pate, veg, pickles) = cold.
         'foods': [
-            'Cooked Pork Ham (Cha Lua)', 'Cooked Pork Meat (Thit Nguoi)',
-            'Cooked Pork Jelly (Gio Thu)', 'Roasted Pork', 'Roasted Chicken',
-            'Stir-Fry Beef', 'Stir-Fry Pork', 'Stir-Fry Tofu',
-            'Pate', 'Butter', 'Pickled', 'Coriander', 'Cucumber', 'Carrot Pickled',
+            {'name': 'Cooked Pork Ham (Cha Lua)',   'kind': 'cold'},
+            {'name': 'Cooked Pork Meat (Thit Nguoi)','kind': 'cold'},
+            {'name': 'Cooked Pork Jelly (Gio Thu)', 'kind': 'cold'},
+            {'name': 'Roasted Pork',                'kind': 'hot'},
+            {'name': 'Roasted Chicken',             'kind': 'hot'},
+            {'name': 'Stir-Fry Beef',               'kind': 'hot'},
+            {'name': 'Stir-Fry Pork',               'kind': 'hot'},
+            {'name': 'Stir-Fry Tofu',               'kind': 'hot'},
+            {'name': 'Beef Brisket',                'kind': 'hot'},
+            {'name': 'Pate',                        'kind': 'cold'},
+            {'name': 'Butter',                      'kind': 'cold'},
+            {'name': 'Pickled',                     'kind': 'cold'},
+            {'name': 'Coriander',                   'kind': 'cold'},
+            {'name': 'Cucumber',                    'kind': 'cold'},
+            {'name': 'Carrot Pickled',              'kind': 'cold'},
         ],
     },
     'chef': {
-        'title': 'Chef / Noodle Soup & Rice Temperature Record',
+        'title': 'Chef / Cold Storage Temperature Record',
         'short': 'Chef',
         'color': '#F44336',
         'badge': 'danger',
+        # Chef temperature record = cold storage only (per food-safety rule).
+        # All items must hold <= 5°C.
         'foods': [
-            'Cooked Beef', 'Raw Beef', 'Cooked Beef Ball', 'Cooked Pork', 'Cooked Pork Ham',
-            'Pho Noodle', 'Rice Vermicelli Bun', 'Pork Chop', 'Egg',
-            'Pickled', 'Cucumber', 'Lettuce', 'Tomato',
+            {'name': 'Cooked Beef',         'kind': 'cold'},
+            {'name': 'Raw Beef',            'kind': 'cold'},
+            {'name': 'Cooked Beef Ball',    'kind': 'cold'},
+            {'name': 'Cooked Pork',         'kind': 'cold'},
+            {'name': 'Cooked Pork Ham',     'kind': 'cold'},
+            {'name': 'Pho Noodle',          'kind': 'cold'},
+            {'name': 'Rice Vermicelli Bun', 'kind': 'cold'},
+            {'name': 'Pork Chop',           'kind': 'cold'},
+            {'name': 'Egg',                 'kind': 'cold'},
+            {'name': 'Pickled',             'kind': 'cold'},
+            {'name': 'Cucumber',            'kind': 'cold'},
+            {'name': 'Lettuce',             'kind': 'cold'},
+            {'name': 'Tomato',              'kind': 'cold'},
         ],
     },
     'pastry': {
@@ -236,14 +262,37 @@ TEMPERATURES = {
         'short': 'Pastry',
         'color': '#9C27B0',
         'badge': 'secondary',
+        # Pastry hot food display = hot holding only. All items must hold >= 60°C.
         'foods': [
-            'Sesame Ball', 'Sesame Bread', 'Fried Pork Dumpling', 'Steam Bun',
-            'Sweet Donuts', 'Chinese Donut', 'Fried Banana', 'Pork Pastry',
-            'Bird Nest Cake', 'Curry Puff', 'Spring Roll',
-            'Banana Banh Tet', 'Beef Samosa', 'Banh Bao (Dumpling)',
+            {'name': 'Sesame Ball',         'kind': 'hot'},
+            {'name': 'Sesame Bread',        'kind': 'hot'},
+            {'name': 'Fried Pork Dumpling', 'kind': 'hot'},
+            {'name': 'Steam Bun',           'kind': 'hot'},
+            {'name': 'Sweet Donuts',        'kind': 'hot'},
+            {'name': 'Chinese Donut',       'kind': 'hot'},
+            {'name': 'Fried Banana',        'kind': 'hot'},
+            {'name': 'Pork Pastry',         'kind': 'hot'},
+            {'name': 'Bird Nest Cake',      'kind': 'hot'},
+            {'name': 'Curry Puff',          'kind': 'hot'},
+            {'name': 'Spring Roll',         'kind': 'hot'},
+            {'name': 'Banana Banh Tet',     'kind': 'hot'},
+            {'name': 'Beef Samosa',         'kind': 'hot'},
+            {'name': 'Banh Bao (Dumpling)', 'kind': 'hot'},
         ],
     },
 }
+
+
+def temp_food_kind_default(temp_type, name):
+    """Look up the food's kind from the TEMPERATURES seed dict by exact name match,
+    falling back to the type's prevailing kind so admin-added items aren't classed wrong."""
+    for f in TEMPERATURES.get(temp_type, {}).get('foods', []):
+        if f['name'].strip().lower() == (name or '').strip().lower():
+            return f['kind']
+    # Type-level defaults
+    if temp_type == 'pastry':  return 'hot'
+    if temp_type == 'chef':    return 'cold'
+    return 'cold'   # banh_mi default
 
 STAFF = [
     'DANG, THI LAN UY', 'DOAN, THI NI', 'NGUYEN, PHU TAN',
@@ -562,8 +611,19 @@ def init_db():
             temp_type  TEXT NOT NULL,
             food_order INTEGER NOT NULL,
             food_name  TEXT NOT NULL,
+            food_kind  TEXT NOT NULL DEFAULT 'cold',
             PRIMARY KEY (temp_type, food_order)
         )''')
+        # Migrate: add food_kind for older installs that don't have it yet.
+        try:
+            conn.execute("ALTER TABLE temp_food_templates ADD COLUMN food_kind TEXT NOT NULL DEFAULT 'cold'")
+        except sqlite3.OperationalError:
+            pass
+        # Migrate: per-food notes column on the reading row.
+        try:
+            conn.execute("ALTER TABLE temp_readings ADD COLUMN notes TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
         # Seed from CHECKLISTS if empty
         if conn.execute('SELECT COUNT(*) as c FROM checklist_task_templates').fetchone()['c'] == 0:
             for chk_type, chk_data in CHECKLISTS.items():
@@ -579,10 +639,45 @@ def init_db():
                 'SELECT COUNT(*) as c FROM temp_food_templates WHERE temp_type=?',
                 (temp_type,)).fetchone()['c']
             if existing_foods == 0:
-                for i, name in enumerate(temp_data.get('foods', [])):
+                for i, food in enumerate(temp_data.get('foods', [])):
                     conn.execute('''INSERT OR IGNORE INTO temp_food_templates
-                        (temp_type, food_order, food_name) VALUES (?,?,?)''',
-                        (temp_type, i, name))
+                        (temp_type, food_order, food_name, food_kind) VALUES (?,?,?,?)''',
+                        (temp_type, i, food['name'], food['kind']))
+
+        # Migration: classify existing food rows by kind. Runs once
+        # (uses a marker row in audit_log to avoid re-running every boot).
+        try:
+            mig_marker = '_mig_food_kind_v1'
+            already = conn.execute(
+                "SELECT 1 FROM audit_log WHERE action=? LIMIT 1", (mig_marker,)
+            ).fetchone()
+            if not already:
+                for r in conn.execute(
+                    'SELECT rowid, temp_type, food_name FROM temp_food_templates').fetchall():
+                    kind = temp_food_kind_default(r['temp_type'], r['food_name'])
+                    conn.execute(
+                        'UPDATE temp_food_templates SET food_kind=? WHERE rowid=?',
+                        (kind, r['rowid']))
+                # Ensure 'Beef Brisket' exists on banh_mi (added in this update).
+                exists = conn.execute(
+                    "SELECT 1 FROM temp_food_templates "
+                    "WHERE temp_type='banh_mi' AND food_name='Beef Brisket'").fetchone()
+                if not exists:
+                    next_order = conn.execute(
+                        "SELECT COALESCE(MAX(food_order),-1)+1 AS n "
+                        "FROM temp_food_templates WHERE temp_type='banh_mi'"
+                    ).fetchone()['n']
+                    conn.execute(
+                        "INSERT OR IGNORE INTO temp_food_templates "
+                        "(temp_type,food_order,food_name,food_kind) "
+                        "VALUES ('banh_mi',?,'Beef Brisket','hot')", (next_order,))
+                conn.execute(
+                    "INSERT INTO audit_log (action,record_type,user_name,details) "
+                    "VALUES (?,?,?,?)",
+                    (mig_marker, 'migration', 'system',
+                     'Classified temp foods as hot/cold and ensured Beef Brisket on banh_mi.'))
+        except sqlite3.OperationalError:
+            pass
 
         # Migrate: add new columns if they don't exist
         for col_sql in [
@@ -717,14 +812,23 @@ def log_action(action, record_type, record_id, user_name, details=''):
         pass
 
 def get_temp_foods(conn, temp_type):
+    """Return list of {name, kind} dicts in display order."""
     rows = conn.execute('''
-        SELECT food_name FROM temp_food_templates
+        SELECT food_name, food_kind FROM temp_food_templates
         WHERE temp_type=?
         ORDER BY food_order
     ''', (temp_type,)).fetchall()
     if rows:
-        return [r['food_name'] for r in rows]
-    return TEMPERATURES.get(temp_type, {}).get('foods', [])
+        return [{'name': r['food_name'],
+                 'kind': r['food_kind'] or temp_food_kind_default(temp_type, r['food_name'])}
+                for r in rows]
+    return [dict(f) for f in TEMPERATURES.get(temp_type, {}).get('foods', [])]
+
+
+def get_temp_food_names(conn, temp_type):
+    """Backward-compat helper for places that only need a flat list of names."""
+    return [f['name'] for f in get_temp_foods(conn, temp_type)]
+
 
 def get_temp_data_for_form(conn, temp_type):
     temp_data = dict(TEMPERATURES[temp_type])
@@ -1670,15 +1774,16 @@ def temperature_save(temp_type):
     with get_db() as _c:
         foods = get_temp_foods(_c, temp_type)
     readings = []
-    for i, food_name in enumerate(foods):
+    for i, food in enumerate(foods):
         readings.append({
-            'food_order': i, 'food_name': food_name,
+            'food_order': i, 'food_name': food['name'], 'food_kind': food['kind'],
             'c1_time': request.form.get(f'c1_time_{i}',''), 'c1_temp': p(request.form.get(f'c1_temp_{i}','')),
             'c2_time': request.form.get(f'c2_time_{i}',''), 'c2_temp': p(request.form.get(f'c2_temp_{i}','')),
             'c3_time': request.form.get(f'c3_time_{i}',''), 'c3_temp': p(request.form.get(f'c3_temp_{i}','')),
             'c4_time': request.form.get(f'c4_time_{i}',''), 'c4_temp': p(request.form.get(f'c4_temp_{i}','')),
             'c5_time': request.form.get(f'c5_time_{i}',''), 'c5_temp': p(request.form.get(f'c5_temp_{i}','')),
             'discarded': request.form.get(f'discarded_{i}', 'N'),
+            'notes':     request.form.get(f'food_notes_{i}', '').strip(),
         })
 
     with get_db() as conn:
@@ -1697,21 +1802,29 @@ def temperature_save(temp_type):
             sid = cur.lastrowid
         for r in readings:
             conn.execute(
-                'INSERT INTO temp_readings (session_id,food_order,food_name,c1_time,c1_temp,c2_time,c2_temp,c3_time,c3_temp,c4_time,c4_temp,c5_time,c5_temp,discarded) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                'INSERT INTO temp_readings (session_id,food_order,food_name,c1_time,c1_temp,c2_time,c2_temp,c3_time,c3_temp,c4_time,c4_temp,c5_time,c5_temp,discarded,notes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                 (sid,r['food_order'],r['food_name'],
                  r['c1_time'],r['c1_temp'],r['c2_time'],r['c2_temp'],
                  r['c3_time'],r['c3_temp'],r['c4_time'],r['c4_temp'],
-                 r['c5_time'],r['c5_temp'],r['discarded']))
+                 r['c5_time'],r['c5_temp'],r['discarded'],r['notes']))
         log_action('SAVE_TEMP', 'temperature', sid, recorded_by,
                    f'{TEMPERATURES[temp_type]["title"]} / {temp_date}')
 
+    # Out-of-zone check uses food_kind:
+    #   cold food → unsafe if temp > 5°C   (must stay at or below 5)
+    #   hot  food → unsafe if temp < 60°C  (must stay at or above 60)
     out_of_zone = []
     discarded_items = []
     for r in readings:
         for n in range(1, 6):
             tv = r.get(f'c{n}_temp')
-            if tv is not None and (tv < 5 or tv > 60):
-                out_of_zone.append(f'{r["food_name"]} check {n}: {tv}°C')
+            if tv is None:
+                continue
+            unsafe = (r['food_kind'] == 'cold' and tv > 5) or \
+                     (r['food_kind'] == 'hot'  and tv < 60)
+            if unsafe:
+                out_of_zone.append(
+                    f'{r["food_name"]} ({r["food_kind"]}) check {n}: {tv}°C')
         if (r.get('discarded') or '').upper() == 'Y':
             discarded_items.append(r['food_name'])
     email_service.send_notification(

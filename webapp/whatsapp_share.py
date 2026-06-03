@@ -84,15 +84,23 @@ def _collect_today(date_str: str) -> dict:
         for r in temp_rows:
             r = dict(r)
             meta = TEMPERATURES_META.get(r['type'], {})
-            # Out-of-zone reading count
-            bad = conn.execute('''SELECT COUNT(*) c FROM temp_readings
-                WHERE session_id=? AND (
-                    (c1_temp IS NOT NULL AND (c1_temp < 5 OR c1_temp > 60)) OR
-                    (c2_temp IS NOT NULL AND (c2_temp < 5 OR c2_temp > 60)) OR
-                    (c3_temp IS NOT NULL AND (c3_temp < 5 OR c3_temp > 60)) OR
-                    (c4_temp IS NOT NULL AND (c4_temp < 5 OR c4_temp > 60)) OR
-                    (c5_temp IS NOT NULL AND (c5_temp < 5 OR c5_temp > 60))
-                )''', (r['id'],)).fetchone()['c']
+            # Out-of-zone count uses food_kind: cold→unsafe if >5, hot→unsafe if <60
+            reading_rows = conn.execute('''
+                SELECT tr.food_name, tr.c1_temp, tr.c2_temp, tr.c3_temp, tr.c4_temp, tr.c5_temp,
+                       COALESCE(ft.food_kind, 'cold') AS kind
+                FROM temp_readings tr
+                LEFT JOIN temp_food_templates ft
+                  ON ft.temp_type = ? AND ft.food_name = tr.food_name
+                WHERE tr.session_id = ?''', (r['type'], r['id'])).fetchall()
+            bad = 0
+            for rr in reading_rows:
+                kind = rr['kind'] or 'cold'
+                for col in ('c1_temp', 'c2_temp', 'c3_temp', 'c4_temp', 'c5_temp'):
+                    v = rr[col]
+                    if v is None:
+                        continue
+                    if (kind == 'cold' and v > 5) or (kind == 'hot' and v < 60):
+                        bad += 1
             r['out_of_zone'] = bad
             r['meta']        = meta
             out['temperatures'].append(r)

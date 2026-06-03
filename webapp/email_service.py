@@ -1026,22 +1026,31 @@ def collect_daily_digest(target_date: str, checklists_meta: dict | None = None,
             FROM temp_sessions ts WHERE ts.date=? ORDER BY ts.type
         ''', (target_date,)).fetchall()]
 
-        # Out-of-zone readings
+        # Out-of-zone readings — kind-aware (cold>5 OR hot<60)
         oos = [dict(r) for r in conn.execute('''
             SELECT ts.type as temp_type, tr.food_name,
-                   tr.c1_temp, tr.c2_temp, tr.c3_temp, tr.c4_temp, tr.c5_temp
-            FROM temp_readings tr JOIN temp_sessions ts ON ts.id=tr.session_id
+                   tr.c1_temp, tr.c2_temp, tr.c3_temp, tr.c4_temp, tr.c5_temp,
+                   COALESCE(ft.food_kind, 'cold') AS food_kind
+            FROM temp_readings tr
+            JOIN temp_sessions ts ON ts.id = tr.session_id
+            LEFT JOIN temp_food_templates ft
+              ON ft.temp_type = ts.type AND ft.food_name = tr.food_name
             WHERE ts.date=?''', (target_date,)).fetchall()]
         oos_flagged = []
         for r in oos:
+            kind = r.get('food_kind') or 'cold'
             bad = []
             for n in range(1, 6):
                 v = r.get(f'c{n}_temp')
-                if v is not None and (v < 5 or v > 60):
+                if v is None:
+                    continue
+                unsafe = (kind == 'cold' and v > 5) or (kind == 'hot' and v < 60)
+                if unsafe:
                     bad.append(f'{v}°C')
             if bad:
                 oos_flagged.append({
                     'food': r['food_name'],
+                    'kind': kind.upper(),
                     'type': temperatures_meta.get(r['temp_type'], {}).get('title', r['temp_type']),
                     'readings': bad,
                 })
@@ -1230,9 +1239,12 @@ def build_digest_html(data: dict, base_url: str = '') -> str:
     # Out-of-zone temperature alerts
     oos_html = ''
     if data['oos_flagged']:
+        def _kind_label(o):
+            k = o.get('kind') or ''
+            return f' · {escape(k)}' if k else ''
         oos_lines = ''.join(
-            f'<li style="padding:4px 0;color:#B71C1C"><b>{escape(o["food"])}</b> ({escape(o["type"])}): '
-            f'{escape(", ".join(o["readings"]))}</li>'
+            f'<li style="padding:4px 0;color:#B71C1C"><b>{escape(o["food"])}</b>{_kind_label(o)} '
+            f'({escape(o["type"])}): {escape(", ".join(o["readings"]))}</li>'
             for o in data['oos_flagged'][:20]
         )
         oos_html = (

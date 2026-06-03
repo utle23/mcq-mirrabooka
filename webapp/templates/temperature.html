@@ -107,21 +107,30 @@
             {% for food in temp_data.foods %}
             {% set i = loop.index0 %}
             {% set er = existing_readings[i] if i < existing_readings|length else None %}
-            <tr>
+            <tr data-kind="{{ food.kind }}" class="food-row food-row-{{ food.kind }}">
               <td class="fw-semibold small" id="food-cell-{{ i }}">
+                {% if food.kind == 'hot' %}
+                <span class="kind-badge kind-hot" title="Hot food — must hold at 60°C or above">
+                  <i class="fas fa-fire"></i> HOT
+                </span>
+                {% else %}
+                <span class="kind-badge kind-cold" title="Cold food — must hold at 5°C or below">
+                  <i class="fas fa-snowflake"></i> COLD
+                </span>
+                {% endif %}
                 {% if is_admin %}
-                <span class="food-label" id="food-label-{{ i }}"
+                <span class="food-label ms-1" id="food-label-{{ i }}"
                       title="Click to edit food item"
                       onclick="startEditFood({{ i }})"
                       style="cursor:pointer">
-                  <span id="food-text-{{ i }}">{{ food }}</span>
+                  <span id="food-text-{{ i }}">{{ food.name }}</span>
                   <i class="fas fa-pen ms-1 food-edit-icon"></i>
                 </span>
                 <div class="d-none" id="food-edit-{{ i }}">
                   <div class="input-group input-group-sm">
                     <input type="text" class="form-control form-control-sm"
                            id="food-input-{{ i }}"
-                           value="{{ food|e }}"
+                           value="{{ food.name|e }}"
                            onkeydown="handleFoodKey(event, {{ i }})"
                            onblur="saveFoodName({{ i }})">
                     <button type="button" class="btn btn-success btn-sm" onclick="saveFoodName({{ i }})">
@@ -133,8 +142,14 @@
                   </div>
                 </div>
                 {% else %}
-                {{ food }}
+                <span class="ms-1">{{ food.name }}</span>
                 {% endif %}
+                <!-- Per-food note toggle -->
+                <button type="button" class="btn btn-sm note-toggle p-0 ms-1"
+                        title="Add note for this food"
+                        onclick="toggleFoodNote({{ i }})">
+                  <i class="fas fa-comment-dots"></i>
+                </button>
               </td>
               {% for c in range(1,6) %}
               {% set tkey = 'c' ~ c ~ '_time' %}
@@ -146,6 +161,7 @@
               </td>
               <td class="p-1">
                 <input type="number" name="c{{ c }}_temp_{{ i }}" step="0.1"
+                       data-kind="{{ food.kind }}"
                        class="form-control form-control-sm p-1 temp-input"
                        value="{{ er[vkey] if er and er[vkey] is not none else '' }}"
                        placeholder="—" oninput="colorTemp(this)"
@@ -167,6 +183,23 @@
                 </button>
               </td>
               {% endif %}
+            </tr>
+            <!-- Note drawer row, hidden unless populated or toggled -->
+            <tr id="food-note-row-{{ i }}"
+                class="food-note-row {% if not (er and er.get('notes')) %}d-none{% endif %}">
+              <td colspan="{{ 13 if is_admin else 12 }}" class="p-1">
+                <div class="d-flex align-items-center gap-2">
+                  <i class="fas fa-comment-dots text-muted small ms-2"></i>
+                  <input type="text" name="food_notes_{{ i }}"
+                         class="form-control form-control-sm food-note-input"
+                         placeholder="Note for {{ food.name }} (e.g. moved to ice bath, discarded at 12:30)"
+                         value="{{ er.get('notes','') if er else '' }}">
+                  <button type="button" class="btn btn-sm btn-outline-secondary"
+                          onclick="hideFoodNote({{ i }})" title="Hide note">
+                    <i class="fas fa-xmark"></i>
+                  </button>
+                </div>
+              </td>
             </tr>
             {% endfor %}
           </tbody>
@@ -207,6 +240,29 @@
 }
 .food-label:hover .food-edit-icon { opacity:1; }
 .food-label:hover { color:#1565C0; }
+
+/* Hot / cold badge */
+.kind-badge {
+  display: inline-block; padding: 1px 7px; border-radius: 8px;
+  font-size: 0.62rem; font-weight: 800; letter-spacing: .03em;
+  vertical-align: middle; line-height: 1.35;
+}
+.kind-badge.kind-hot  { background: #FFE0B2; color: #C0392B; border: 1px solid #FFAB91; }
+.kind-badge.kind-cold { background: #E1F5FE; color: #1565C0; border: 1px solid #81D4FA; }
+.kind-badge i { font-size: 0.62rem; margin-right: 2px; }
+
+/* Subtle row tint by kind */
+.food-row-hot  > td:first-child { box-shadow: inset 3px 0 0 #FFAB91; }
+.food-row-cold > td:first-child { box-shadow: inset 3px 0 0 #81D4FA; }
+
+/* Note toggle button */
+.note-toggle {
+  background: transparent; border: none; color: #888;
+  font-size: 0.78rem;
+}
+.note-toggle:hover { color: #1565C0; }
+.food-note-row > td { background: #FFFDE7; }
+.food-note-row .food-note-input { background: #fff; font-size: 0.82rem; }
 </style>
 {% endblock %}
 
@@ -214,19 +270,33 @@
 <script>
 const TEMP_TYPE = '{{ temp_type }}';
 
+// Per-food kind-aware safe / danger colouring.
+// COLD food → safe at <= 5°C, danger above.
+// HOT  food → safe at >= 60°C, danger below.
+// Any reading inside the danger zone (5°C - 60°C) is unsafe for either kind.
 function colorTemp(input){
   const v = parseFloat(input.value);
   if(isNaN(v)){
     input.style.background = '';
     input.style.color = '';
+    input.title = '';
     return;
   }
-  if(v < 5 || v > 60){
-    // Safe zone (cold storage or hot holding)
+  const kind = input.dataset.kind || 'cold';
+  let safe;
+  if (kind === 'hot') {
+    safe = v >= 60;
+    input.title = safe ? 'OK · hot food at safe holding temperature'
+                       : 'DANGER · hot food below 60°C';
+  } else {
+    safe = v <= 5;
+    input.title = safe ? 'OK · cold food at safe storage temperature'
+                       : 'DANGER · cold food above 5°C';
+  }
+  if (safe) {
     input.style.background = '#d4edda';
     input.style.color = '#155724';
   } else {
-    // Danger zone
     input.style.background = '#f8d7da';
     input.style.color = '#721c24';
   }
@@ -234,6 +304,26 @@ function colorTemp(input){
 document.addEventListener('DOMContentLoaded', ()=>{
   document.querySelectorAll('.temp-input').forEach(colorTemp);
 });
+
+function toggleFoodNote(i) {
+  const row = document.getElementById('food-note-row-' + i);
+  if (!row) return;
+  row.classList.toggle('d-none');
+  if (!row.classList.contains('d-none')) {
+    const inp = row.querySelector('.food-note-input');
+    if (inp) inp.focus();
+  }
+}
+function hideFoodNote(i) {
+  const row = document.getElementById('food-note-row-' + i);
+  if (!row) return;
+  const inp = row.querySelector('.food-note-input');
+  if (inp && inp.value.trim()) {
+    if (!confirm('Clear the note for this food?')) return;
+    inp.value = '';
+  }
+  row.classList.add('d-none');
+}
 
 {% if is_admin %}
 function escapeHtml(value) {
