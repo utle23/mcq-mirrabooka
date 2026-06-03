@@ -8,6 +8,13 @@ from werkzeug.utils import secure_filename
 app = Flask(__name__)
 app.secret_key = 'mcq-mirrabooka-2024-secure-key'
 
+# ── Session security ─────────────────────────────────────────────────────────
+# Defence against shared-device drift: 30-minute idle timeout AND a hard
+# 8-hour absolute cap from login (covers one full shift, no longer).
+SESSION_IDLE_TIMEOUT     = timedelta(minutes=30)
+SESSION_ABSOLUTE_TIMEOUT = timedelta(hours=8)
+app.config['PERMANENT_SESSION_LIFETIME'] = SESSION_ABSOLUTE_TIMEOUT
+
 from prep_routes      import prep      as prep_bp,      init_prep_tables
 from pastry_routes    import pastry    as pastry_bp,    init_pastry_tables
 from inventory_routes import inventory as inventory_bp, init_inventory_tables
@@ -1122,6 +1129,52 @@ def inject_globals():
         issue_categories=ISSUE_CATEGORIES,
     )
 
+# Paths that should NOT trigger or be affected by the timeout middleware:
+# static assets (otherwise a background image kept loading would keep the
+# session alive forever), the login page itself, and the cron endpoint
+# which carries its own token-based auth.
+_TIMEOUT_EXEMPT_PREFIXES = ('/static/', '/login', '/logout', '/cron/')
+
+
+@app.before_request
+def _enforce_session_timeout():
+    """Idle (30 min) + absolute (8h) session timeouts.
+    Runs before every request; redirects to /login with a friendly notice
+    when a logged-in session has expired."""
+    if any(request.path.startswith(p) for p in _TIMEOUT_EXEMPT_PREFIXES):
+        return None
+    if not session.get('logged_in'):
+        return None
+
+    now = datetime.now()
+
+    # 1) Absolute cap from login time (one shift max)
+    login_iso = session.get('login_ts')
+    if login_iso:
+        try:
+            if now - datetime.fromisoformat(login_iso) > SESSION_ABSOLUTE_TIMEOUT:
+                session.clear()
+                return redirect(url_for('login_page', timeout='session'))
+        except ValueError:
+            pass
+
+    # 2) Idle cap (no activity for 30 min)
+    last_iso = session.get('last_activity')
+    if last_iso:
+        try:
+            if now - datetime.fromisoformat(last_iso) > SESSION_IDLE_TIMEOUT:
+                session.clear()
+                return redirect(url_for('login_page', timeout='idle'))
+        except ValueError:
+            pass
+
+    # Bump activity timestamp, keep session marked permanent so the cookie
+    # itself respects PERMANENT_SESSION_LIFETIME.
+    session['last_activity'] = now.isoformat(timespec='seconds')
+    session.permanent = True
+    return None
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def login_page():
     error = None
@@ -1130,17 +1183,32 @@ def login_page():
         branch = request.form.get('branch', '').strip()
         if branch not in BRANCHES:
             error = 'Please select a valid branch.'
-        elif pw == USER_PASSWORD:
-            session.update({'logged_in': True, 'role': 'user', 'branch': branch,
-                            'login_time': datetime.now().strftime('%Y-%m-%d %H:%M')})
-            return redirect(url_for('dashboard'))
-        elif pw == ADMIN_PASSWORD:
-            session.update({'logged_in': True, 'role': 'admin', 'branch': branch,
-                            'login_time': datetime.now().strftime('%Y-%m-%d %H:%M')})
+        elif pw == USER_PASSWORD or pw == ADMIN_PASSWORD:
+            now = datetime.now()
+            session.clear()
+            session.update({
+                'logged_in':     True,
+                'role':          'admin' if pw == ADMIN_PASSWORD else 'user',
+                'branch':        branch,
+                'login_time':    now.strftime('%Y-%m-%d %H:%M'),
+                'login_ts':      now.isoformat(timespec='seconds'),
+                'last_activity': now.isoformat(timespec='seconds'),
+            })
+            session.permanent = True
             return redirect(url_for('dashboard'))
         else:
             error = 'Incorrect password. Please try again.'
-    return render_template('login.html', error=error, branches=BRANCHES)
+
+    # Friendly notice when redirected here by the timeout middleware
+    notice = None
+    tk = request.args.get('timeout')
+    if tk == 'idle':
+        notice = 'You were signed out after 30 minutes of inactivity. Please sign in again.'
+    elif tk == 'session':
+        notice = 'Your 8-hour session expired. Please sign in again.'
+
+    return render_template('login.html', error=error, notice=notice, branches=BRANCHES)
+
 
 @app.route('/logout')
 def logout():
