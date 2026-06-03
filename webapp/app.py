@@ -22,6 +22,7 @@ from job_routes       import jobs      as jobs_bp,      init_job_tables
 from rules_routes     import rules_bp,                  init_rules_tables
 from training_routes  import training_bp,               init_training_tables
 from whatsapp_share   import whatsapp_bp,                init_whatsapp
+from packaging_routes import packaging_bp,               init_packaging
 import email_service
 app.register_blueprint(prep_bp)
 app.register_blueprint(pastry_bp)
@@ -30,6 +31,7 @@ app.register_blueprint(jobs_bp)
 app.register_blueprint(rules_bp)
 app.register_blueprint(training_bp)
 app.register_blueprint(whatsapp_bp)
+app.register_blueprint(packaging_bp)
 DB_PATH      = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mcq_restaurant.db')
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -3995,6 +3997,7 @@ init_training_tables(DB_PATH, CHECKLISTS)
 email_service.init_email_tables(DB_PATH)
 init_whatsapp(DB_PATH, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static'),
               UPLOAD_FOLDER, CHECKLISTS, TEMPERATURES)
+init_packaging(DB_PATH)
 
 if __name__ == '__main__':
     print('\n' + '='*50)

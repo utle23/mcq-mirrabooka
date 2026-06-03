@@ -1,0 +1,580 @@
+{% extends "base.html" %}
+{% block title %}Packaging Order{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-boxes-packing me-2" style="color:#6D4C41"></i>Packaging Order</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.supplier-card {
+  background: linear-gradient(135deg, #6D4C41 0%, #4E342E 100%);
+  color: #fff; border-radius: 14px; padding: 22px 26px;
+  margin-bottom: 18px; box-shadow: 0 4px 20px rgba(78,52,46,.18);
+}
+.supplier-card h5 { margin: 0 0 4px 0; font-weight: 700; }
+.supplier-meta {
+  font-size: 0.9rem; opacity: .9; line-height: 1.6;
+}
+.supplier-meta i { width: 18px; opacity: .8; }
+.supplier-meta a { color: #FFE082; text-decoration: none; }
+.supplier-meta a:hover { text-decoration: underline; }
+
+.action-bar {
+  background: #fff; border-radius: 12px; padding: 14px 18px;
+  border: 1px solid #e8eaed; box-shadow: 0 1px 4px rgba(0,0,0,.04);
+  display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+  margin-bottom: 14px;
+}
+.btn-gmail {
+  background: #fff; border: 1px solid #D14836; color: #D14836;
+  font-weight: 700; padding: 9px 18px; border-radius: 8px;
+}
+.btn-gmail:hover { background: #D14836; color: #fff; }
+.btn-brevo {
+  background: #0B3D2E; border: none; color: #fff;
+  font-weight: 700; padding: 9px 18px; border-radius: 8px;
+}
+.btn-brevo:hover { background: #08291F; color: #fff; }
+.btn-brevo:disabled { opacity: .55; cursor: not-allowed; }
+
+.items-table { background: #fff; border-radius: 12px; overflow: hidden;
+  border: 1px solid #e8eaed; }
+.items-table thead { background: #1A1A2E; color: #fff; }
+.items-table th { font-size: 0.78rem; text-transform: uppercase; letter-spacing: .04em; }
+.items-table tr:hover { background: #f7f9fb; }
+.items-table td { vertical-align: middle; font-size: 0.92rem; }
+.items-table .qty-input { width: 80px; text-align: center; font-weight: 700; }
+.items-table .qty-input:focus { background: #FFF8E1; }
+.items-table tbody tr.has-qty { background: #FFF8E1; }
+.items-table tbody tr.has-qty:hover { background: #FFF3CD; }
+.code-cell { font-family: ui-monospace, Menlo, monospace; font-size: 0.82rem; color: #555; }
+.unit-cell { font-size: 0.78rem; color: #888; text-transform: lowercase; }
+
+.preview-card {
+  background: #f7f9fb; border: 1px solid #eef0f3; border-radius: 10px;
+  padding: 16px 18px; margin-top: 14px;
+}
+.preview-card pre {
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px;
+  white-space: pre-wrap; word-wrap: break-word; margin: 0;
+  background: #fff; padding: 12px; border-radius: 6px;
+  border: 1px solid #eef0f3; max-height: 320px; overflow: auto;
+}
+
+.qty-summary {
+  font-size: 0.85rem; padding: 5px 10px; border-radius: 12px;
+  background: #FFF3E0; color: #E65100; font-weight: 700;
+}
+
+.admin-bar {
+  background: #FFFBE6; border: 1px dashed #F1C40F; border-radius: 8px;
+  padding: 8px 14px; font-size: 0.82rem; color: #7B5C00;
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.toast-banner {
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  background: #1B5E20; color: #fff; padding: 10px 20px;
+  border-radius: 999px; font-weight: 600; font-size: 0.9rem;
+  box-shadow: 0 6px 24px rgba(0,0,0,.25); z-index: 9999;
+  display: none;
+}
+.toast-banner.err { background: #C62828; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+{% if not supplier %}
+<div class="alert alert-warning">
+  <i class="fas fa-circle-exclamation me-1"></i>No suppliers configured yet.
+  {% if is_admin %}
+  <a href="#addSupplier" data-bs-toggle="modal">Add the first one →</a>
+  {% endif %}
+</div>
+{% else %}
+
+<!-- Supplier picker + admin actions -->
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+  <div class="d-flex gap-2 align-items-center flex-wrap">
+    <form method="GET" class="d-flex gap-2 align-items-center">
+      <select name="supplier" class="form-select form-select-sm" onchange="this.form.submit()">
+        {% for s in suppliers %}
+        <option value="{{ s.id }}" {% if s.id==supplier.id %}selected{% endif %}>{{ s.name }}</option>
+        {% endfor %}
+      </select>
+    </form>
+    <a href="/packaging/history?supplier={{ supplier.id }}" class="btn btn-sm btn-outline-secondary">
+      <i class="fas fa-clock-rotate-left me-1"></i>History
+    </a>
+  </div>
+  {% if is_admin %}
+  <div class="d-flex gap-2">
+    <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#supplierEdit">
+      <i class="fas fa-pen me-1"></i>Edit supplier
+    </button>
+    <button class="btn btn-sm btn-outline-success" data-bs-toggle="modal" data-bs-target="#addSupplier">
+      <i class="fas fa-plus me-1"></i>Add supplier
+    </button>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Supplier banner -->
+<div class="supplier-card">
+  <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
+    <div>
+      <div style="font-size:0.78rem;text-transform:uppercase;letter-spacing:.1em;opacity:.7">Supplier</div>
+      <h5>{{ supplier.name }}</h5>
+      <div class="supplier-meta mt-2">
+        <div><i class="fas fa-envelope"></i>
+          <a href="mailto:{{ supplier.email }}">{{ supplier.email or '—' }}</a></div>
+        <div><i class="fas fa-phone"></i>
+          <a href="tel:{{ supplier.phone|replace(' ', '') }}">{{ supplier.phone or '—' }}</a></div>
+        {% if supplier.cc_emails %}
+        <div><i class="fas fa-reply"></i>CC: {{ supplier.cc_emails }}</div>
+        {% endif %}
+        {% if supplier.delivery_days %}
+        <div><i class="fas fa-truck"></i>Delivery days: <strong>{{ supplier.delivery_days }}</strong></div>
+        {% endif %}
+      </div>
+    </div>
+    <div class="text-end" style="font-size:0.85rem;opacity:.92">
+      <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:.1em;opacity:.7">From</div>
+      <div class="fw-semibold">{{ supplier.cafe_name }}</div>
+      <pre style="font-family:inherit;font-size:0.85rem;color:#FFE082;margin:0;white-space:pre-line">{{ supplier.cafe_contacts }}</pre>
+    </div>
+  </div>
+</div>
+
+<!-- Action bar -->
+<form id="orderForm">
+  <input type="hidden" name="supplier_id" value="{{ supplier.id }}">
+  <div class="action-bar">
+    <div class="d-flex gap-2 align-items-center">
+      <label class="fw-semibold small mb-0">Delivery date</label>
+      <input type="date" name="delivery_date" class="form-control form-control-sm"
+             value="{{ delivery_default }}" style="width:160px">
+    </div>
+    <div class="d-flex gap-2 align-items-center">
+      <label class="fw-semibold small mb-0">Composed by</label>
+      <input type="text" name="composed_by" class="form-control form-control-sm"
+             placeholder="Your name" style="width:160px">
+    </div>
+    <span class="qty-summary ms-auto">
+      <span id="lineCount">0</span> line(s) · <span id="qtyTotal">0</span> unit(s)
+    </span>
+  </div>
+
+  <!-- Items table -->
+  <div class="table-responsive items-table mb-3">
+    <table class="table table-sm mb-0">
+      <thead>
+        <tr>
+          <th style="width:90px">Qty</th>
+          <th style="width:60px">Unit</th>
+          <th>Item</th>
+          <th style="width:160px" class="d-none d-md-table-cell">Code</th>
+          {% if is_admin %}<th style="width:80px"></th>{% endif %}
+        </tr>
+      </thead>
+      <tbody id="itemBody">
+        {% for it in items %}
+        <tr id="row-{{ it.id }}" data-qty="{{ it.default_qty }}">
+          <td>
+            <input type="number" name="qty_{{ it.id }}" class="form-control form-control-sm qty-input"
+                   min="0" max="999" value="{{ it.default_qty }}"
+                   oninput="updateRowState(this); refreshSummary();">
+          </td>
+          <td class="unit-cell">{{ it.unit }}</td>
+          <td>
+            <div class="fw-semibold">{{ it.name_en }}</div>
+            {% if it.name_vi %}<div class="text-muted small">{{ it.name_vi }}</div>{% endif %}
+          </td>
+          <td class="code-cell d-none d-md-table-cell">{{ it.product_code }}</td>
+          {% if is_admin %}
+          <td class="text-center">
+            <button type="button" class="btn btn-sm btn-link p-0 text-secondary"
+                    onclick="openItemEdit({{ it.id }})" title="Edit">
+              <i class="fas fa-pen"></i>
+            </button>
+            <button type="button" class="btn btn-sm btn-link p-0 text-danger ms-1"
+                    onclick="deleteItem({{ it.id }})" title="Delete">
+              <i class="fas fa-trash"></i>
+            </button>
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if is_admin %}
+  <div class="admin-bar">
+    <i class="fas fa-screwdriver-wrench"></i>
+    <strong>Admin:</strong> add a new item to this supplier's catalogue.
+    <input type="text" id="add_code" class="form-control form-control-sm" placeholder="Code" style="width:140px">
+    <input type="text" id="add_name_en" class="form-control form-control-sm" placeholder="Name (EN)" style="width:200px">
+    <input type="text" id="add_name_vi" class="form-control form-control-sm" placeholder="Name (VI)" style="width:200px">
+    <select id="add_unit" class="form-select form-select-sm" style="width:120px">
+      <option>carton</option>
+      <option>box</option>
+      <option>bag</option>
+      <option>can</option>
+      <option>each</option>
+    </select>
+    <input type="number" id="add_qty" class="form-control form-control-sm" placeholder="Default qty" value="0" min="0" style="width:110px">
+    <button type="button" class="btn btn-sm btn-success" onclick="addItem()">
+      <i class="fas fa-plus me-1"></i>Add
+    </button>
+  </div>
+  {% endif %}
+
+  <!-- Notes for this specific order -->
+  <div class="mb-3">
+    <label class="form-label fw-semibold small">Extra note (optional)</label>
+    <textarea name="extra_note" class="form-control form-control-sm" rows="2"
+              placeholder="e.g. Please knock at back door. Need delivery before 10am."></textarea>
+  </div>
+
+  <!-- Send actions -->
+  <div class="d-flex gap-2 flex-wrap align-items-center">
+    <button type="button" class="btn btn-outline-secondary" onclick="composeOrder('preview')">
+      <i class="fas fa-eye me-1"></i>Preview email
+    </button>
+    <button type="button" class="btn btn-gmail" onclick="composeOrder('gmail')">
+      <i class="fab fa-google me-1"></i>Open in Gmail
+    </button>
+    <button type="button" class="btn btn-outline-dark" onclick="composeOrder('mailto')">
+      <i class="fas fa-envelope me-1"></i>Mailto (default app)
+    </button>
+    {% if is_admin %}
+    <button type="button" class="btn btn-brevo" onclick="sendBrevo()">
+      <i class="fas fa-paper-plane me-1"></i>Send now via Brevo
+    </button>
+    {% endif %}
+  </div>
+
+  <!-- Preview area -->
+  <div class="preview-card d-none" id="previewCard">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+      <strong><i class="fas fa-envelope me-1"></i>Preview</strong>
+      <button type="button" class="btn btn-sm btn-outline-secondary"
+              onclick="copyPreview()"><i class="fas fa-copy me-1"></i>Copy body</button>
+    </div>
+    <div class="row g-2 small mb-2">
+      <div class="col-md-2 fw-semibold">Subject:</div>
+      <div class="col-md-10" id="prSubject">—</div>
+      <div class="col-md-2 fw-semibold">To:</div>
+      <div class="col-md-10" id="prTo">—</div>
+      <div class="col-md-2 fw-semibold">CC:</div>
+      <div class="col-md-10" id="prCc">—</div>
+    </div>
+    <pre id="prBody">—</pre>
+  </div>
+</form>
+{% endif %}
+
+<!-- Toast -->
+<div id="toast" class="toast-banner"></div>
+
+{% if is_admin and supplier %}
+<!-- Edit supplier modal -->
+<div class="modal fade" id="supplierEdit" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <form onsubmit="return saveSupplier(event)">
+        <div class="modal-header">
+          <h6 class="modal-title"><i class="fas fa-pen me-1"></i>Edit supplier</h6>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="row g-2">
+            <div class="col-md-6">
+              <label class="form-label small fw-semibold">Supplier name *</label>
+              <input type="text" name="name" class="form-control form-control-sm" value="{{ supplier.name }}" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small fw-semibold">Delivery days (e.g. WED,FRI)</label>
+              <input type="text" name="delivery_days" class="form-control form-control-sm" value="{{ supplier.delivery_days }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small fw-semibold">Email *</label>
+              <input type="email" name="email" class="form-control form-control-sm" value="{{ supplier.email }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small fw-semibold">Phone</label>
+              <input type="text" name="phone" class="form-control form-control-sm" value="{{ supplier.phone }}">
+            </div>
+            <div class="col-md-12">
+              <label class="form-label small fw-semibold">CC emails (comma-separated)</label>
+              <input type="text" name="cc_emails" class="form-control form-control-sm" value="{{ supplier.cc_emails }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small fw-semibold">Cafe name</label>
+              <input type="text" name="cafe_name" class="form-control form-control-sm" value="{{ supplier.cafe_name }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small fw-semibold">Cafe contact lines (one per line)</label>
+              <textarea name="cafe_contacts" rows="3" class="form-control form-control-sm">{{ supplier.cafe_contacts }}</textarea>
+            </div>
+            <div class="col-md-12">
+              <label class="form-label small fw-semibold">Internal notes (not sent)</label>
+              <textarea name="notes" rows="2" class="form-control form-control-sm">{{ supplier.notes }}</textarea>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer py-2">
+          <button type="submit" class="btn btn-sm btn-success"><i class="fas fa-save me-1"></i>Save</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+          <form method="POST" action="/packaging/supplier/{{ supplier.id }}/delete" class="ms-auto"
+                onsubmit="return confirm('Delete this supplier and all its catalogue items? This cannot be undone.')">
+            <button type="submit" class="btn btn-sm btn-outline-danger">
+              <i class="fas fa-trash me-1"></i>Delete supplier
+            </button>
+          </form>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Add supplier modal -->
+<div class="modal fade" id="addSupplier" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="POST" action="/packaging/supplier/add">
+        <div class="modal-header">
+          <h6 class="modal-title"><i class="fas fa-plus me-1"></i>Add supplier</h6>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-2">
+            <label class="form-label small fw-semibold">Supplier name *</label>
+            <input type="text" name="name" class="form-control form-control-sm" required>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small fw-semibold">Email</label>
+            <input type="email" name="email" class="form-control form-control-sm">
+          </div>
+          <div class="row g-2">
+            <div class="col-6">
+              <label class="form-label small fw-semibold">Phone</label>
+              <input type="text" name="phone" class="form-control form-control-sm">
+            </div>
+            <div class="col-6">
+              <label class="form-label small fw-semibold">Delivery days</label>
+              <input type="text" name="delivery_days" class="form-control form-control-sm" placeholder="MON,WED">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer py-2">
+          <button type="submit" class="btn btn-sm btn-success">Create</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Edit item modal -->
+<div class="modal fade" id="itemEditModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form onsubmit="return saveItem(event)">
+        <div class="modal-header">
+          <h6 class="modal-title"><i class="fas fa-pen me-1"></i>Edit item</h6>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="ie_id">
+          <div class="row g-2">
+            <div class="col-md-4">
+              <label class="form-label small fw-semibold">Code</label>
+              <input type="text" id="ie_code" class="form-control form-control-sm">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label small fw-semibold">Unit</label>
+              <select id="ie_unit" class="form-select form-select-sm">
+                <option>carton</option><option>box</option><option>bag</option>
+                <option>can</option><option>each</option>
+              </select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label small fw-semibold">Default qty</label>
+              <input type="number" id="ie_qty" class="form-control form-control-sm" min="0" value="0">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small fw-semibold">Name EN *</label>
+              <input type="text" id="ie_en" class="form-control form-control-sm" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small fw-semibold">Name VI</label>
+              <input type="text" id="ie_vi" class="form-control form-control-sm">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer py-2">
+          <button type="submit" class="btn btn-sm btn-success">Save</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toast(msg, isErr=false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.toggle('err', !!isErr);
+  t.style.display = 'block';
+  setTimeout(() => { t.style.display = 'none'; }, 3500);
+}
+
+function updateRowState(input) {
+  const tr = input.closest('tr');
+  if (!tr) return;
+  const v = parseInt(input.value || '0', 10) || 0;
+  tr.classList.toggle('has-qty', v > 0);
+}
+function refreshSummary() {
+  let lines = 0, total = 0;
+  document.querySelectorAll('.qty-input').forEach(i => {
+    const v = parseInt(i.value || '0', 10) || 0;
+    if (v > 0) { lines++; total += v; }
+  });
+  document.getElementById('lineCount').textContent = lines;
+  document.getElementById('qtyTotal').textContent = total;
+}
+document.querySelectorAll('.qty-input').forEach(i => updateRowState(i));
+refreshSummary();
+
+async function composeOrder(channel) {
+  const form = document.getElementById('orderForm');
+  const fd = new FormData(form);
+  const resp = await fetch('/packaging/compose', { method:'POST', body:fd });
+  const data = await resp.json();
+  if (!resp.ok || data.error) { toast(data.error || 'Compose failed', true); return; }
+
+  // Update preview
+  const card = document.getElementById('previewCard');
+  card.classList.remove('d-none');
+  document.getElementById('prSubject').textContent = data.subject;
+  document.getElementById('prTo').textContent = data.to || '—';
+  document.getElementById('prCc').textContent = data.cc || '—';
+  document.getElementById('prBody').textContent = data.body;
+  card.scrollIntoView({ behavior:'smooth', block:'nearest' });
+
+  // Log the click + open external app for the chosen channel
+  const logFd = new FormData();
+  logFd.append('supplier_id', fd.get('supplier_id'));
+  logFd.append('delivery_date', fd.get('delivery_date'));
+  logFd.append('composed_by', fd.get('composed_by') || '');
+  logFd.append('subject', data.subject);
+  logFd.append('body', data.body);
+  logFd.append('channel', channel);
+  fetch('/packaging/log-action', { method:'POST', body: logFd });
+
+  if (channel === 'gmail') {
+    window.open(data.gmail_url, '_blank', 'noopener');
+  } else if (channel === 'mailto') {
+    window.location.href = data.mailto;
+  }
+  toast(`${data.item_count} item(s), ${data.total_qty} unit(s) — ready`);
+}
+
+function copyPreview() {
+  const body = document.getElementById('prBody').textContent;
+  navigator.clipboard.writeText(body).then(
+    () => toast('Body copied to clipboard'),
+    () => toast('Copy failed', true));
+}
+
+{% if is_admin %}
+async function sendBrevo() {
+  if (!confirm('Send this order email now via Brevo? The supplier will get it immediately.')) return;
+  const form = document.getElementById('orderForm');
+  const fd = new FormData(form);
+  const resp = await fetch('/packaging/send', { method:'POST', body:fd });
+  const data = await resp.json();
+  if (data.ok) {
+    toast(data.message || 'Sent');
+  } else {
+    toast(data.error || 'Send failed', true);
+  }
+}
+
+async function saveSupplier(ev) {
+  ev.preventDefault();
+  const form = ev.target;
+  const fd = new FormData(form);
+  const resp = await fetch('/packaging/supplier/{{ supplier.id }}/edit',
+                            { method:'POST', body:fd });
+  const data = await resp.json();
+  if (data.ok) location.reload();
+  else toast(data.error || 'Save failed', true);
+  return false;
+}
+
+async function addItem() {
+  const en = document.getElementById('add_name_en').value.trim();
+  if (!en) { toast('Item name required', true); return; }
+  const fd = new FormData();
+  fd.append('supplier_id', '{{ supplier.id }}');
+  fd.append('product_code', document.getElementById('add_code').value.trim());
+  fd.append('name_en', en);
+  fd.append('name_vi', document.getElementById('add_name_vi').value.trim());
+  fd.append('unit', document.getElementById('add_unit').value);
+  fd.append('default_qty', document.getElementById('add_qty').value || '0');
+  const resp = await fetch('/packaging/item/add', { method:'POST', body:fd });
+  const data = await resp.json();
+  if (data.ok) location.reload();
+  else toast(data.error || 'Add failed', true);
+}
+
+function openItemEdit(id) {
+  const tr = document.getElementById('row-' + id);
+  if (!tr) return;
+  const cells = tr.querySelectorAll('td');
+  document.getElementById('ie_id').value = id;
+  document.getElementById('ie_qty').value = tr.dataset.qty || '0';
+  document.getElementById('ie_unit').value = cells[1].textContent.trim();
+  document.getElementById('ie_en').value = cells[2].querySelector('.fw-semibold').textContent.trim();
+  const vi = cells[2].querySelector('.text-muted');
+  document.getElementById('ie_vi').value = vi ? vi.textContent.trim() : '';
+  document.getElementById('ie_code').value = cells[3] ? cells[3].textContent.trim() : '';
+  new bootstrap.Modal(document.getElementById('itemEditModal')).show();
+}
+
+async function saveItem(ev) {
+  ev.preventDefault();
+  const id = document.getElementById('ie_id').value;
+  const fd = new FormData();
+  fd.append('product_code', document.getElementById('ie_code').value.trim());
+  fd.append('name_en', document.getElementById('ie_en').value.trim());
+  fd.append('name_vi', document.getElementById('ie_vi').value.trim());
+  fd.append('unit', document.getElementById('ie_unit').value);
+  fd.append('default_qty', document.getElementById('ie_qty').value || '0');
+  const resp = await fetch('/packaging/item/' + id + '/edit', { method:'POST', body:fd });
+  const data = await resp.json();
+  if (data.ok) location.reload();
+  else toast(data.error || 'Save failed', true);
+  return false;
+}
+
+async function deleteItem(id) {
+  if (!confirm('Delete this item from the catalogue?')) return;
+  const resp = await fetch('/packaging/item/' + id + '/delete', { method:'POST' });
+  const data = await resp.json();
+  if (data.ok) { document.getElementById('row-' + id).remove(); refreshSummary(); }
+  else toast(data.error || 'Delete failed', true);
+}
+{% endif %}
+</script>
+{% endblock %}

@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Packaging Order History{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-clock-rotate-left me-2" style="color:#6D4C41"></i>Packaging Order History</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.order-card {
+  background: #fff; border: 1px solid #e8eaed; border-radius: 10px;
+  padding: 14px 16px; margin-bottom: 10px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.04);
+}
+.channel-pill {
+  display: inline-block; padding: 2px 9px; border-radius: 10px;
+  font-size: 0.7rem; font-weight: 700; color: #fff;
+}
+.channel-pill.gmail   { background: #D14836; }
+.channel-pill.mailto  { background: #607D8B; }
+.channel-pill.brevo   { background: #0B3D2E; }
+.channel-pill.preview { background: #888; }
+.channel-pill.brevo_failed { background: #C62828; }
+details summary { cursor: pointer; font-size: 0.85rem; }
+details pre {
+  background: #f7f9fb; border: 1px solid #eef0f3; border-radius: 6px;
+  padding: 12px; margin-top: 8px;
+  font-family: ui-monospace, Menlo, monospace; font-size: 12px;
+  white-space: pre-wrap; max-height: 320px; overflow: auto;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+
+<div class="d-flex align-items-center gap-2 mb-3">
+  <a href="/packaging/" class="btn btn-sm btn-outline-secondary">
+    <i class="fas fa-arrow-left me-1"></i>Back
+  </a>
+  <h5 class="fw-bold mb-0">Last {{ orders|length }} order(s)</h5>
+</div>
+
+{% if not orders %}
+<div class="text-center text-muted py-5">
+  <i class="fas fa-inbox fa-3x mb-2 d-block opacity-25"></i>
+  No orders composed yet.
+</div>
+{% endif %}
+
+{% for o in orders %}
+<div class="order-card">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <div>
+      <span class="channel-pill {{ o.send_channel or 'preview' }}">{{ (o.send_channel or 'preview')|upper }}</span>
+      <strong class="ms-1">{{ o.supplier_name or 'Supplier ' ~ o.supplier_id }}</strong>
+      <span class="text-muted small ms-2">{{ o.sent_at }}</span>
+    </div>
+    <div class="text-muted small">
+      {% if o.delivery_date %}Delivery: {{ o.delivery_date }}{% endif %}
+      {% if o.composed_by %} · by {{ o.composed_by }}{% endif %}
+    </div>
+  </div>
+  <div class="small fw-semibold mt-1">{{ o.subject }}</div>
+  <details>
+    <summary class="text-primary">View body</summary>
+    <pre>{{ o.body }}</pre>
+  </details>
+</div>
+{% endfor %}
+
+{% endblock %}
