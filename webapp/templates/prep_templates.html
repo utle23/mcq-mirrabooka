@@ -1,118 +1,249 @@
 {% extends "base.html" %}
-{% block title %}Task Templates{% endblock %}
+{% block title %}Prep Task Templates{% endblock %}
 {% block topbar_title %}<span class="fw-bold"><i class="fas fa-tasks me-2"></i>Prep Task Templates</span>{% endblock %}
 
+{% block head %}
+<style>
+/* Match the Weekly Prep Schedule visual language */
+.tpl-toolbar {
+  background:#fff; border-radius:10px; padding:12px 16px; margin-bottom:14px;
+  box-shadow:0 1px 4px rgba(0,0,0,.05);
+  display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+}
+.tpl-toolbar .station-filter { display:flex; gap:6px; flex-wrap:wrap; }
+.tpl-toolbar .station-chip {
+  font-size:0.78rem; padding:4px 10px; border-radius:14px;
+  border:1.5px solid #ddd; cursor:pointer; background:#fff; color:#555;
+  font-weight:600; transition:all .12s;
+}
+.tpl-toolbar .station-chip:hover { transform:translateY(-1px); }
+
+.station-block {
+  background:#fff; border-radius:10px; overflow:hidden;
+  border:1px solid #e8eaed; box-shadow:0 1px 6px rgba(0,0,0,0.05);
+  margin-bottom:18px;
+}
+.station-hdr {
+  padding:10px 16px; font-weight:700; font-size:0.92rem;
+  color:#fff; display:flex; align-items:center; gap:10px;
+  border-left:6px solid rgba(0,0,0,.25);
+}
+.station-hdr .badge-cnt {
+  background:rgba(255,255,255,.22); padding:2px 9px; border-radius:10px;
+  font-size:0.72rem; margin-left:auto;
+}
+
+.tpl-row {
+  display:grid;
+  grid-template-columns: minmax(220px, 2.5fr) 90px minmax(150px, 1.5fr) 215px minmax(140px, 1.4fr) 130px;
+  gap:8px; padding:10px 16px; align-items:center;
+  border-top:1px solid #f0f0f0;
+  transition:background .15s;
+}
+.tpl-row:hover { background:#fafbfc; }
+.tpl-row.dirty { background:#FFF8E1; box-shadow:inset 4px 0 0 #FB8C00; }
+.tpl-row.inactive { opacity:.55; background:#f8f9fa; }
+.tpl-row .form-control-sm,
+.tpl-row .form-select-sm { font-size:0.82rem; }
+
+.tpl-task-name input { font-weight:600; }
+.tpl-task-name .vi { font-size:0.75rem; color:#888; margin-top:3px; }
+.tpl-task-name .vi input { font-weight:400; color:#666; }
+
+.day-pills { display:flex; gap:3px; flex-wrap:wrap; }
+.day-pill {
+  width:26px; height:26px; border-radius:6px; font-size:0.68rem;
+  font-weight:700; display:inline-flex; align-items:center; justify-content:center;
+  cursor:pointer; user-select:none;
+  background:#f1f3f5; color:#999; border:1.5px solid #e0e0e0;
+  transition:transform .12s;
+}
+.day-pill.active { background:#1B4332; color:#fff; border-color:#1B4332; }
+.day-pill:hover { transform:scale(1.1); }
+
+.supplier-toggle {
+  display:flex; gap:5px; align-items:center; font-size:0.74rem; margin:0;
+  cursor:pointer;
+}
+.supplier-toggle input { margin:0; }
+
+.row-actions { display:flex; gap:4px; justify-content:flex-end; align-items:center; }
+.row-actions .btn-sm { padding:4px 9px; font-size:0.74rem; }
+
+/* Inline save indicator */
+.save-flash {
+  display:inline-block; padding:2px 8px; border-radius:10px;
+  font-size:0.66rem; font-weight:700;
+  background:#E8F5E9; color:#2E7D32;
+  opacity:0; transition:opacity .25s;
+}
+.save-flash.show { opacity:1; }
+
+/* Column-label row inside each station block */
+.tpl-row.tpl-header {
+  background:#f4f6f9 !important; color:#555;
+  font-size:0.66rem; text-transform:uppercase; letter-spacing:.08em;
+  font-weight:700; padding:6px 16px; border-top:none;
+}
+.tpl-row.tpl-header:hover { background:#f4f6f9 !important; }
+
+@media (max-width: 1100px) {
+  .tpl-row { grid-template-columns: 1fr; }
+  .tpl-row.tpl-header { display:none; }
+}
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <span class="text-muted small">{{ templates|selectattr('active')|list|length }} active / {{ templates|length }} total tasks</span>
-  <button class="btn btn-success btn-sm" data-bs-toggle="modal" data-bs-target="#addModal">
-    <i class="fas fa-plus me-1"></i>Add Task
-  </button>
-</div>
 
-<div class="alert alert-info py-2 mb-3">
-  <i class="fas fa-info-circle me-1"></i>
-  Template changes are defaults for new weekly schedules. To update an existing week, open that week and click
-  <strong>Apply Task Templates</strong>.
-</div>
-
-<div class="card shadow-sm">
-  <div class="table-responsive">
-    <table class="table table-sm table-hover mb-0 align-middle">
-      <thead class="table-dark">
-        <tr>
-          <th style="width:110px">Station</th>
-          <th>Task (EN / VI)</th>
-          <th style="width:80px">Time</th>
-          <th style="width:130px">Active Days</th>
-          <th style="width:150px">Default Staff</th>
-          <th style="width:80px" class="text-center">Supplier</th>
-          <th style="width:80px" class="text-center">Status</th>
-          <th style="width:80px" class="text-center">Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% set ns = namespace(station='') %}
-        {% for t in templates %}
-        {% if t.station.name_en != ns.station %}
-        {% set ns.station = t.station.name_en %}
-        <tr>
-          <td colspan="8" class="fw-bold py-1 px-2" style="background:{{ t.station.color }}20;color:{{ t.station.color }};border-left:4px solid {{ t.station.color }}">
-            {{ t.station.name_en }} — {{ t.station.name_vi }}
-          </td>
-        </tr>
-        {% endif %}
-        <tr class="{% if not t.active %}table-secondary{% endif %}">
-          <td>
-            <span class="badge" style="background:{{ t.station.color }}">{{ t.station.name_en }}</span>
-          </td>
-          <td>
-            <div class="fw-semibold {% if not t.active %}text-decoration-line-through{% endif %}">{{ t.task_name_en }}</div>
-            <div class="text-muted small">{{ t.task_name_vi }}</div>
-          </td>
-          <td class="text-center fw-semibold" style="color:#1B4332">{{ t.default_time or '—' }}</td>
-          <td>
-            {% for d in (t.active_days or '').split(',') %}
-            <span class="badge bg-secondary me-1" style="font-size:0.65rem">{{ d }}</span>
-            {% endfor %}
-          </td>
-          <td class="small">{{ t.default_assignee or '—' }}</td>
-          <td class="text-center">
-            {% if t.is_supplier %}
-            <span class="badge bg-primary"><i class="fas fa-truck me-1"></i>{{ t.supplier_name or 'Yes' }}</span>
-            {% else %}
-            <span class="text-muted small">—</span>
-            {% endif %}
-          </td>
-          <td class="text-center">
-            {% if t.active %}
-            <span class="badge bg-success">Active</span>
-            {% else %}
-            <span class="badge bg-secondary">Archived</span>
-            {% endif %}
-          </td>
-          <td class="text-center">
-            <button class="btn btn-sm btn-outline-primary"
-                    data-id="{{ t.id }}"
-                    data-en="{{ t.task_name_en }}"
-                    data-vi="{{ t.task_name_vi }}"
-                    data-station="{{ t.station_id }}"
-                    data-time="{{ t.default_time or '' }}"
-                    data-days="{{ t.active_days or '' }}"
-                    data-assignee="{{ t.default_assignee or '' }}"
-                    data-supplier="{{ t.is_supplier }}"
-                    data-sname="{{ t.supplier_name or '' }}"
-                    onclick="openEdit(this.dataset)">
-              <i class="fas fa-edit"></i>
-            </button>
-            <form method="POST" action="/prep/templates/{{ t.id }}/toggle" class="d-inline">
-              <button type="submit" class="btn btn-sm {% if t.active %}btn-outline-secondary{% else %}btn-outline-success{% endif %}"
-                      title="{% if t.active %}Archive{% else %}Restore{% endif %}">
-                <i class="fas fa-{% if t.active %}archive{% else %}undo{% endif %}"></i>
-              </button>
-            </form>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+<!-- Toolbar -->
+<div class="tpl-toolbar">
+  <span class="text-muted small">
+    <strong style="color:#1A1A2E;font-size:1rem">{{ templates|selectattr('active')|list|length }}</strong>
+    active /
+    <strong>{{ templates|length }}</strong> total
+  </span>
+  <div class="station-filter">
+    <span class="station-chip active" data-station=""
+          style="background:#1A1A2E;color:#fff;border-color:#1A1A2E"
+          onclick="filterStation('')">All stations</span>
+    {% for s in stations %}
+    <span class="station-chip" data-station="{{ s.id }}"
+          style="border-color:{{ s.color }};color:{{ s.color }}"
+          onclick="filterStation('{{ s.id }}', '{{ s.color }}')">{{ s.name_en }}</span>
+    {% endfor %}
   </div>
+  <button class="btn btn-success btn-sm ms-auto" data-bs-toggle="modal" data-bs-target="#addModal">
+    <i class="fas fa-plus me-1"></i>New Task
+  </button>
+  <a href="/prep/weekly/{{ week_start_nav }}" class="btn btn-sm btn-outline-secondary">
+    <i class="fas fa-arrow-left me-1"></i>Back to Weekly
+  </a>
 </div>
+
+<div class="alert alert-info py-2 mb-3 small">
+  <i class="fas fa-circle-info me-1"></i>
+  Edit any field inline → row turns
+  <strong style="color:#E65100">orange</strong> until you press
+  <strong><i class="fas fa-floppy-disk"></i> Save</strong>.
+  Template changes apply to <strong>future weeks</strong> — saved weekly tasks already created are not touched.
+</div>
+
+<!-- Group by station -->
+{% for s in stations %}
+{% set station_tasks = templates|selectattr('station_id','equalto', s.id)|list %}
+{% if station_tasks %}
+<div class="station-block" data-station-id="{{ s.id }}">
+  <div class="station-hdr" style="background:{{ s.color }};border-left-color:{{ s.color }}88">
+    <i class="fas fa-circle" style="font-size:.5rem"></i>
+    <span>{{ s.name_en }} <span style="opacity:.75;font-weight:400;font-size:.78rem">— {{ s.name_vi }}</span></span>
+    <span class="badge-cnt">{{ station_tasks|length }} task(s)</span>
+  </div>
+
+  <!-- Column header row -->
+  <div class="tpl-row tpl-header">
+    <div>Task (EN / VI)</div>
+    <div>Time</div>
+    <div>Default staff</div>
+    <div>Active days</div>
+    <div>Supplier</div>
+    <div class="text-end">Actions</div>
+  </div>
+
+  {% for t in station_tasks %}
+  <form class="tpl-row {% if not t.active %}inactive{% endif %}" data-id="{{ t.id }}"
+        onsubmit="saveTemplate(event, this)">
+    <input type="hidden" name="station_id" value="{{ t.station_id }}">
+
+    <!-- Task name EN + VI -->
+    <div class="tpl-task-name">
+      <input type="text" name="task_name_en" class="form-control form-control-sm"
+             value="{{ t.task_name_en }}" placeholder="Task name (EN)"
+             oninput="markDirty(this)" required>
+      <div class="vi">
+        <input type="text" name="task_name_vi" class="form-control form-control-sm"
+               value="{{ t.task_name_vi or '' }}" placeholder="Task name (VI)"
+               oninput="markDirty(this)">
+      </div>
+    </div>
+
+    <!-- Time -->
+    <input type="time" name="default_time" class="form-control form-control-sm"
+           value="{{ t.default_time or '' }}" oninput="markDirty(this)">
+
+    <!-- Default staff -->
+    <select name="default_assignee" class="form-select form-select-sm" onchange="markDirty(this)">
+      <option value="">— Unassigned —</option>
+      {% for st in staff_list %}
+      <option value="{{ st }}" {% if t.default_assignee==st %}selected{% endif %}>{{ st }}</option>
+      {% endfor %}
+    </select>
+
+    <!-- Active days as pills -->
+    <div class="day-pills">
+      {% set active_set = (t.active_days or '').split(',') %}
+      {% for i in range(days|length) %}
+      <span class="day-pill {% if days[i] in active_set %}active{% endif %}"
+            data-day="{{ days[i] }}" onclick="toggleDay(this)" title="{{ day_labels[i] }}">
+        {{ day_labels[i][:1] }}
+      </span>
+      <input type="hidden" name="active_days" value="{{ days[i] }}"
+             {% if days[i] not in active_set %}disabled{% endif %}>
+      {% endfor %}
+    </div>
+
+    <!-- Supplier -->
+    <div>
+      <label class="supplier-toggle">
+        <input type="checkbox" name="is_supplier" {% if t.is_supplier %}checked{% endif %}
+               onchange="toggleSupplier(this); markDirty(this)">
+        Supplier delivery
+      </label>
+      <input type="text" name="supplier_name" class="form-control form-control-sm mt-1
+             {% if not t.is_supplier %}d-none{% endif %}"
+             value="{{ t.supplier_name or '' }}" placeholder="Supplier name"
+             oninput="markDirty(this)">
+    </div>
+
+    <!-- Actions -->
+    <div class="row-actions">
+      <span class="save-flash" data-flash><i class="fas fa-check me-1"></i>Saved</span>
+      <button type="submit" class="btn btn-success btn-sm" title="Save changes">
+        <i class="fas fa-floppy-disk me-1"></i>Save
+      </button>
+      <button type="button" class="btn btn-outline-{% if t.active %}secondary{% else %}success{% endif %} btn-sm"
+              title="{% if t.active %}Archive{% else %}Restore{% endif %}"
+              onclick="toggleActive({{ t.id }}, this)">
+        <i class="fas fa-{% if t.active %}archive{% else %}rotate-left{% endif %}"></i>
+      </button>
+      <button type="button" class="btn btn-outline-danger btn-sm" title="Delete permanently"
+              onclick="deleteTemplate({{ t.id }}, this)">
+        <i class="fas fa-trash"></i>
+      </button>
+    </div>
+  </form>
+  {% endfor %}
+</div>
+{% endif %}
+{% endfor %}
 
 <!-- Add Modal -->
 <div class="modal fade" id="addModal" tabindex="-1">
   <div class="modal-dialog">
     <div class="modal-content">
       <form method="POST" action="/prep/templates/add">
-        <div class="modal-header"><h5 class="modal-title">Add New Task</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        <div class="modal-header" style="background:#1B4332;color:#fff">
+          <h5 class="modal-title"><i class="fas fa-plus me-2"></i>Add New Prep Task</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
         </div>
         <div class="modal-body">
           {% set fid = 'add' %}
           {% include 'prep_task_form.html' %}
         </div>
         <div class="modal-footer">
-          <button type="submit" class="btn btn-success">Add Task</button>
+          <button type="submit" class="btn btn-success">
+            <i class="fas fa-plus me-1"></i>Add Task
+          </button>
           <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
         </div>
       </form>
@@ -120,53 +251,122 @@
   </div>
 </div>
 
-<!-- Edit Modal -->
-<div class="modal fade" id="editModal" tabindex="-1">
-  <div class="modal-dialog">
-    <div class="modal-content">
-      <form method="POST" id="editForm">
-        <div class="modal-header"><h5 class="modal-title">Edit Task</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-        </div>
-        <div class="modal-body" id="editBody">
-          {% set fid = 'edit' %}
-          {% include 'prep_task_form.html' %}
-        </div>
-        <div class="modal-footer">
-          <button type="submit" class="btn btn-success">Save Changes</button>
-          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-        </div>
-      </form>
-    </div>
-  </div>
-</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-const STATIONS = {{ stations|tojson }};
-const STAFF    = {{ staff_list|tojson }};
-const DAYS     = {{ days|tojson }};
-const DAY_LBL  = {{ day_labels|tojson }};
-
-function openEdit(d) {
-  document.getElementById('editForm').action = `/prep/templates/${d.id}/edit`;
-  const b = document.getElementById('editBody');
-  b.querySelector('[name=task_name_en]').value      = d.en      || '';
-  b.querySelector('[name=task_name_vi]').value       = d.vi      || '';
-  b.querySelector('[name=station_id]').value         = d.station || 1;
-  b.querySelector('[name=default_time]').value       = d.time    || '';
-  b.querySelector('[name=default_assignee]').value   = d.assignee|| '';
-  b.querySelector('[name=supplier_name]').value      = d.sname   || '';
-  const isSupplier = (d.supplier === '1');
-  b.querySelector('[name=is_supplier]').checked      = isSupplier;
-  const supRow = b.querySelector('.supplier-row');
-  if (supRow) supRow.classList.toggle('d-none', !isSupplier);
-  const active = (d.days || '').split(',').map(s => s.trim()).filter(Boolean);
-  b.querySelectorAll('[name=active_days]').forEach(cb => {
-    cb.checked = active.includes(cb.value);
-  });
-  new bootstrap.Modal(document.getElementById('editModal')).show();
+function markDirty(el) {
+  const row = el.closest('.tpl-row');
+  if (row) row.classList.add('dirty');
 }
+
+function toggleDay(pill) {
+  pill.classList.toggle('active');
+  const day = pill.dataset.day;
+  const row = pill.closest('.tpl-row');
+  const hidden = row.querySelector(`input[name="active_days"][value="${day}"]`);
+  if (hidden) hidden.disabled = !pill.classList.contains('active');
+  markDirty(pill);
+}
+
+function toggleSupplier(checkbox) {
+  const row = checkbox.closest('.tpl-row');
+  const sname = row.querySelector('input[name="supplier_name"]');
+  sname.classList.toggle('d-none', !checkbox.checked);
+  if (!checkbox.checked) sname.value = '';
+}
+
+async function saveTemplate(ev, form) {
+  ev.preventDefault();
+  const id = form.dataset.id;
+  const fd = new FormData(form);
+  const btn = form.querySelector('button[type="submit"]');
+  const flash = form.querySelector('[data-flash]');
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Saving';
+  try {
+    const res = await fetch(`/prep/templates/${id}/edit`, {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      body: fd,
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'save failed');
+    form.classList.remove('dirty');
+    flash.classList.add('show');
+    setTimeout(() => flash.classList.remove('show'), 1800);
+  } catch (e) {
+    alert('Failed to save: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
+}
+
+async function toggleActive(id, btn) {
+  btn.disabled = true;
+  const fd = new FormData();
+  try {
+    await fetch(`/prep/templates/${id}/toggle`, {
+      method: 'POST', body: fd,
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+    });
+    location.reload();
+  } catch (e) {
+    alert('Failed to toggle: ' + e.message);
+    btn.disabled = false;
+  }
+}
+
+async function deleteTemplate(id, btn) {
+  if (!confirm('Delete this prep task template permanently?\n\nNo undo. Existing weekly schedules already in the DB are not affected — they have their own copy of the task.')) return;
+  btn.disabled = true;
+  try {
+    const fd = new FormData();
+    const res = await fetch(`/prep/templates/${id}/delete`, {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      body: fd,
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    location.reload();
+  } catch (e) {
+    alert('Failed to delete: ' + e.message);
+    btn.disabled = false;
+  }
+}
+
+function filterStation(sid, color) {
+  document.querySelectorAll('.station-chip').forEach(c => {
+    const isActive = c.dataset.station === sid;
+    c.classList.toggle('active', isActive);
+    if (isActive) {
+      const bg = sid ? color : '#1A1A2E';
+      c.style.background = bg; c.style.color = '#fff'; c.style.borderColor = bg;
+    } else {
+      c.style.background = '#fff';
+      c.style.color = c.dataset.station ? c.style.borderColor.replace('rgb','') : '#555';
+      // Restore the original border color for station chips
+      const myStationColor = c.dataset.stationColor;
+      if (c.dataset.station) {
+        // The border-color was inline-set earlier in Jinja; revert is implicit since we never overwrote it for non-active chips.
+      } else {
+        c.style.borderColor = '#1A1A2E';
+      }
+    }
+  });
+  document.querySelectorAll('.station-block').forEach(b => {
+    b.style.display = (!sid || b.dataset.stationId === sid) ? '' : 'none';
+  });
+}
+
+// Warn before leaving if any row is dirty
+window.addEventListener('beforeunload', (e) => {
+  if (document.querySelector('.tpl-row.dirty')) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
 </script>
 {% endblock %}
