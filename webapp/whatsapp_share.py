@@ -996,6 +996,554 @@ def build_temperature_png(session_id: int) -> bytes:
     return out.getvalue()
 
 
+# ── Daily PDF report (one polished A4 doc, designed for WhatsApp share) ─────
+
+def build_daily_pdf(date_str: str) -> bytes:
+    """Compose a magazine-style A4 PDF combining cover, every checklist
+    (with all photos at large size), and every temperature record into one
+    document that's pleasant to scroll on a phone and lands well as a
+    WhatsApp attachment."""
+    from html import escape as _esc
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
+        Image as RLImage, PageBreak, KeepTogether,
+    )
+
+    # Reuse the live data collector + the per-session helpers already in
+    # this module — keeps the PDF in sync with what the page shows.
+    data = _collect_today(date_str)
+
+    # Try the app's font registration helper so we get a TTF that supports
+    # Vietnamese diacritics; ReportLab Helvetica doesn't.
+    try:
+        from app import register_pdf_fonts
+        font_name, bold_font = register_pdf_fonts()
+    except Exception:
+        font_name, bold_font = 'Helvetica', 'Helvetica-Bold'
+
+    NAVY      = colors.HexColor('#1A1A2E')
+    NAVY_DK   = colors.HexColor('#0F0F1F')
+    BRAND     = colors.HexColor('#C0392B')
+    GOLD      = colors.HexColor('#D4AF37')
+    OK        = colors.HexColor('#2E7D32')
+    BAD       = colors.HexColor('#C62828')
+    INK       = colors.HexColor('#1A1A2E')
+    MUTED     = colors.HexColor('#6E757E')
+    LIGHT_BG  = colors.HexColor('#F4F6FA')
+    SOFT      = colors.HexColor('#EEF0F4')
+
+    base = getSampleStyleSheet()
+    S = {
+        'cover_brand': ParagraphStyle('cover_brand', parent=base['Title'],
+            fontName=bold_font, fontSize=40, leading=46,
+            textColor=colors.white, alignment=TA_CENTER, spaceAfter=4),
+        'cover_sub':   ParagraphStyle('cover_sub', parent=base['Normal'],
+            fontName=font_name, fontSize=14, leading=18,
+            textColor=colors.HexColor('#FFE082'), alignment=TA_CENTER, spaceAfter=4),
+        'cover_date':  ParagraphStyle('cover_date', parent=base['Normal'],
+            fontName=bold_font, fontSize=20, leading=24,
+            textColor=colors.white, alignment=TA_CENTER, spaceBefore=20),
+        'page_title':  ParagraphStyle('page_title', parent=base['Title'],
+            fontName=bold_font, fontSize=22, leading=26,
+            textColor=colors.white, alignment=TA_LEFT, spaceAfter=0),
+        'page_sub':    ParagraphStyle('page_sub', parent=base['Normal'],
+            fontName=font_name, fontSize=11, leading=14,
+            textColor=colors.HexColor('#EADCC0'), alignment=TA_LEFT, spaceAfter=0),
+        'section':     ParagraphStyle('section', parent=base['Heading2'],
+            fontName=bold_font, fontSize=14, leading=18, textColor=INK,
+            spaceBefore=10, spaceAfter=6),
+        'body':        ParagraphStyle('body', parent=base['BodyText'],
+            fontName=font_name, fontSize=10.5, leading=14, textColor=INK),
+        'body_b':      ParagraphStyle('body_b', parent=base['BodyText'],
+            fontName=bold_font, fontSize=10.5, leading=14, textColor=INK),
+        'small':       ParagraphStyle('small', parent=base['Normal'],
+            fontName=font_name, fontSize=8.5, leading=10, textColor=MUTED),
+        'small_b':     ParagraphStyle('small_b', parent=base['Normal'],
+            fontName=bold_font, fontSize=8.5, leading=10, textColor=INK),
+        'pill':        ParagraphStyle('pill', parent=base['Normal'],
+            fontName=bold_font, fontSize=9, leading=11,
+            textColor=colors.white, alignment=TA_CENTER),
+        'task':        ParagraphStyle('task', parent=base['Normal'],
+            fontName=font_name, fontSize=10, leading=13, textColor=INK),
+        'task_done':   ParagraphStyle('task_done', parent=base['Normal'],
+            fontName=font_name, fontSize=10, leading=13,
+            textColor=MUTED),
+        'photo_cap':   ParagraphStyle('photo_cap', parent=base['Normal'],
+            fontName=font_name, fontSize=8, leading=10,
+            textColor=MUTED, alignment=TA_CENTER),
+        'food':        ParagraphStyle('food', parent=base['Normal'],
+            fontName=bold_font, fontSize=10, leading=13, textColor=INK),
+    }
+
+    PAGE_W, PAGE_H = A4
+    MARGIN = 14 * mm
+    USABLE_W = PAGE_W - 2 * MARGIN
+
+    # ── Cover page background painter (drawn on the canvas, behind story) ──
+    def _draw_cover(canvas, doc_obj):
+        canvas.saveState()
+        # Full-bleed navy with red bottom band + gold rule
+        canvas.setFillColor(NAVY)
+        canvas.rect(0, 0, PAGE_W, PAGE_H, fill=1, stroke=0)
+        # Gradient feel via stacked rectangles (ReportLab has no real grad)
+        for i, alpha in enumerate([(28, 24, 50), (32, 26, 56), (38, 30, 62)]):
+            canvas.setFillColorRGB(alpha[0]/255, alpha[1]/255, alpha[2]/255)
+            canvas.rect(0, PAGE_H - (i + 1) * 70, PAGE_W, 70, fill=1, stroke=0)
+        # Bottom brand band
+        canvas.setFillColor(BRAND)
+        canvas.rect(0, 0, PAGE_W, 14 * mm, fill=1, stroke=0)
+        canvas.setFillColor(GOLD)
+        canvas.rect(0, 14 * mm, PAGE_W, 1.2 * mm, fill=1, stroke=0)
+
+        # Logo (centered, large)
+        logo_path = os.path.join(STATIC_DIR, 'logo.png') if STATIC_DIR else ''
+        if os.path.exists(logo_path):
+            try:
+                size = 70 * mm
+                lx = (PAGE_W - size) / 2
+                ly = PAGE_H - 95 * mm
+                # White rounded card under logo
+                canvas.setFillColor(colors.white)
+                canvas.roundRect(lx - 6 * mm, ly - 6 * mm, size + 12 * mm, size + 12 * mm,
+                                 8, fill=1, stroke=0)
+                canvas.drawImage(logo_path, lx, ly, width=size, height=size,
+                                 preserveAspectRatio=True, mask='auto')
+            except Exception:
+                pass
+
+        # Page-numbered footer at bottom of brand band
+        canvas.setFont(font_name, 8)
+        canvas.setFillColor(colors.white)
+        canvas.drawString(MARGIN, 5.5 * mm,
+                          f'Generated {datetime.now().strftime("%a %d %b %Y · %H:%M")}')
+        canvas.drawRightString(PAGE_W - MARGIN, 5.5 * mm,
+                               f'Page {doc_obj.page}')
+        canvas.restoreState()
+
+    def _draw_page(canvas, doc_obj):
+        canvas.saveState()
+        # Soft page background tint
+        canvas.setFillColor(LIGHT_BG)
+        canvas.rect(0, 0, PAGE_W, PAGE_H, fill=1, stroke=0)
+        # Top brand bar
+        canvas.setFillColor(NAVY)
+        canvas.rect(0, PAGE_H - 12 * mm, PAGE_W, 12 * mm, fill=1, stroke=0)
+        canvas.setFillColor(BRAND)
+        canvas.rect(0, PAGE_H - 12 * mm - 1.5 * mm, PAGE_W, 1.5 * mm, fill=1, stroke=0)
+
+        canvas.setFont(bold_font, 9)
+        canvas.setFillColor(colors.white)
+        canvas.drawString(MARGIN, PAGE_H - 8 * mm, 'MCQ MIRRABOOKA · DAILY REPORT')
+        try:
+            d_str = datetime.strptime(date_str, '%Y-%m-%d').strftime('%a %d %b %Y')
+        except Exception:
+            d_str = date_str
+        canvas.drawRightString(PAGE_W - MARGIN, PAGE_H - 8 * mm, d_str)
+
+        # Footer
+        canvas.setFont(font_name, 8)
+        canvas.setFillColor(MUTED)
+        canvas.drawString(MARGIN, 7 * mm,
+                          f'mcqstreetfoodchecklist.pythonanywhere.com')
+        canvas.drawRightString(PAGE_W - MARGIN, 7 * mm,
+                               f'Page {doc_obj.page}')
+        canvas.restoreState()
+
+    # ── Story builder ──────────────────────────────────────────────────────
+
+    story = []
+
+    # ── Cover content (positioned via Spacers because background is canvas) ──
+    story.append(Spacer(1, 110 * mm))     # leave room for logo painted by _draw_cover
+    story.append(Paragraph('MCQ MIRRABOOKA CAFE', S['cover_brand']))
+    story.append(Paragraph('VIETNAMESE STREET FOOD · DAILY REPORT', S['cover_sub']))
+    try:
+        date_pretty = datetime.strptime(date_str, '%Y-%m-%d').strftime('%A · %d %B %Y').upper()
+    except Exception:
+        date_pretty = date_str
+    story.append(Paragraph(date_pretty, S['cover_date']))
+    story.append(Spacer(1, 22 * mm))
+
+    # KPI strip on cover
+    chk_done = sum(1 for c in data['checklists']
+                   if c['done_tasks'] == c['total_tasks'] and c['total_tasks'] > 0)
+    chk_late = sum(1 for c in data['checklists'] if c.get('is_late'))
+    temp_alerts = sum(c.get('out_of_zone', 0) for c in data['temperatures'])
+
+    def _kpi(label, value, accent):
+        return Table([
+            [Paragraph(f'<font color="{accent.hexval()}" size="11"><b>{label}</b></font>',
+                       ParagraphStyle('k1', fontName=bold_font, alignment=TA_CENTER))],
+            [Paragraph(f'<font color="white" size="36"><b>{value}</b></font>',
+                       ParagraphStyle('k2', fontName=bold_font, alignment=TA_CENTER))],
+        ], colWidths=[40 * mm], rowHeights=[8 * mm, 18 * mm],
+            style=TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#ffffff10')),
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ffffff20')),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ]))
+
+    kpis = Table([[
+        _kpi('CHECKLISTS', str(len(data['checklists'])), colors.HexColor('#A5D6A7')),
+        _kpi('FULLY DONE', str(chk_done),                colors.HexColor('#80CBC4')),
+        _kpi('TEMPERATURE', str(len(data['temperatures'])), colors.HexColor('#FFAB91')),
+        _kpi('ALERTS',     str(temp_alerts + chk_late), colors.HexColor('#FFCDD2')),
+    ]], colWidths=[40 * mm] * 4)
+    kpis.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE')]))
+    story.append(kpis)
+
+    # ── Per-checklist pages ────────────────────────────────────────────────
+    if data['checklists']:
+        story.append(PageBreak())
+        story.append(Paragraph('DAILY CHECKLISTS', S['section']))
+        story.append(Paragraph(
+            f"{len(data['checklists'])} checklist(s) submitted today. "
+            "Each station follows on its own page below.", S['body']))
+
+    for c in data['checklists']:
+        full = _checklist_detail(c['id']) or c
+        col_hex = (full['meta'].get('color') or '#888888')
+        col = colors.HexColor(col_hex)
+
+        story.append(PageBreak())
+
+        # Header band table with station name + section pill
+        title = (full['meta'].get('title') or full['type']).upper()
+        section_label = (full['section'] or '').upper()
+        hdr_tbl = Table([[
+            Paragraph(f'<font color="white" size="22"><b>{_esc(title)}</b></font><br/>'
+                      f'<font color="#EADCC0" size="11">{_esc(section_label)} CHECKLIST · '
+                      f'{full["date"]}</font>',
+                      ParagraphStyle('h1', fontName=bold_font, leading=26))
+        ]], colWidths=[USABLE_W])
+        hdr_tbl.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), col),
+            ('LEFTPADDING', (0, 0), (-1, -1), 16),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 16),
+            ('TOPPADDING', (0, 0), (-1, -1), 14),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 14),
+        ]))
+        story.append(hdr_tbl)
+        story.append(Spacer(1, 4 * mm))
+
+        # Status pills row
+        pct = round(full['done_tasks'] / full['total_tasks'] * 100) if full['total_tasks'] else 0
+        pills = [
+            (f'{full["done_tasks"]}/{full["total_tasks"]} TASKS', OK if pct >= 90 else colors.HexColor('#E65100')),
+            (f'{pct}% COMPLETE', colors.HexColor('#1565C0')),
+            ('LATE' if full.get('is_late') else 'ON TIME', BAD if full.get('is_late') else OK),
+        ]
+        if full.get('verified'):
+            pills.append(('VERIFIED', NAVY))
+        pill_cells = []
+        for txt, c_ in pills:
+            cell = Table([[Paragraph(f'<font color="white"><b>{_esc(txt)}</b></font>',
+                                     ParagraphStyle('p', fontName=bold_font, fontSize=9,
+                                                    alignment=TA_CENTER))]],
+                         colWidths=[None], rowHeights=[7 * mm])
+            cell.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), c_),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 12),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 12),
+            ]))
+            pill_cells.append(cell)
+        # Lay them out horizontally
+        pill_row = Table([pill_cells], colWidths=[USABLE_W / max(len(pills), 1)] * len(pills))
+        pill_row.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 2),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 2),
+        ]))
+        story.append(pill_row)
+        story.append(Spacer(1, 5 * mm))
+
+        # Meta block (submitted by / responsible / submitted at)
+        meta_rows = [
+            ['Submitted by', full.get('submitted_by') or '—',
+             'Responsible',  full.get('responsible')  or '—'],
+            ['Submitted at', (full.get('submitted_at') or '—')[:16],
+             'Section',     section_label.title()],
+        ]
+        if full.get('general_note'):
+            meta_rows.append(['Note', full['general_note'], '', ''])
+        meta = Table(meta_rows, colWidths=[USABLE_W * 0.16, USABLE_W * 0.34,
+                                            USABLE_W * 0.16, USABLE_W * 0.34])
+        meta.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.white),
+            ('FONTNAME', (0, 0), (-1, -1), font_name),
+            ('FONTNAME', (0, 0), (0, -1), bold_font),
+            ('FONTNAME', (2, 0), (2, -1), bold_font),
+            ('TEXTCOLOR', (0, 0), (0, -1), MUTED),
+            ('TEXTCOLOR', (2, 0), (2, -1), MUTED),
+            ('TEXTCOLOR', (1, 0), (1, -1), INK),
+            ('TEXTCOLOR', (3, 0), (3, -1), INK),
+            ('FONTSIZE', (0, 0), (-1, -1), 9.5),
+            ('TOPPADDING', (0, 0), (-1, -1), 7),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
+            ('LEFTPADDING', (0, 0), (-1, -1), 10),
+            ('LINEBELOW', (0, 0), (-1, -2), 0.3, SOFT),
+            ('LINEAFTER', (1, 0), (1, -1), 0.3, SOFT),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        story.append(meta)
+        story.append(Spacer(1, 6 * mm))
+
+        # Tasks list
+        story.append(Paragraph('TASKS', S['section']))
+        task_rows = []
+        for t in full['tasks']:
+            mark = '<font color="#2E7D32"><b>✓</b></font>' if t['done'] \
+                   else '<font color="#C62828"><b>✗</b></font>'
+            style = S['task_done'] if t['done'] else S['task']
+            name = Paragraph(_esc(t['task_name']), style)
+            note = Paragraph(f'<i>{_esc(t["note"] or "")}</i>', S['small']) if t.get('note') else ''
+            task_rows.append([Paragraph(mark, S['task']), name, note])
+        if task_rows:
+            tt = Table(task_rows,
+                       colWidths=[10 * mm, USABLE_W * 0.55, USABLE_W * 0.32])
+            tt.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), colors.white),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                ('LEFTPADDING', (0, 0), (-1, -1), 8),
+                ('LINEBELOW', (0, 0), (-1, -1), 0.25, SOFT),
+            ]))
+            story.append(tt)
+        story.append(Spacer(1, 6 * mm))
+
+        # Photos — BIG and beautiful. 2 columns, full usable width.
+        if full.get('photos'):
+            story.append(PageBreak())
+            story.append(hdr_tbl)
+            story.append(Spacer(1, 4 * mm))
+            story.append(Paragraph(f'PHOTO EVIDENCE ({len(full["photos"])})', S['section']))
+
+            col_w = (USABLE_W - 6 * mm) / 2
+            max_h = 100 * mm
+            cells = []
+            for p in full['photos']:
+                src = os.path.join(UPLOAD_DIR, p['filename'])
+                cap = Paragraph(f'Photo {p["photo_number"] + 1}', S['photo_cap'])
+                if not os.path.exists(src):
+                    cells.append([Paragraph('(photo missing)', S['small']), cap])
+                    continue
+                try:
+                    rl_img = RLImage(src)
+                    iw, ih = rl_img.imageWidth, rl_img.imageHeight
+                    ratio = col_w / float(iw) if iw else 1
+                    h = ih * ratio
+                    if h > max_h:
+                        h = max_h
+                        ratio = h / float(ih) if ih else 1
+                        rl_img.drawWidth  = iw * ratio
+                        rl_img.drawHeight = h
+                    else:
+                        rl_img.drawWidth = col_w
+                        rl_img.drawHeight = h
+                    cells.append([rl_img, cap])
+                except Exception:
+                    cells.append([Paragraph('(could not load)', S['small']), cap])
+
+            # Pair into rows of 2
+            grid_rows = []
+            for i in range(0, len(cells), 2):
+                pair = cells[i:i + 2]
+                if len(pair) == 1: pair.append([''] * 2)
+                # build two stacked subtables (img on top, caption below)
+                grid_rows.append([
+                    Table([[pair[0][0]], [pair[0][1]]],
+                           colWidths=[col_w],
+                           style=TableStyle([
+                               ('TOPPADDING', (0, 0), (-1, -1), 0),
+                               ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+                               ('LEFTPADDING', (0, 0), (-1, -1), 0),
+                               ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+                           ])),
+                    Table([[pair[1][0]], [pair[1][1]]],
+                           colWidths=[col_w],
+                           style=TableStyle([
+                               ('TOPPADDING', (0, 0), (-1, -1), 0),
+                               ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+                               ('LEFTPADDING', (0, 0), (-1, -1), 0),
+                               ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+                           ])),
+                ])
+            photo_grid = Table(grid_rows,
+                               colWidths=[col_w, col_w],
+                               style=TableStyle([
+                                   ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                                   ('LEFTPADDING', (0, 0), (-1, -1), 3),
+                                   ('RIGHTPADDING', (0, 0), (-1, -1), 3),
+                                   ('TOPPADDING', (0, 0), (-1, -1), 3),
+                                   ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                               ]))
+            story.append(photo_grid)
+
+    # ── Per-temperature pages ──────────────────────────────────────────────
+    if data['temperatures']:
+        story.append(PageBreak())
+        story.append(Paragraph('TEMPERATURE RECORDS', S['section']))
+        story.append(Paragraph(
+            f"{len(data['temperatures'])} record(s) submitted today. "
+            "Each station's readings follow on its own page.", S['body']))
+
+    for t in data['temperatures']:
+        full = _temperature_detail(t['id']) or t
+        col_hex = (full['meta'].get('color') or '#888888')
+        col = colors.HexColor(col_hex)
+
+        story.append(PageBreak())
+        title = (full['meta'].get('title') or full['type']).upper()
+        hdr_tbl = Table([[
+            Paragraph(f'<font color="white" size="20"><b>{_esc(title)}</b></font><br/>'
+                      f'<font color="#EADCC0" size="11">TEMPERATURE RECORD · '
+                      f'{full["date"]}</font>',
+                      ParagraphStyle('th1', fontName=bold_font, leading=24))
+        ]], colWidths=[USABLE_W])
+        hdr_tbl.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), col),
+            ('LEFTPADDING', (0, 0), (-1, -1), 16),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 16),
+            ('TOPPADDING', (0, 0), (-1, -1), 14),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 14),
+        ]))
+        story.append(hdr_tbl)
+        story.append(Spacer(1, 4 * mm))
+
+        unsafe_count = sum(
+            1 for r in full['readings']
+            for cc in ('c1_temp','c2_temp','c3_temp','c4_temp','c5_temp')
+            if _temp_unsafe(r['food_kind'], r[cc])
+        )
+        discarded = sum(1 for r in full['readings'] if (r.get('discarded') or 'N').upper() == 'Y')
+
+        # Pills
+        pills = [
+            (f'{len(full["readings"])} FOODS', OK),
+            (f'{unsafe_count} OUT OF ZONE', BAD if unsafe_count else OK),
+        ]
+        if discarded:
+            pills.append((f'{discarded} DISCARDED', BAD))
+        pill_cells = []
+        for txt, c_ in pills:
+            cell = Table([[Paragraph(f'<font color="white"><b>{_esc(txt)}</b></font>',
+                                     ParagraphStyle('pt', fontName=bold_font, fontSize=9, alignment=TA_CENTER))]],
+                         rowHeights=[7 * mm])
+            cell.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), c_),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 12),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 12),
+            ]))
+            pill_cells.append(cell)
+        pill_row = Table([pill_cells], colWidths=[USABLE_W / max(len(pills),1)] * len(pills))
+        pill_row.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                                      ('LEFTPADDING', (0, 0), (-1, -1), 2),
+                                      ('RIGHTPADDING', (0, 0), (-1, -1), 2)]))
+        story.append(pill_row)
+        story.append(Spacer(1, 5 * mm))
+
+        # Meta
+        meta = Table([
+            ['Recorded by', full.get('recorded_by') or '—',
+             'Checked by',  full.get('checked_by')  or '—'],
+        ], colWidths=[USABLE_W * 0.16, USABLE_W * 0.34,
+                       USABLE_W * 0.16, USABLE_W * 0.34])
+        meta.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.white),
+            ('FONTNAME', (0, 0), (-1, -1), font_name),
+            ('FONTNAME', (0, 0), (0, -1), bold_font),
+            ('FONTNAME', (2, 0), (2, -1), bold_font),
+            ('TEXTCOLOR', (0, 0), (0, -1), MUTED),
+            ('TEXTCOLOR', (2, 0), (2, -1), MUTED),
+            ('FONTSIZE', (0, 0), (-1, -1), 9.5),
+            ('TOPPADDING', (0, 0), (-1, -1), 7),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
+            ('LEFTPADDING', (0, 0), (-1, -1), 10),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        story.append(meta)
+        story.append(Spacer(1, 6 * mm))
+
+        # Readings table
+        story.append(Paragraph('READINGS', S['section']))
+        head = ['Kind', 'Food item', 'C1', 'C2', 'C3', 'C4', 'C5', 'Note']
+        rows_data = [head]
+        for r in full['readings']:
+            kind = r['food_kind'] or 'cold'
+            kind_label = 'HOT' if kind == 'hot' else 'COLD'
+            kind_color = colors.HexColor('#FFE0B2') if kind == 'hot' else colors.HexColor('#E1F5FE')
+            kind_text  = colors.HexColor('#C0392B') if kind == 'hot' else colors.HexColor('#1565C0')
+
+            cells = [
+                Paragraph(f'<font color="{kind_text.hexval()}"><b>{kind_label}</b></font>',
+                          ParagraphStyle('kc', fontName=bold_font, fontSize=8, alignment=TA_CENTER)),
+                Paragraph(_esc(r['food_name']), S['food']),
+            ]
+            for cc in ('c1_temp','c2_temp','c3_temp','c4_temp','c5_temp'):
+                v = r[cc]
+                if v is None:
+                    cells.append(Paragraph('<font color="#999">—</font>',
+                                           ParagraphStyle('v', fontName=font_name, alignment=TA_CENTER, fontSize=10)))
+                else:
+                    unsafe = _temp_unsafe(kind, v)
+                    color_hex = '#C62828' if unsafe else '#2E7D32'
+                    cells.append(Paragraph(
+                        f'<font color="{color_hex}"><b>{v:g}°</b></font>',
+                        ParagraphStyle('v', fontName=bold_font, alignment=TA_CENTER, fontSize=10)))
+            note = r.get('notes') or ''
+            cells.append(Paragraph(f'<i>{_esc(note)}</i>', S['small']))
+            rows_data.append(cells)
+
+        col_widths = [USABLE_W * 0.08, USABLE_W * 0.32] + [USABLE_W * 0.07] * 5 + [USABLE_W * 0.25]
+        rt = Table(rows_data, colWidths=col_widths, repeatRows=1)
+        rt.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), NAVY),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), bold_font),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 0.3, SOFT),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+            # Tint the kind cell to match
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#FAFBFD')]),
+        ]))
+        story.append(rt)
+
+    # Empty-state if nothing today
+    if not data['checklists'] and not data['temperatures']:
+        story.append(PageBreak())
+        story.append(Spacer(1, 60 * mm))
+        story.append(Paragraph('No data recorded yet today.', S['section']))
+        story.append(Paragraph(
+            'Submit a checklist or a temperature record and re-export the PDF.',
+            S['body']))
+
+    # ── Build ──────────────────────────────────────────────────────────────
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+                            leftMargin=MARGIN, rightMargin=MARGIN,
+                            topMargin=16 * mm, bottomMargin=12 * mm,
+                            title='MCQ Daily Report')
+    doc.build(story, onFirstPage=_draw_cover, onLaterPages=_draw_page)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 @whatsapp_bp.route('/')
@@ -1008,6 +1556,22 @@ def whatsapp_today():
         date=today_str, data=data,
         checklists_meta=CHECKLISTS_META,
         temperatures_meta=TEMPERATURES_META)
+
+
+@whatsapp_bp.route('/pdf')
+@_login_required
+def whatsapp_pdf():
+    """One polished A4 PDF report for the day — designed to share to WhatsApp."""
+    from datetime import date
+    date_str = request.args.get('date') or date.today().isoformat()
+    try:
+        pdf_bytes = build_daily_pdf(date_str)
+    except Exception as e:
+        return f'PDF generation failed: {type(e).__name__}: {e}', 500
+    buf = BytesIO(pdf_bytes); buf.seek(0)
+    return send_file(buf, mimetype='application/pdf',
+                     as_attachment=False,
+                     download_name=f'MCQ_Daily_Report_{date_str}.pdf')
 
 
 @whatsapp_bp.route('/png')

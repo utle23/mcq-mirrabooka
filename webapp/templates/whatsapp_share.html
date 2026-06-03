@@ -6,457 +6,290 @@
 
 {% block head %}
 <style>
-.action-bar {
-  background: linear-gradient(135deg, #128C7E 0%, #25D366 100%);
-  border-radius: 14px;
-  padding: 22px 24px; margin-bottom: 20px;
+/* ── Hero PDF-share card ────────────────────────────────────────────── */
+.hero {
+  background: linear-gradient(135deg, #075E54 0%, #128C7E 55%, #25D366 100%);
+  border-radius: 18px;
+  padding: 26px 28px; margin-bottom: 22px;
   color: #fff;
-  box-shadow: 0 4px 20px rgba(37, 211, 102, .25);
+  box-shadow: 0 10px 40px rgba(7, 94, 84, .25);
+  position: relative; overflow: hidden;
 }
-.action-bar h5 { margin: 0 0 4px 0; font-weight: 700; }
-.action-bar .small { opacity: .9; }
-.btn-share {
-  background: #fff; color: #128C7E; font-weight: 700; border: none;
-  padding: 12px 28px; border-radius: 999px; font-size: 1rem;
+.hero::before {
+  content: ''; position: absolute; top: -60px; right: -60px;
+  width: 220px; height: 220px; border-radius: 50%;
+  background: rgba(255,255,255,.07);
+}
+.hero .badge-date {
+  display: inline-block; padding: 4px 14px; border-radius: 999px;
+  background: rgba(255,255,255,.2); font-size: 0.8rem; font-weight: 700;
+  letter-spacing: .05em; margin-bottom: 12px;
+}
+.hero h2 {
+  font-weight: 800; font-size: 1.9rem; margin: 0 0 6px 0;
+  line-height: 1.15;
+}
+.hero p { margin: 0; opacity: .9; max-width: 560px; line-height: 1.5; }
+
+.hero-actions {
+  display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; align-items: center;
+}
+.btn-pdf-share {
+  background: #fff; color: #075E54; font-weight: 800;
+  padding: 14px 26px; border-radius: 999px; border: none;
+  font-size: 1.05rem; display: inline-flex; align-items: center; gap: 10px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.18);
+  transition: transform .12s;
+}
+.btn-pdf-share:hover { transform: translateY(-1px); background: #f5f5f5; color: #075E54; }
+.btn-pdf-share:disabled { opacity: .55; cursor: not-allowed; transform: none; }
+.btn-pdf-share i { font-size: 1.3rem; }
+.btn-pdf-download {
+  background: rgba(255,255,255,.18); color: #fff; border: 1px solid rgba(255,255,255,.4);
+  font-weight: 600; padding: 12px 22px; border-radius: 999px;
   display: inline-flex; align-items: center; gap: 8px;
 }
-.btn-share:hover { background: #f0f0f0; color: #075E54; }
-.btn-share i { font-size: 1.3rem; }
-.btn-share:disabled { opacity: .55; cursor: not-allowed; }
+.btn-pdf-download:hover { background: rgba(255,255,255,.28); color: #fff; }
 
+/* ── Preview frame ─────────────────────────────────────────────────── */
+.pdf-preview {
+  background: #2C3E50; border-radius: 14px; padding: 14px;
+  margin-bottom: 22px;
+  box-shadow: 0 4px 24px rgba(0,0,0,.15);
+}
+.pdf-preview .pdf-frame {
+  width: 100%; height: 80vh; max-height: 900px;
+  border: none; border-radius: 8px; background: #fff;
+  display: block;
+}
+.pdf-preview .meta {
+  display: flex; justify-content: space-between; align-items: center;
+  color: rgba(255,255,255,.85); font-size: 0.82rem;
+  padding: 0 6px 10px;
+}
+.pdf-preview .meta i { margin-right: 4px; }
+.preview-loading {
+  color: rgba(255,255,255,.55); text-align: center; padding: 80px 20px;
+  font-size: 0.95rem;
+}
+
+/* ── Today's data summary cards ────────────────────────────────────── */
 .section-heading {
   font-size: 0.78rem; font-weight: 700; letter-spacing: .08em;
   text-transform: uppercase; color: #555;
-  margin: 18px 0 10px 4px;
+  margin: 22px 0 12px 4px;
   display: flex; align-items: center; gap: 8px;
 }
 
-.report-card {
+.summary-card {
   background: #fff; border: 1px solid #e8eaed; border-radius: 12px;
   box-shadow: 0 1px 6px rgba(0,0,0,.05);
-  padding: 14px 16px; margin-bottom: 12px;
-  display: flex; gap: 14px; align-items: flex-start;
+  padding: 12px 16px; margin-bottom: 10px;
+  display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
 }
-.report-card.disabled { opacity: .5; }
-.card-stripe {
-  width: 6px; align-self: stretch; border-radius: 4px;
+.summary-card .stripe {
+  width: 4px; align-self: stretch; min-height: 40px; border-radius: 4px;
   background: var(--stripe, #888);
 }
-.card-body-flex { flex: 1; min-width: 0; }
-.card-title-row {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px;
+.summary-card .body { flex: 1; min-width: 0; }
+.summary-card .title {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px;
 }
-.card-title { font-weight: 700; color: #1A1A2E; font-size: 1rem; }
-.card-pill {
+.summary-card .name { font-weight: 700; color: #1A1A2E; font-size: 0.95rem; }
+.summary-card .pill {
   display: inline-block; padding: 2px 9px; border-radius: 10px;
   font-size: 0.7rem; font-weight: 700; color: #fff;
 }
-.card-meta { font-size: 0.82rem; color: #555; }
-.card-meta strong { color: #1A1A2E; }
-
-.card-photos { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-.card-photos img {
-  width: 60px; height: 60px; object-fit: cover;
-  border-radius: 5px; border: 1px solid #ddd;
+.summary-card .meta { font-size: 0.8rem; color: #666; }
+.summary-card .photos { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+.summary-card .photos img {
+  width: 38px; height: 38px; object-fit: cover;
+  border-radius: 4px; border: 1px solid #ddd;
 }
-
-.card-actions {
-  display: flex; flex-direction: column; gap: 6px; align-items: flex-end;
-  flex-shrink: 0;
-}
-.card-include {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 0.78rem; color: #555;
-  background: #f7f9fb; padding: 4px 10px; border-radius: 12px;
-  cursor: pointer; user-select: none;
-}
-.card-include input { margin: 0; }
-
-.preview-modal-img { max-width: 100%; border-radius: 8px;
-  box-shadow: 0 4px 24px rgba(0,0,0,.2); }
 
 .empty-section {
-  background: #f7f9fb; border: 1px dashed #ccd; border-radius: 8px;
-  padding: 14px 18px; color: #888; font-size: 0.9rem; text-align: center;
+  background: #f7f9fb; border: 1px dashed #ccd; border-radius: 10px;
+  padding: 18px; text-align: center; color: #888; font-size: 0.9rem;
 }
+
 .share-status {
-  font-size: 0.85rem; opacity: .9;
-  display: flex; align-items: center; gap: 6px;
+  font-size: 0.88rem; opacity: .95;
+  margin-top: 10px;
+  display: flex; align-items: center; gap: 6px; min-height: 22px;
 }
 </style>
 {% endblock %}
 
 {% block content %}
 
-<!-- Action bar -->
-<div class="action-bar">
-  <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
-    <div>
-      <h5><i class="fab fa-whatsapp me-2"></i>Share today's report to WhatsApp</h5>
-      <div class="small">
-        Each checklist and temperature record below becomes its own image. Pick which ones you want, tap <strong>Share to WhatsApp</strong>, and your phone's share sheet will let you pick a group — all images go in one batch.
-      </div>
-    </div>
-    <button id="shareBtn" class="btn btn-share" onclick="shareSelected()" disabled>
-      <i class="fab fa-whatsapp"></i> Share to WhatsApp
-      <span class="badge bg-light text-dark ms-1" id="shareCount">0</span>
+<!-- HERO with PDF share -->
+<div class="hero">
+  <div class="badge-date">📅 {{ date }}</div>
+  <h2><i class="fab fa-whatsapp me-2"></i>Daily Report — ready to share</h2>
+  <p>
+    One polished PDF combines the day's checklists (with all photos large
+    and clear), temperature records and KPI cover. Tap <strong>Share to
+    WhatsApp</strong> and your phone's share sheet will let you pick a group.
+  </p>
+  <div class="hero-actions">
+    <button id="shareBtn" class="btn-pdf-share" onclick="sharePdf()">
+      <i class="fab fa-whatsapp"></i> Share PDF to WhatsApp
     </button>
-  </div>
-  <div class="share-status mt-2" id="shareStatus"></div>
-</div>
-
-<!-- Summary card -->
-<div class="section-heading"><i class="fas fa-clipboard-list"></i>Summary image ({{ date }})</div>
-<div class="report-card" style="--stripe:#1A1A2E" data-kind="summary" data-url="/whatsapp/png?date={{ date }}" data-fname="MCQ_Daily_{{ date }}.png">
-  <div class="card-stripe"></div>
-  <div class="card-body-flex">
-    <div class="card-title-row">
-      <span class="card-title">Daily Operations Summary</span>
-      <span class="card-pill" style="background:#1A1A2E">KPI</span>
-    </div>
-    <div class="card-meta">
-      Header with logo + KPI cards (checklists / fully done / temperatures / alerts).
-      Good as the first image in the WhatsApp post.
-    </div>
-  </div>
-  <div class="card-actions">
-    <label class="card-include">
-      <input type="checkbox" class="share-include" checked> Include
-    </label>
-    <button class="btn btn-sm btn-outline-secondary" onclick="previewImage(this)" type="button">
-      <i class="fas fa-eye me-1"></i>View
-    </button>
-    <a class="btn btn-sm btn-outline-success" href="/whatsapp/png?date={{ date }}"
-       download="MCQ_Daily_{{ date }}.png">
-      <i class="fas fa-download me-1"></i>PNG
+    <a href="/whatsapp/pdf?date={{ date }}"
+       class="btn-pdf-download"
+       download="MCQ_Daily_Report_{{ date }}.pdf">
+      <i class="fas fa-file-pdf"></i> Download PDF
+    </a>
+    <a href="/whatsapp/pdf?date={{ date }}" target="_blank" class="btn-pdf-download">
+      <i class="fas fa-up-right-from-square"></i> Open in new tab
     </a>
   </div>
+  <div class="share-status" id="shareStatus"></div>
 </div>
 
-<!-- Checklists -->
-<div class="section-heading"><i class="fas fa-clipboard-check"></i>Checklists submitted today</div>
-{% if not data.checklists %}
+<!-- PDF preview (live, embedded) -->
+<div class="pdf-preview">
+  <div class="meta">
+    <span><i class="fas fa-eye"></i>Live preview · scroll inside to flip pages</span>
+    <span><i class="fas fa-file-pdf"></i>A4 portrait</span>
+  </div>
+  <div class="preview-loading" id="previewLoading">
+    <i class="fas fa-spinner fa-spin me-2"></i>Rendering today's PDF…
+  </div>
+  <iframe id="pdfFrame" class="pdf-frame" style="display:none"></iframe>
+</div>
+
+<!-- Today's data summary (informational — not images to share) -->
+<div class="section-heading"><i class="fas fa-clipboard-list"></i>What's in the PDF</div>
+
+{% if not data.checklists and not data.temperatures %}
 <div class="empty-section">
-  <i class="fas fa-clipboard fa-2x mb-2 d-block opacity-25"></i>
-  No checklists submitted yet today.
+  <i class="fas fa-inbox fa-2x mb-2 d-block opacity-25"></i>
+  No checklists or temperature records submitted yet today.
+  The PDF will show an empty-state placeholder until data is entered.
 </div>
 {% endif %}
+
 {% for c in data.checklists %}
 {% set meta = c.meta %}
 {% set pct = (c.done_tasks / c.total_tasks * 100)|round|int if c.total_tasks else 0 %}
-<div class="report-card" style="--stripe:{{ meta.color or '#888' }}"
-     data-kind="checklist"
-     data-url="/whatsapp/checklist/{{ c.id }}.png"
-     data-fname="MCQ_Checklist_{{ c.type }}_{{ c.section }}_{{ c.date }}.png">
-  <div class="card-stripe"></div>
-  <div class="card-body-flex">
-    <div class="card-title-row">
-      <span class="card-pill" style="background:{{ meta.color or '#888' }}">{{ meta.title or c.type }}</span>
-      <span class="card-pill" style="background:{% if c.section=='closing' %}#E74C3C{% else %}#F39C12{% endif %}">
-        {{ c.section|upper }}
-      </span>
-      <span class="card-pill" style="background:{% if pct>=90 %}#43A047{% else %}#FB8C00{% endif %}">
-        {{ c.done_tasks }}/{{ c.total_tasks }} · {{ pct }}%
-      </span>
-      {% if c.is_late %}<span class="card-pill" style="background:#C62828">LATE</span>{% endif %}
-      {% if c.verified %}<span class="card-pill" style="background:#1A1A2E"><i class="fas fa-check"></i> VERIFIED</span>{% endif %}
+<div class="summary-card">
+  <div class="stripe" style="background:{{ meta.color or '#888' }}"></div>
+  <div class="body">
+    <div class="title">
+      <span class="pill" style="background:{{ meta.color or '#888' }}">{{ meta.title or c.type }}</span>
+      <span class="pill" style="background:{% if c.section=='closing' %}#E74C3C{% else %}#F39C12{% endif %}">{{ c.section|upper }}</span>
+      <span class="pill" style="background:{% if pct>=90 %}#43A047{% else %}#FB8C00{% endif %}">{{ c.done_tasks }}/{{ c.total_tasks }} · {{ pct }}%</span>
+      {% if c.is_late %}<span class="pill" style="background:#C62828">LATE</span>{% endif %}
+      {% if c.verified %}<span class="pill" style="background:#1A1A2E"><i class="fas fa-check"></i> VERIFIED</span>{% endif %}
     </div>
-    <div class="card-meta">
-      <strong>Submitted by:</strong> {{ c.submitted_by or '—' }} ·
-      <strong>Responsible:</strong> {{ c.responsible or '—' }}
+    <div class="meta">
+      <strong>By:</strong> {{ c.submitted_by or '—' }} ·
+      <strong>Resp:</strong> {{ c.responsible or '—' }}
       {% if c.submitted_at %} · {{ c.submitted_at[:16] }}{% endif %}
     </div>
     {% if c.photos %}
-    <div class="card-photos">
-      {% for p in c.photos %}
-      <img src="/photo/{{ p.filename }}" alt="" onerror="this.style.opacity=0.3">
-      {% endfor %}
-      <span class="text-muted small align-self-center ms-2">{{ c.photos|length }} photo(s)</span>
+    <div class="photos">
+      {% for p in c.photos %}<img src="/photo/{{ p.filename }}" alt="" onerror="this.style.opacity=0.3">{% endfor %}
+      <span class="text-muted small align-self-center ms-1">{{ c.photos|length }} photo(s) — full size in PDF</span>
     </div>
-    {% else %}
-    <div class="text-muted small mt-1"><i class="fas fa-camera-slash me-1"></i>No photos attached</div>
     {% endif %}
   </div>
-  <div class="card-actions">
-    <label class="card-include">
-      <input type="checkbox" class="share-include" checked> Include
-    </label>
-    <button class="btn btn-sm btn-outline-secondary" onclick="previewImage(this)" type="button">
-      <i class="fas fa-eye me-1"></i>View
-    </button>
-    <a class="btn btn-sm btn-outline-success" href="/whatsapp/checklist/{{ c.id }}.png"
-       download="MCQ_Checklist_{{ c.type }}_{{ c.section }}_{{ c.date }}.png">
-      <i class="fas fa-download me-1"></i>PNG
-    </a>
-  </div>
 </div>
 {% endfor %}
 
-<!-- Temperatures -->
-<div class="section-heading"><i class="fas fa-thermometer-half"></i>Temperature records today</div>
-{% if not data.temperatures %}
-<div class="empty-section">
-  <i class="fas fa-thermometer-half fa-2x mb-2 d-block opacity-25"></i>
-  No temperature records submitted yet today.
-</div>
-{% endif %}
 {% for t in data.temperatures %}
 {% set meta = t.meta %}
-<div class="report-card" style="--stripe:{{ meta.color or '#888' }}"
-     data-kind="temperature"
-     data-url="/whatsapp/temperature/{{ t.id }}.png"
-     data-fname="MCQ_Temp_{{ t.type }}_{{ t.date }}.png">
-  <div class="card-stripe"></div>
-  <div class="card-body-flex">
-    <div class="card-title-row">
-      <span class="card-pill" style="background:{{ meta.color or '#888' }}">{{ meta.title or t.type }}</span>
-      <span class="card-pill" style="background:#43A047">{{ t.reading_count }} foods</span>
-      {% if t.discarded %}<span class="card-pill" style="background:#C62828">{{ t.discarded }} discarded</span>{% endif %}
+<div class="summary-card">
+  <div class="stripe" style="background:{{ meta.color or '#888' }}"></div>
+  <div class="body">
+    <div class="title">
+      <span class="pill" style="background:{{ meta.color or '#888' }}">{{ meta.title or t.type }}</span>
+      <span class="pill" style="background:#43A047">{{ t.reading_count }} foods</span>
       {% if t.out_of_zone %}
-      <span class="card-pill" style="background:#C62828">{{ t.out_of_zone }} out of zone</span>
+      <span class="pill" style="background:#C62828">{{ t.out_of_zone }} out of zone</span>
       {% else %}
-      <span class="card-pill" style="background:#1B5E20">all safe</span>
+      <span class="pill" style="background:#1B5E20">all safe</span>
       {% endif %}
+      {% if t.discarded %}<span class="pill" style="background:#C62828">{{ t.discarded }} discarded</span>{% endif %}
     </div>
-    <div class="card-meta">
-      <strong>Recorded by:</strong> {{ t.recorded_by or '—' }} ·
-      <strong>Checked by:</strong> {{ t.checked_by or '—' }}
-      {% if t.submitted_at %} · {{ t.submitted_at[:16] }}{% endif %}
+    <div class="meta">
+      <strong>By:</strong> {{ t.recorded_by or '—' }} ·
+      <strong>Checked:</strong> {{ t.checked_by or '—' }}
     </div>
-  </div>
-  <div class="card-actions">
-    <label class="card-include">
-      <input type="checkbox" class="share-include" checked> Include
-    </label>
-    <button class="btn btn-sm btn-outline-secondary" onclick="previewImage(this)" type="button">
-      <i class="fas fa-eye me-1"></i>View
-    </button>
-    <a class="btn btn-sm btn-outline-success" href="/whatsapp/temperature/{{ t.id }}.png"
-       download="MCQ_Temp_{{ t.type }}_{{ t.date }}.png">
-      <i class="fas fa-download me-1"></i>PNG
-    </a>
   </div>
 </div>
 {% endfor %}
-
-<!-- Preview modal -->
-<div class="modal fade" id="previewModal" tabindex="-1">
-  <div class="modal-dialog modal-lg modal-dialog-centered">
-    <div class="modal-content" style="background:#1A1A2E">
-      <div class="modal-header py-2" style="border-color:rgba(255,255,255,0.1)">
-        <h6 class="modal-title text-white mb-0" id="previewTitle">Preview</h6>
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-      </div>
-      <div class="modal-body text-center" id="previewBody">
-        <div class="text-white-50 py-5"><i class="fas fa-spinner fa-spin me-1"></i>Loading…</div>
-      </div>
-    </div>
-  </div>
-</div>
 
 {% endblock %}
 
 {% block scripts %}
 <script>
-let preparedShare = null;
-let preparePromise = null;
-let prepareTimer = null;
-let prepareRequestId = 0;
+const PDF_URL = '/whatsapp/pdf?date={{ date }}';
+const PDF_FNAME = 'MCQ_Daily_Report_{{ date }}.pdf';
 
-function selectedCards() {
-  return [...document.querySelectorAll('.report-card')].filter(
-    c => c.querySelector('.share-include')?.checked);
-}
-
-function selectionKey(cards) {
-  return cards.map(c => `${c.dataset.url}::${c.dataset.fname}`).join('|');
-}
-
-function invalidatePreparedShare() {
-  preparedShare = null;
-  preparePromise = null;
-  prepareRequestId += 1;
-}
-
-// ── Selection tracking ────────────────────────────────────────────────
-function updateShareBtn() {
-  const checked = selectedCards().length;
-  const btn = document.getElementById('shareBtn');
-  document.getElementById('shareCount').textContent = checked;
-  btn.disabled = checked === 0;
-}
-document.querySelectorAll('.share-include').forEach(cb => {
-  cb.addEventListener('change', () => {
-    invalidatePreparedShare();
-    updateShareBtn();
-    queuePrepareSelected();
+// Load PDF preview inside iframe
+(function loadPreview() {
+  const frame = document.getElementById('pdfFrame');
+  const loading = document.getElementById('previewLoading');
+  // Cache-bust so the preview reflects fresh data after any save elsewhere
+  const url = PDF_URL + '&_t=' + Date.now();
+  // Use #toolbar=0 to keep the embedded viewer chrome minimal where supported
+  frame.src = url + '#toolbar=1&view=FitH';
+  frame.addEventListener('load', () => {
+    loading.style.display = 'none';
+    frame.style.display = 'block';
   });
-});
-updateShareBtn();
+  // Fallback timeout — show frame even if onload doesn't fire (some browsers
+  // don't fire onload for cross-origin / PDF embeds)
+  setTimeout(() => {
+    if (loading.style.display !== 'none') {
+      loading.style.display = 'none';
+      frame.style.display = 'block';
+    }
+  }, 4000);
+})();
 
-// ── Preview (lazy load, no auto preview) ──────────────────────────────
-function previewImage(btn) {
-  const card = btn.closest('.report-card');
-  const url  = card.dataset.url;
-  const fname = card.dataset.fname;
-  const titleEl = document.getElementById('previewTitle');
-  const bodyEl  = document.getElementById('previewBody');
-  titleEl.textContent = fname;
-  bodyEl.innerHTML = '<div class="text-white-50 py-5"><i class="fas fa-spinner fa-spin me-1"></i>Loading image…</div>';
-  new bootstrap.Modal(document.getElementById('previewModal')).show();
-
-  const img = new Image();
-  img.className = 'preview-modal-img';
-  img.alt = fname;
-  img.onload = () => {
-    bodyEl.innerHTML = '';
-    bodyEl.appendChild(img);
-  };
-  img.onerror = () => {
-    bodyEl.innerHTML = '<div class="text-danger py-5"><i class="fas fa-circle-exclamation me-1"></i>Failed to load image.</div>';
-  };
-  img.src = url + (url.includes('?') ? '&' : '?') + '_t=' + Date.now();
-}
-
-// ── Share selected images ────────────────────────────────────────────
-async function fetchShareFiles(cards) {
-  return Promise.all(cards.map(async card => {
-    const url = card.dataset.url + (card.dataset.url.includes('?') ? '&' : '?') + '_t=' + Date.now();
-    const fname = card.dataset.fname;
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error(`Failed to load ${fname} (HTTP ${resp.status})`);
-    const blob = await resp.blob();
-    return new File([blob], fname, { type: 'image/png' });
-  }));
-}
-
-function downloadFiles(files) {
-  files.forEach(file => {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(file);
-    a.download = file.name;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1500);
-  });
-}
-
-function openWhatsAppFallback(files, status, reason = '') {
-  downloadFiles(files);
-  const text = encodeURIComponent('MCQ Mirrabooka Cafe - daily operations summary for {{ date }}\n\n(' + files.length + ' images downloaded - attach them manually to the WhatsApp message)');
-  const whatsappUrl = `https://wa.me/?text=${text}`;
-  const popup = window.open(whatsappUrl, '_blank');
-  if (popup) {
-    popup.opener = null;
-  } else {
-    window.location.href = whatsappUrl;
-  }
-
-  const prefix = reason ? reason + ' ' : '';
-  status.innerHTML = '<i class="fas fa-info-circle"></i> ' + prefix + files.length + ' image(s) downloaded. WhatsApp opening - attach the files manually.';
-}
-
-function shareUnavailableMessage(e) {
-  if (e && e.name === 'NotAllowedError') {
-    return 'Native share is blocked in this browser/context.';
-  }
-  return 'Native share is unavailable here.';
-}
-
-function queuePrepareSelected() {
-  clearTimeout(prepareTimer);
-  prepareTimer = setTimeout(() => {
-    prepareSelected({ silent: true }).catch(() => {});
-  }, 250);
-}
-
-async function prepareSelected({ silent = false } = {}) {
-  const cards = selectedCards();
-  if (cards.length === 0) return null;
-
-  const key = selectionKey(cards);
-  if (preparedShare?.key === key) return preparedShare.files;
-  if (preparePromise?.key === key) return preparePromise.promise;
-
+async function sharePdf() {
   const status = document.getElementById('shareStatus');
   const btn = document.getElementById('shareBtn');
-  const requestId = ++prepareRequestId;
-
-  if (!silent) {
-    btn.disabled = true;
-    status.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating ' + cards.length + ' image(s)...';
-  } else if (!status.textContent.trim()) {
-    status.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing images...';
-  }
-
-  const promise = fetchShareFiles(cards)
-    .then(files => {
-      if (requestId === prepareRequestId) {
-        preparedShare = { key, files };
-        status.innerHTML = '<i class="fas fa-check-circle"></i> ' + files.length + ' image(s) ready to share.';
-      }
-      return files;
-    })
-    .catch(e => {
-      if (requestId === prepareRequestId) {
-        status.innerHTML = '<i class="fas fa-circle-exclamation"></i> ' + e.message;
-      }
-      throw e;
-    })
-    .finally(() => {
-      if (requestId === prepareRequestId) {
-        preparePromise = null;
-        btn.disabled = false;
-        updateShareBtn();
-      }
-    });
-
-  preparePromise = { key, promise };
-  return promise;
-}
-
-async function shareSelected() {
-  const cards = selectedCards();
-  if (cards.length === 0) return;
-
-  const status = document.getElementById('shareStatus');
-  const btn = document.getElementById('shareBtn');
-  const key = selectionKey(cards);
   btn.disabled = true;
+  status.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating PDF…';
 
   try {
-    if (preparedShare?.key !== key) {
-      await prepareSelected({ silent: false });
-      status.innerHTML = '<i class="fas fa-check-circle"></i> Images are ready. Tap Share to WhatsApp again to open the share sheet.';
-      return;
-    }
+    const resp = await fetch(PDF_URL + '&_t=' + Date.now());
+    if (!resp.ok) throw new Error('PDF generation failed (HTTP ' + resp.status + ')');
+    const blob = await resp.blob();
+    const file = new File([blob], PDF_FNAME, { type: 'application/pdf' });
 
-    const files = preparedShare.files;
     status.innerHTML = '<i class="fas fa-share-alt"></i> Opening share sheet…';
 
-    if (navigator.canShare && navigator.canShare({ files })) {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
       await navigator.share({
-        files,
+        files: [file],
         title: 'MCQ Daily Report — {{ date }}',
-        text:  'MCQ Mirrabooka Cafe — daily operations summary for {{ date }}',
+        text:  'MCQ Mirrabooka Cafe — daily operations report ({{ date }})',
       });
-      status.innerHTML = '<i class="fas fa-check-circle"></i> Done. Pick a WhatsApp group from the share sheet.';
+      status.innerHTML = '<i class="fas fa-check-circle"></i> Pick a WhatsApp group from the share sheet.';
     } else {
-      openWhatsAppFallback(files, status);
+      // Desktop fallback: download + open WhatsApp Web to compose with text
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = PDF_FNAME; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+      const text = encodeURIComponent('MCQ Mirrabooka Cafe — daily operations report ({{ date }})\n\n(The PDF has been downloaded — attach it to the WhatsApp message)');
+      setTimeout(() => window.open(`https://wa.me/?text=${text}`, '_blank'), 800);
+      status.innerHTML = '<i class="fas fa-info-circle"></i> PDF downloaded — attach it to WhatsApp manually (sharing this way needs a phone or Chrome/Edge).';
     }
   } catch (e) {
     if (e.name === 'AbortError') {
       status.innerHTML = '<i class="fas fa-circle-info"></i> Share cancelled.';
-    } else if (preparedShare?.key === key) {
-      openWhatsAppFallback(preparedShare.files, status, shareUnavailableMessage(e));
     } else {
       status.innerHTML = '<i class="fas fa-circle-exclamation"></i> ' + e.message;
     }
   } finally {
     btn.disabled = false;
-    updateShareBtn();
   }
 }
-
-queuePrepareSelected();
 </script>
 {% endblock %}
