@@ -206,52 +206,50 @@ def _format_delivery_date(s: str) -> str:
 
 def _compose_order(supplier: dict, items_with_qty: list[dict],
                     delivery_date: str, extra_note: str = '') -> tuple[str, str]:
-    """Return (subject, plain text body) for the order email."""
+    """Return (subject, plain text body) for the order email.
+    Body uses a clean bulleted list (no fixed-width columns) because Gmail's
+    compose window collapses runs of spaces, which destroyed the old
+    ASCII-table layout when the user opened the draft."""
     today_pretty = datetime.now().strftime('%d/%m/%Y')
     deliv_pretty = _format_delivery_date(delivery_date)
     subject = f"MCQ Mirrabooka — Packaging order — delivery {deliv_pretty}"
 
-    # Table
-    code_w = max([len(i['product_code']) for i in items_with_qty] + [12])
-    name_w = max([len(i['name_en'])      for i in items_with_qty] + [4])
-    qty_w  = max([len(str(i['qty']))     for i in items_with_qty] + [3])
-    unit_w = max([len(i['unit'])         for i in items_with_qty] + [4])
+    total_units = sum(i['qty'] for i in items_with_qty)
+    line_count  = len(items_with_qty)
+    s = 's' if total_units != 1 else ''
+    ls = 's' if line_count != 1 else ''
 
-    header = (f"{'CODE'.ljust(code_w)}  {'ITEM'.ljust(name_w)}"
-              f"  {'QTY'.rjust(qty_w)}  {'UNIT'.ljust(unit_w)}")
-    sep = '-' * len(header)
-    lines = [header, sep]
+    parts = [
+        f"Hello {supplier['name']},",
+        "",
+        f"Please prepare the following packaging order for delivery on {deliv_pretty}.",
+        "",
+        f"ORDER LIST ({line_count} item{ls}, {total_units} unit{s}):",
+        "",
+    ]
     for it in items_with_qty:
-        lines.append(
-            f"{it['product_code'].ljust(code_w)}  {it['name_en'].ljust(name_w)}"
-            f"  {str(it['qty']).rjust(qty_w)}  {it['unit'].ljust(unit_w)}"
-        )
+        code = it.get('product_code') or ''
+        bullet = f"• {it['qty']} × {it['unit']} — {it['name_en']}"
+        if code:
+            bullet += f"  (code: {code})"
+        parts.append(bullet)
 
-    total_items = sum(i['qty'] for i in items_with_qty)
-    total_lines = len(items_with_qty)
+    parts.extend(["", f"TOTAL: {total_units} unit{s} across {line_count} line{ls}."])
 
-    note_block = f"\n\nNote:\n{extra_note.strip()}" if extra_note.strip() else ''
+    if extra_note.strip():
+        parts += ["", "Note:", extra_note.strip()]
 
-    body = (
-f"""Hello {supplier['name']},
-
-Please prepare the following packaging order for delivery on {deliv_pretty}.
-
-{chr(10).join(lines)}
-
-TOTAL: {total_items} unit(s) across {total_lines} line(s).
-{note_block}
-
-CC: {supplier.get('cc_emails') or '-'}
-
-— {supplier.get('cafe_name') or 'MCQ Mirrabooka'}
-Contact:
-{supplier.get('cafe_contacts') or '-'}
-
-Order date: {today_pretty}
-"""
-    )
-    return subject, body
+    parts += [
+        "",
+        f"CC: {supplier.get('cc_emails') or '-'}",
+        "",
+        f"— {supplier.get('cafe_name') or 'MCQ Mirrabooka'}",
+        "Contact:",
+        supplier.get('cafe_contacts') or '-',
+        "",
+        f"Order date: {today_pretty}",
+    ]
+    return subject, '\n'.join(parts)
 
 
 def _gmail_compose_url(to: str, subject: str, body: str, cc: str = '') -> str:
@@ -272,6 +270,16 @@ def _mailto_url(to: str, subject: str, body: str, cc: str = '') -> str:
     if cc:
         qs['cc'] = cc
     return f'mailto:{urllib.parse.quote(to or "")}?' + urllib.parse.urlencode(qs, quote_via=urllib.parse.quote)
+
+
+def _gmail_app_url(to: str, subject: str, body: str, cc: str = '') -> str:
+    """Deep-link to the Gmail iOS / Android app: googlegmail://co?…
+    On iOS this opens the Gmail app directly; on Android the same scheme is
+    also recognised when Gmail is installed."""
+    qs = {'to': to or '', 'subject': subject, 'body': body}
+    if cc:
+        qs['cc'] = cc
+    return 'googlegmail://co?' + urllib.parse.urlencode(qs, quote_via=urllib.parse.quote)
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
@@ -349,18 +357,18 @@ def packaging_compose():
         return jsonify({'error': 'No items selected. Set a quantity > 0 on at least one row.'}), 400
 
     subject, body = _compose_order(supplier, chosen, delivery_date, extra_note)
-    gmail = _gmail_compose_url(supplier['email'], subject, body, supplier.get('cc_emails',''))
-    mailto = _mailto_url(supplier['email'], subject, body, supplier.get('cc_emails',''))
+    cc = supplier.get('cc_emails', '')
     return jsonify({
         'ok': True,
-        'subject':   subject,
-        'body':      body,
-        'gmail_url': gmail,
-        'mailto':    mailto,
-        'to':        supplier['email'],
-        'cc':        supplier.get('cc_emails',''),
-        'item_count': len(chosen),
-        'total_qty':  sum(i['qty'] for i in chosen),
+        'subject':       subject,
+        'body':          body,
+        'gmail_url':     _gmail_compose_url(supplier['email'], subject, body, cc),
+        'gmail_app_url': _gmail_app_url   (supplier['email'], subject, body, cc),
+        'mailto':        _mailto_url      (supplier['email'], subject, body, cc),
+        'to':            supplier['email'],
+        'cc':            cc,
+        'item_count':    len(chosen),
+        'total_qty':     sum(i['qty'] for i in chosen),
     })
 
 

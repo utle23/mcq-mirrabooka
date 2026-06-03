@@ -67,9 +67,6 @@
       <a href="/history" class="nav-link-item {% if current_ep=='history' %}active{% endif %}" style="border-left-color:#607D8B">
         <i class="fas fa-history fa-fw"></i><span>History</span>
       </a>
-      <a href="/whatsapp/" class="nav-link-item {% if 'whatsapp' in current_ep %}active{% endif %}" style="border-left-color:#25D366">
-        <i class="fab fa-whatsapp fa-fw"></i><span>WhatsApp Share</span>
-      </a>
       {% endif %}
 
       <div class="nav-section-label">PREP SCHEDULE</div>
@@ -133,9 +130,6 @@
       <a href="/pastry/returns" class="nav-link-item {% if 'pastry_returns' in current_ep %}active{% endif %}" style="border-left-color:#AB47BC">
         <i class="fas fa-rotate-left fa-fw"></i><span>Pastry Returns</span>
       </a>
-      <a href="/packaging/" class="nav-link-item {% if 'packaging' in current_ep %}active{% endif %}" style="border-left-color:#6D4C41">
-        <i class="fas fa-boxes-packing fa-fw"></i><span>Packaging Order</span>
-      </a>
       <a href="/pastry/weekly" class="nav-link-item {% if 'pastry_weekly' in current_ep %}active{% endif %}" style="border-left-color:#FFA726">
         <i class="fas fa-calendar-week fa-fw"></i><span>Weekly Schedule</span>
       </a>
@@ -162,6 +156,18 @@
       <a href="/training/" class="nav-link-item {% if 'training' in current_ep %}active{% endif %}" style="border-left-color:#C0392B">
         <i class="fas fa-graduation-cap fa-fw"></i><span>Training Assessment</span>
       </a>
+
+      {% if is_admin %}
+      <div class="nav-section-label">SUPPLIER ORDERS</div>
+      <a href="/packaging/" class="nav-link-item {% if 'packaging' in current_ep %}active{% endif %}" style="border-left-color:#6D4C41">
+        <i class="fas fa-boxes-packing fa-fw"></i><span>Packaging Order</span>
+      </a>
+
+      <div class="nav-section-label">SHARE TO TEAM</div>
+      <a href="/whatsapp/" class="nav-link-item {% if 'whatsapp' in current_ep %}active{% endif %}" style="border-left-color:#25D366">
+        <i class="fab fa-whatsapp fa-fw"></i><span>WhatsApp Daily Share</span>
+      </a>
+      {% endif %}
 
       <div class="nav-section-label">REPORT</div>
       <a href="/report" class="nav-link-item {% if current_ep=='report_issue' %}active{% endif %}" style="border-left-color:#e53935">
@@ -284,33 +290,63 @@ if ('serviceWorker' in navigator) {
   });
 }
 
-// Chrome / Edge: capture the install event and offer a custom "Install MCQ app" button
+// ── PWA install ──
+// Detect whether the page is already running as an installed PWA.
+let _runningAsPwa = (
+  window.matchMedia('(display-mode: standalone)').matches ||
+  window.matchMedia('(display-mode: minimal-ui)').matches ||
+  window.navigator.standalone === true     // iOS Safari home-screen flag
+);
+const _isIos = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+// Chrome / Android: capture the install event so we can show our own button
 let _deferredPwaPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   _deferredPwaPrompt = e;
-  const btn = document.getElementById('pwa-install-btn');
-  if (btn) btn.style.display = 'inline-flex';
 });
+
 function installPwa() {
-  if (!_deferredPwaPrompt) {
-    // iOS Safari: no beforeinstallprompt — show manual instructions instead.
-    alert('To install MCQ Cafe on your phone:\n\n' +
-          '• iPhone (Safari): tap the Share button (□↑) → "Add to Home Screen"\n' +
-          '• Android (Chrome): tap the ⋮ menu → "Install app" / "Add to Home Screen"');
+  // Already installed → just show a friendly message instead of erroring
+  if (_runningAsPwa) {
+    alert('MCQ Cafe is already installed on this device. You can pin the icon to your home screen if it isn’t there yet.');
     return;
   }
-  _deferredPwaPrompt.prompt();
-  _deferredPwaPrompt.userChoice.finally(() => {
-    _deferredPwaPrompt = null;
-    const btn = document.getElementById('pwa-install-btn');
-    if (btn) btn.style.display = 'none';
+  // Chrome / Android / Edge: real install prompt available
+  if (_deferredPwaPrompt) {
+    try {
+      _deferredPwaPrompt.prompt();
+      _deferredPwaPrompt.userChoice.finally(() => { _deferredPwaPrompt = null; });
+    } catch (e) {
+      console.warn('Install prompt failed:', e);
+      alert('Install was blocked by the browser. Open the browser menu and pick “Add to Home Screen” / “Install app”.');
+    }
+    return;
+  }
+  // iOS Safari (or any browser without beforeinstallprompt) — manual steps
+  if (_isIos) {
+    alert('To install MCQ Cafe on iPhone / iPad:\n\n' +
+          '1. Tap the Share button (the box with ↑) at the bottom of Safari.\n' +
+          '2. Scroll down and tap “Add to Home Screen”.\n' +
+          '3. Tap “Add”. The MCQ icon appears on your home screen.');
+  } else {
+    alert('To install MCQ Cafe:\n\n' +
+          '• Chrome / Edge desktop: open the URL bar menu → “Install app”.\n' +
+          '• Android Chrome: tap the ⋮ menu → “Install app” / “Add to Home Screen”.\n' +
+          '• Firefox: tap the page menu → “Install app” (Android) or “Pin” (desktop).');
+  }
+}
+
+// Hide the install button entirely when already running as a PWA — no point
+// offering install inside the installed app and clicking it was throwing
+// "not allowed by the user agent" on some platforms.
+function _updateInstallBtnVisibility() {
+  document.querySelectorAll('#pwa-install-btn').forEach(btn => {
+    btn.style.display = _runningAsPwa ? 'none' : '';
   });
 }
-window.addEventListener('appinstalled', () => {
-  const btn = document.getElementById('pwa-install-btn');
-  if (btn) btn.style.display = 'none';
-});
+window.addEventListener('appinstalled', () => { _runningAsPwa = true; _updateInstallBtnVisibility(); });
+document.addEventListener('DOMContentLoaded', _updateInstallBtnVisibility);
 </script>
 {% block scripts %}{% endblock %}
 </body>

@@ -482,7 +482,25 @@ async function composeOrder(channel) {
   fetch('/packaging/log-action', { method:'POST', body: logFd });
 
   if (channel === 'gmail') {
-    window.open(data.gmail_url, '_blank', 'noopener');
+    // On iPhone / iPad open the Gmail app directly via the custom URL
+    // scheme so the user lands inside Gmail, not Safari. Same scheme also
+    // works on Android when the Gmail app is installed.
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    if (isMobile && data.gmail_app_url) {
+      // Use a hidden iframe so iOS doesn't show a "browser navigated away"
+      // banner if the Gmail app isn't installed. If the deep link fails,
+      // fall back to the web URL after a short timeout.
+      const before = Date.now();
+      window.location.href = data.gmail_app_url;
+      setTimeout(() => {
+        if (Date.now() - before < 1800 && document.visibilityState === 'visible') {
+          // Still on the page → Gmail app didn't intercept → fall back to web
+          window.open(data.gmail_url, '_blank', 'noopener');
+        }
+      }, 1500);
+    } else {
+      window.open(data.gmail_url, '_blank', 'noopener');
+    }
   } else if (channel === 'mailto') {
     window.location.href = data.mailto;
   }
