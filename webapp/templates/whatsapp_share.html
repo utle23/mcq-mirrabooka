@@ -1,0 +1,243 @@
+{% extends "base.html" %}
+{% block title %}WhatsApp Daily Share{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fab fa-whatsapp me-2" style="color:#25D366"></i>WhatsApp Daily Share</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.ws-card {
+  background: #fff; border: 1px solid #e8eaed; border-radius: 12px;
+  box-shadow: 0 1px 6px rgba(0,0,0,.05);
+  padding: 18px 20px; margin-bottom: 16px;
+}
+.ws-card-head {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #f0f1f4;
+}
+.ws-pill {
+  display: inline-block; padding: 3px 11px; border-radius: 14px;
+  font-size: 0.74rem; font-weight: 700; color: #fff;
+}
+.ws-sec-pill { background: #F39C12; }
+.ws-sec-pill.closing { background: #E74C3C; }
+.ws-meta { font-size: 0.85rem; color: #555; }
+.ws-meta strong { color: #1A1A2E; }
+
+.preview-wrap {
+  background: #2C3E50;
+  border-radius: 14px;
+  padding: 18px;
+  text-align: center;
+  margin-bottom: 18px;
+}
+.preview-wrap img { max-width: 100%; border-radius: 10px;
+  box-shadow: 0 4px 30px rgba(0,0,0,.3); }
+.preview-loading {
+  color: rgba(255,255,255,.6); font-size: 14px; padding: 60px;
+}
+
+.thumb-strip { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.thumb-strip img { width: 80px; height: 80px; object-fit: cover;
+  border-radius: 6px; border: 1px solid #ddd; }
+
+.empty-section {
+  background: #f7f9fb; border: 1px dashed #ccd; border-radius: 8px;
+  padding: 14px 18px; color: #888; font-size: 0.9rem; text-align: center;
+}
+
+.action-bar {
+  background: linear-gradient(135deg, #128C7E 0%, #25D366 100%);
+  border-radius: 14px;
+  padding: 22px 24px; margin-bottom: 20px;
+  color: #fff;
+  box-shadow: 0 4px 20px rgba(37, 211, 102, .25);
+}
+.action-bar h5 { margin: 0 0 4px 0; font-weight: 700; }
+.action-bar .small { opacity: .85; }
+.btn-share {
+  background: #fff; color: #128C7E; font-weight: 700; border: none;
+  padding: 12px 28px; border-radius: 999px; font-size: 1rem;
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.btn-share:hover { background: #f0f0f0; color: #075E54; }
+.btn-share i { font-size: 1.3rem; }
+.btn-png {
+  background: rgba(255,255,255,.18); color: #fff; border: 1px solid rgba(255,255,255,.35);
+  padding: 10px 22px; border-radius: 999px; font-weight: 600;
+}
+.btn-png:hover { background: rgba(255,255,255,.28); color: #fff; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Action bar -->
+<div class="action-bar d-flex justify-content-between align-items-center flex-wrap gap-3">
+  <div>
+    <h5><i class="fab fa-whatsapp me-2"></i>Share today's report to WhatsApp group</h5>
+    <div class="small">Generates a PNG image with all of today's checklists, photos, and temperature records — opens your phone's native share sheet so you can pick a WhatsApp group.</div>
+  </div>
+  <div class="d-flex gap-2 flex-wrap align-items-center">
+    <a href="/whatsapp/png?date={{ date }}&_cb={{ data.checklists|length }}_{{ data.temperatures|length }}"
+       download="MCQ_Daily_{{ date }}.png"
+       class="btn btn-png">
+      <i class="fas fa-download me-1"></i>Download PNG
+    </a>
+    <button class="btn btn-share" onclick="shareToWhatsApp()">
+      <i class="fab fa-whatsapp"></i> Share to WhatsApp
+    </button>
+  </div>
+</div>
+
+<!-- PNG preview -->
+<div class="preview-wrap">
+  <div class="preview-loading" id="previewLoading">
+    <i class="fas fa-spinner fa-spin me-2"></i>Generating preview image…
+  </div>
+  <img id="previewImg" src="" alt="Daily report preview" style="display:none">
+</div>
+
+<!-- Today's data summary -->
+<div class="d-flex justify-content-between flex-wrap align-items-center mb-3">
+  <h6 class="fw-bold mb-0"><i class="fas fa-clipboard-list me-1"></i>Today's submissions ({{ date }})</h6>
+  <div class="text-muted small">
+    {{ data.checklists|length }} checklist(s) · {{ data.temperatures|length }} temperature record(s)
+  </div>
+</div>
+
+<!-- Checklists -->
+{% if not data.checklists %}
+<div class="empty-section">
+  <i class="fas fa-clipboard fa-2x mb-2 d-block opacity-25"></i>
+  No checklists submitted yet today.
+</div>
+{% endif %}
+
+{% for c in data.checklists %}
+{% set meta = c.meta %}
+<div class="ws-card" style="border-left:6px solid {{ meta.color or '#888' }}">
+  <div class="ws-card-head">
+    <span style="background:{{ meta.color or '#888' }};color:#fff;font-weight:700;padding:4px 12px;border-radius:6px">
+      {{ meta.title or c.type }}
+    </span>
+    <span class="ws-pill ws-sec-pill {% if c.section == 'closing' %}closing{% endif %}">
+      {{ c.section|upper }}
+    </span>
+    {% set pct = (c.done_tasks / c.total_tasks * 100)|round|int if c.total_tasks else 0 %}
+    <span class="ws-pill" style="background:{% if pct>=90 %}#43A047{% else %}#FB8C00{% endif %}">
+      {{ c.done_tasks }}/{{ c.total_tasks }} · {{ pct }}%
+    </span>
+    {% if c.is_late %}<span class="ws-pill" style="background:#C62828">LATE</span>{% endif %}
+    {% if c.verified %}<span class="ws-pill" style="background:#1A1A2E"><i class="fas fa-check"></i> VERIFIED</span>{% endif %}
+  </div>
+  <div class="ws-meta">
+    <i class="fas fa-user me-1"></i><strong>Submitted by:</strong> {{ c.submitted_by or '—' }}
+    <span class="ms-3"><i class="fas fa-user-shield me-1"></i><strong>Responsible:</strong> {{ c.responsible or '—' }}</span>
+    {% if c.submitted_at %}<span class="ms-3"><i class="fas fa-clock me-1"></i>{{ c.submitted_at[:16] }}</span>{% endif %}
+  </div>
+  {% if c.general_note %}
+  <div class="mt-2 small" style="background:#FFF8E1;border-left:3px solid #FFA726;padding:6px 10px;border-radius:4px">
+    <strong>Note:</strong> {{ c.general_note }}
+  </div>
+  {% endif %}
+
+  {% if c.photos %}
+  <div class="thumb-strip">
+    {% for p in c.photos %}
+    <img src="/photo/{{ p.filename }}" alt="Photo {{ p.photo_number + 1 }}"
+         onerror="this.style.opacity=0.3">
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="text-muted small mt-2"><i class="fas fa-camera-slash me-1"></i>No photos attached</div>
+  {% endif %}
+</div>
+{% endfor %}
+
+<!-- Temperatures -->
+{% if not data.temperatures %}
+<div class="empty-section">
+  <i class="fas fa-thermometer-half fa-2x mb-2 d-block opacity-25"></i>
+  No temperature records submitted yet today.
+</div>
+{% endif %}
+
+{% for t in data.temperatures %}
+{% set meta = t.meta %}
+<div class="ws-card" style="border-left:6px solid {{ meta.color or '#888' }}">
+  <div class="ws-card-head">
+    <span style="background:{{ meta.color or '#888' }};color:#fff;font-weight:700;padding:4px 12px;border-radius:6px">
+      {{ meta.title or t.type }}
+    </span>
+    <span class="ws-pill" style="background:#43A047">{{ t.reading_count }} foods</span>
+    {% if t.discarded %}<span class="ws-pill" style="background:#C62828">{{ t.discarded }} discarded</span>{% endif %}
+    {% if t.out_of_zone %}
+      <span class="ws-pill" style="background:#C62828">{{ t.out_of_zone }} out of zone</span>
+    {% else %}
+      <span class="ws-pill" style="background:#1B5E20">all safe</span>
+    {% endif %}
+  </div>
+  <div class="ws-meta">
+    <i class="fas fa-user me-1"></i><strong>Recorded by:</strong> {{ t.recorded_by or '—' }}
+    <span class="ms-3"><i class="fas fa-user-check me-1"></i><strong>Checked by:</strong> {{ t.checked_by or '—' }}</span>
+    {% if t.submitted_at %}<span class="ms-3"><i class="fas fa-clock me-1"></i>{{ t.submitted_at[:16] }}</span>{% endif %}
+  </div>
+</div>
+{% endfor %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const PNG_URL = '/whatsapp/png?date={{ date }}';
+
+// Load preview image
+window.addEventListener('DOMContentLoaded', () => {
+  const img = document.getElementById('previewImg');
+  const loading = document.getElementById('previewLoading');
+  img.onload = () => {
+    loading.style.display = 'none';
+    img.style.display = 'inline-block';
+  };
+  img.onerror = () => {
+    loading.innerHTML = '<i class="fas fa-circle-exclamation me-1"></i>Preview failed to load. Pillow library may be missing.';
+  };
+  img.src = PNG_URL + '&_t=' + Date.now();
+});
+
+async function shareToWhatsApp() {
+  try {
+    const resp = await fetch(PNG_URL + '&_t=' + Date.now());
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const blob = await resp.blob();
+    const fname = 'MCQ_Daily_{{ date }}.png';
+    const file = new File([blob], fname, { type: 'image/png' });
+
+    // Try native share sheet (works on mobile + Chrome with HTTPS)
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({
+        files: [file],
+        title: 'MCQ Daily Report — {{ date }}',
+        text: 'MCQ Mirrabooka Cafe — daily operations summary',
+      });
+      return;
+    }
+
+    // Fallback: download + open WhatsApp Web with prefilled text
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = fname; a.click();
+    URL.revokeObjectURL(url);
+
+    const text = encodeURIComponent('MCQ Mirrabooka Cafe — daily operations summary for {{ date }}\n\n(The PNG report has been downloaded — attach it manually)');
+    setTimeout(() => {
+      window.open(`https://wa.me/?text=${text}`, '_blank');
+    }, 800);
+  } catch (e) {
+    alert('Share failed: ' + e.message + '\n\nThe PNG has been downloaded — you can attach it to WhatsApp manually.');
+    window.location.href = PNG_URL;
+  }
+}
+</script>
+{% endblock %}

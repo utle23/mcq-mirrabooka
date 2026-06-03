@@ -14,6 +14,7 @@ from inventory_routes import inventory as inventory_bp, init_inventory_tables
 from job_routes       import jobs      as jobs_bp,      init_job_tables
 from rules_routes     import rules_bp,                  init_rules_tables
 from training_routes  import training_bp,               init_training_tables
+from whatsapp_share   import whatsapp_bp,                init_whatsapp
 import email_service
 app.register_blueprint(prep_bp)
 app.register_blueprint(pastry_bp)
@@ -21,6 +22,7 @@ app.register_blueprint(inventory_bp)
 app.register_blueprint(jobs_bp)
 app.register_blueprint(rules_bp)
 app.register_blueprint(training_bp)
+app.register_blueprint(whatsapp_bp)
 DB_PATH      = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mcq_restaurant.db')
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -2058,6 +2060,9 @@ def export_checklist_excel(session_id):
         if not sess: return redirect(url_for('dashboard'))
         tasks = [dict(r) for r in conn.execute(
             'SELECT * FROM checklist_tasks WHERE session_id=? ORDER BY task_order', (session_id,)).fetchall()]
+        photos = [dict(r) for r in conn.execute(
+            'SELECT * FROM checklist_photos WHERE session_id=? ORDER BY photo_number',
+            (session_id,)).fetchall()]
     sess     = dict(sess)
     chk_data = CHECKLISTS.get(sess['type'], {})
 
@@ -2188,8 +2193,67 @@ def export_checklist_excel(session_id):
     ws.column_dimensions['D'].width = 14
     ws.column_dimensions['E'].width = 35
 
+    # ── Photo Evidence sheet ─────────────────────────────────────────────────
+    if photos:
+        try:
+            from openpyxl.drawing.image import Image as XLImage
+            from PIL import Image as PILImage
+            ph = wb.create_sheet('Photo Evidence')
+            ph['A1'] = 'MCQ MIRRABOOKA CAFE  —  PHOTO EVIDENCE'
+            ph['A1'].font = Font(bold=True, color='FFFFFF', size=14)
+            ph['A1'].fill = PatternFill('solid', fgColor='1B4332')
+            ph['A1'].alignment = Alignment(horizontal='center')
+            ph.merge_cells('A1:D1')
+            ph.row_dimensions[1].height = 28
+
+            ph['A2'] = f'{chk_data.get("title","")} — {sess["section"].title()} — {sess["date"]}'
+            ph['A2'].font = Font(italic=True, color='555555', size=10)
+            ph['A2'].alignment = Alignment(horizontal='center')
+            ph.merge_cells('A2:D2')
+
+            row = 4
+            for p in photos:
+                src = os.path.join(UPLOAD_FOLDER, p['filename'])
+                if not os.path.exists(src):
+                    ph.cell(row, 1).value = f"Photo {p['photo_number']+1}: (file missing)"
+                    ph.cell(row, 1).font = Font(italic=True, color='C62828')
+                    row += 2
+                    continue
+                # Make a thumbnail to keep the xlsx small + render predictably
+                try:
+                    thumb_path = os.path.join(UPLOAD_FOLDER, f'_xls_thumb_{p["id"]}.jpg')
+                    with PILImage.open(src) as im:
+                        im = im.convert('RGB')
+                        im.thumbnail((480, 360), PILImage.LANCZOS)
+                        im.save(thumb_path, 'JPEG', quality=85)
+                    label = f"Photo {p['photo_number']+1} — {p.get('original_name','') or p['filename']}"
+                    ph.cell(row, 1).value = label
+                    ph.cell(row, 1).font = Font(bold=True, color='1B4332', size=11)
+                    ph.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+                    img = XLImage(thumb_path)
+                    ph.add_image(img, f'A{row + 1}')
+                    # Approx 18 rows tall for a 360px image at default row height
+                    row += 22
+                except Exception:
+                    ph.cell(row, 1).value = f"Photo {p['photo_number']+1}: (could not embed)"
+                    row += 2
+            for col, width in zip('ABCD', [40, 20, 20, 20]):
+                ph.column_dimensions[col].width = width
+        except Exception:
+            # If Pillow missing or any other failure, skip the photo sheet
+            # rather than break the whole export.
+            pass
+
     buf = BytesIO()
     wb.save(buf); buf.seek(0)
+
+    # Clean up thumbnail files created above
+    for p in photos:
+        thumb = os.path.join(UPLOAD_FOLDER, f'_xls_thumb_{p["id"]}.jpg')
+        if os.path.exists(thumb):
+            try: os.remove(thumb)
+            except OSError: pass
+
     fname = f'MCQ_Checklist_{sess["type"]}_{sess["section"]}_{sess["date"]}.xlsx'
     return send_file(buf, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                      as_attachment=True, download_name=fname)
@@ -2212,9 +2276,10 @@ def export_checklist_pdf(session_id):
         tasks = [dict(r) for r in conn.execute(
             'SELECT * FROM checklist_tasks WHERE session_id=? ORDER BY task_order',
             (session_id,)).fetchall()]
-        photo_count = conn.execute(
-            'SELECT COUNT(*) as c FROM checklist_photos WHERE session_id=?',
-            (session_id,)).fetchone()['c']
+        photos = [dict(r) for r in conn.execute(
+            'SELECT * FROM checklist_photos WHERE session_id=? ORDER BY photo_number',
+            (session_id,)).fetchall()]
+        photo_count = len(photos)
 
     sess = dict(sess)
     chk_data = CHECKLISTS.get(sess['type'], {})
@@ -2312,6 +2377,62 @@ def export_checklist_pdf(session_id):
         ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
     ]))
     story.append(verify_table)
+
+    # ── Embed photos at the bottom of the PDF ────────────────────────────────
+    if photos:
+        from reportlab.platypus import Image, PageBreak
+        story.append(PageBreak())
+        story.append(Paragraph('Photo Evidence', styles['title']))
+        story.append(Paragraph(f"{len(photos)} photo(s) attached to this checklist", styles['sub']))
+        story.append(Spacer(1, 5*mm))
+
+        # 2 photos per row, 80mm wide each
+        photo_cells = []
+        for p in photos:
+            path = os.path.join(UPLOAD_FOLDER, p['filename'])
+            if not os.path.exists(path):
+                photo_cells.append(Paragraph(
+                    f"<i>(missing: {escape(p['filename'])})</i>", styles['small']))
+                continue
+            try:
+                img = Image(path)
+                # Maintain aspect ratio, target width 80mm
+                target_w = 80 * mm
+                ratio = target_w / float(img.imageWidth) if img.imageWidth else 1
+                img.drawWidth  = target_w
+                img.drawHeight = img.imageHeight * ratio
+                # Clamp height so a giant portrait photo doesn't blow up the page
+                max_h = 110 * mm
+                if img.drawHeight > max_h:
+                    img.drawHeight = max_h
+                    img.drawWidth  = img.imageWidth * (max_h / float(img.imageHeight))
+                caption = (
+                    f"<b>Photo {p['photo_number'] + 1}</b><br/>"
+                    f"<font color='#666'>{escape(p.get('original_name') or '')}</font>"
+                )
+                cell = [img, Spacer(1, 1*mm), Paragraph(caption, styles['small'])]
+                photo_cells.append(cell)
+            except Exception as e:
+                photo_cells.append(Paragraph(
+                    f"<i>(could not embed: {escape(str(e))})</i>", styles['small']))
+
+        # Lay out as a 2-col table
+        rows_of_photos = []
+        for i in range(0, len(photo_cells), 2):
+            row = photo_cells[i:i + 2]
+            if len(row) == 1:
+                row.append('')
+            rows_of_photos.append(row)
+        if rows_of_photos:
+            photo_table = Table(rows_of_photos, colWidths=[90 * mm, 90 * mm])
+            photo_table.setStyle(TableStyle([
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+                ('LEFTPADDING', (0, 0), (-1, -1), 2),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 2),
+            ]))
+            story.append(photo_table)
 
     def footer(canvas, doc_obj):
         canvas.saveState()
@@ -3691,6 +3812,8 @@ init_job_tables(DB_PATH)
 init_rules_tables(DB_PATH)
 init_training_tables(DB_PATH, CHECKLISTS)
 email_service.init_email_tables(DB_PATH)
+init_whatsapp(DB_PATH, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static'),
+              UPLOAD_FOLDER, CHECKLISTS, TEMPERATURES)
 
 if __name__ == '__main__':
     print('\n' + '='*50)
