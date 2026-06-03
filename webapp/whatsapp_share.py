@@ -451,42 +451,183 @@ def _checklist_detail(session_id: int) -> dict | None:
 
 
 def build_checklist_png(session_id: int) -> bytes:
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageChops, ImageDraw, ImageOps
 
     c = _checklist_detail(session_id)
     if c is None:
         raise ValueError(f'Checklist session {session_id} not found')
 
-    W = 1080
-    PAD = 32
+    W = 1800
+    PAD = 60
+    CARD_PAD = 42
     NAVY = (26, 26, 46)
     LIGHT_BG = (244, 246, 250)
     MUTED = (110, 117, 125)
+    TEXT = (38, 43, 52)
+    LINE = (226, 230, 238)
     OK = (46, 125, 50)
     BAD = (198, 40, 40)
-    PHOTO = 320
 
     color = _hex_to_rgb(c['meta'].get('color'))
 
-    f_title  = _font(40, bold=True)
-    f_sub    = _font(22)
-    f_h2     = _font(28, bold=True)
-    f_body   = _font(22)
-    f_body_b = _font(22, bold=True)
-    f_small  = _font(18)
-    f_task   = _font(20)
-    f_chip   = _font(16, bold=True)
+    f_title  = _font(54, bold=True)
+    f_sub    = _font(28)
+    f_h2     = _font(34, bold=True)
+    f_body   = _font(26)
+    f_body_b = _font(26, bold=True)
+    f_small  = _font(22)
+    f_note   = _font(24)
+    f_note_b = _font(24, bold=True)
+    f_task   = _font(26)
+    f_task_b = _font(26, bold=True)
+    f_chip   = _font(20, bold=True)
 
-    # Measure
-    h_header  = 200
-    h_meta    = 180
-    h_tasks_row = 42
-    h_tasks   = 70 + len(c['tasks']) * h_tasks_row
-    # Photos: 2 per row at PHOTO height each
-    photo_rows = (len(c['photos']) + 1) // 2
-    h_photos  = (70 + photo_rows * (PHOTO + 24)) if c['photos'] else 0
-    h_footer  = 90
-    total_h = h_header + h_meta + h_tasks + h_photos + h_footer + 30
+    measure = ImageDraw.Draw(Image.new('RGB', (W, 100), LIGHT_BG))
+    content_w = W - PAD * 2
+    inner_w = content_w - CARD_PAD * 2
+
+    def line_h(font) -> int:
+        b = measure.textbbox((0, 0), 'Ag', font=font)
+        return b[3] - b[1]
+
+    def wrap(text, font, max_width) -> list[str]:
+        raw = str(text or '').replace('\r', '')
+        if not raw.strip():
+            return []
+        lines: list[str] = []
+        for para in raw.split('\n'):
+            if not para.strip():
+                lines.append('')
+                continue
+            lines.extend(_wrap_text(measure, para, font, max_width))
+        return lines
+
+    def wrapped_h(lines: list[str], font, gap=6) -> int:
+        if not lines:
+            return 0
+        return len(lines) * line_h(font) + (len(lines) - 1) * gap
+
+    general_note_lines = wrap(c.get('general_note') or '', f_note, inner_w - 40)
+    manager_note_lines = wrap(c.get('manager_notes') or '', f_note, inner_w - 40)
+    issues_lines = wrap(c.get('issues_found') or '', f_note, inner_w - 40)
+    action_lines = wrap(c.get('action_responsible') or '', f_note, inner_w - 40)
+    detail_text = [
+        f"Submitted by: {c.get('submitted_by') or '-'}    Responsible: {c.get('responsible') or '-'}",
+        f"Submitted at: {(c.get('submitted_at') or '-')[:16]}",
+        f"Photos attached: {len(c['photos'])}",
+    ]
+    detail_lines = []
+    for line in detail_text:
+        detail_lines.extend(wrap(line, f_body, inner_w))
+
+    def note_box_h(note_lines: list[str], font=f_note) -> int:
+        return 34 + line_h(f_note_b) + 10 + wrapped_h(note_lines, font)
+
+    h_header = 250
+    h_footer = 110
+    h_meta = 88 + wrapped_h(detail_lines, f_body, 8) + CARD_PAD
+    if general_note_lines:
+        h_meta += 8 + note_box_h(general_note_lines) + 14
+    if c.get('verified') or manager_note_lines or issues_lines or action_lines:
+        verification_lines = []
+        if c.get('verified'):
+            verified_by = c.get('verified_by') or '-'
+            verified_at = (c.get('verified_at') or '-')[:16]
+            verification_lines.extend(wrap(f"Verified by: {verified_by}    Verified at: {verified_at}", f_note, inner_w - 40))
+        if c.get('overall_result'):
+            verification_lines.extend(wrap(f"Result: {c.get('overall_result')}", f_note, inner_w - 40))
+        if issues_lines:
+            verification_lines.extend(['Issues found:'] + issues_lines)
+        if action_lines:
+            verification_lines.extend(['Action responsible:'] + action_lines)
+        if manager_note_lines:
+            verification_lines.extend(['Manager notes:'] + manager_note_lines)
+        h_meta += note_box_h(verification_lines or ['Verified']) + 14
+
+    task_rows = []
+    task_text_w = inner_w - 76
+    for i, t in enumerate(c['tasks'], start=1):
+        name_lines = wrap(f"{i}. {t['task_name']}", f_task, task_text_w)
+        note_lines = wrap(t.get('note') or '', f_note, task_text_w - 26)
+        row_h = 28 + wrapped_h(name_lines, f_task, 7)
+        if note_lines:
+            row_h += 18 + line_h(f_note_b) + 8 + wrapped_h(note_lines, f_note, 7)
+        row_h = max(row_h, 74)
+        task_rows.append((t, name_lines, note_lines, row_h))
+    h_tasks = 92 + sum(row_h for _, _, _, row_h in task_rows) + CARD_PAD
+
+    photo_gap = 24
+    photo_cols = 1 if len(c['photos']) <= 8 else 2
+    photo_w = (inner_w - (photo_cols - 1) * photo_gap) // photo_cols
+    photo_label_h = 42
+    fallback_photo_h = int(photo_w * 0.68)
+
+    def trim_photo_borders(photo):
+        """Remove large same-colour margins from screenshots/scans without
+        cropping normal camera photos aggressively."""
+        try:
+            bg = Image.new(photo.mode, photo.size, photo.getpixel((0, 0)))
+            diff = ImageChops.difference(photo, bg)
+            diff = ImageOps.grayscale(diff).point(lambda p: 255 if p > 18 else 0)
+            bbox = diff.getbbox()
+            if not bbox:
+                return photo
+            iw, ih = photo.size
+            margin = max(10, int(min(iw, ih) * 0.025))
+            left, top, right, bottom = bbox
+            bbox = (
+                max(0, left - margin),
+                max(0, top - margin),
+                min(iw, right + margin),
+                min(ih, bottom + margin),
+            )
+            cropped_w = bbox[2] - bbox[0]
+            cropped_h = bbox[3] - bbox[1]
+            if cropped_w < iw * 0.95 or cropped_h < ih * 0.95:
+                return photo.crop(bbox)
+        except Exception:
+            pass
+        return photo
+
+    def photo_box_height(p: dict) -> int:
+        src = os.path.join(UPLOAD_DIR, p['filename'])
+        if not os.path.exists(src):
+            return fallback_photo_h
+        try:
+            with Image.open(src) as src_img:
+                src_img = trim_photo_borders(ImageOps.exif_transpose(src_img).convert('RGB'))
+                iw, ih = src_img.size
+            if iw > 0 and ih > 0:
+                return min(max(int(photo_w * ih / iw), 360), 1280)
+        except Exception:
+            pass
+        return fallback_photo_h
+    photo_heights = [photo_box_height(p) for p in c['photos']]
+    photo_layout = []
+    photo_row_heights = []
+    for row_start in range(0, len(c['photos']), photo_cols):
+        row_items = []
+        row_h = 0
+        for col, ix in enumerate(range(row_start, min(row_start + photo_cols, len(c['photos'])))):
+            tile_h = photo_label_h + photo_heights[ix]
+            row_h = max(row_h, tile_h)
+            row_items.append((ix, col))
+        row_y = sum(photo_row_heights) + len(photo_row_heights) * photo_gap
+        photo_row_heights.append(row_h)
+        for ix, col in row_items:
+            photo_layout.append({
+                'index': ix,
+                'col': col,
+                'x': PAD + CARD_PAD + col * (photo_w + photo_gap),
+                'y': row_y,
+                'w': photo_w,
+                'h': photo_heights[ix],
+            })
+    h_photos = 0
+    if c['photos']:
+        h_photos = 94 + sum(photo_row_heights) + max(0, len(photo_row_heights) - 1) * photo_gap + CARD_PAD
+
+    total_h = h_header + 28 + h_meta + 24 + h_tasks + (h_photos + 24 if h_photos else 0) + h_footer + 30
 
     img = Image.new('RGB', (W, total_h), LIGHT_BG)
     draw = ImageDraw.Draw(img)
@@ -498,29 +639,30 @@ def build_checklist_png(session_id: int) -> bytes:
     if os.path.exists(logo_path):
         try:
             logo = Image.open(logo_path).convert('RGBA')
-            logo.thumbnail((120, 120), Image.LANCZOS)
-            lx, ly = PAD, 36
-            _rounded(draw, (lx - 8, ly - 8, lx + logo.width + 8, ly + logo.height + 8),
-                     radius=14, fill=(255, 255, 255))
+            logo.thumbnail((145, 145), Image.LANCZOS)
+            lx, ly = PAD, 44
+            _rounded(draw, (lx - 10, ly - 10, lx + logo.width + 10, ly + logo.height + 10),
+                     radius=18, fill=(255, 255, 255))
             img.paste(logo, (lx, ly), logo)
         except Exception:
             pass
-    text_x = PAD + 150
+    text_x = PAD + 180
     title = (c['meta'].get('title') or c['type']).upper()
     section_label = (c['section'] or '').upper()
-    draw.text((text_x, 36), f"{title}", fill=(255, 255, 255), font=f_title)
-    draw.text((text_x, 88), f"{section_label} CHECKLIST",
+    draw.text((text_x, 42), title, fill=(255, 255, 255), font=f_title)
+    draw.text((text_x, 112), f"{section_label} CHECKLIST",
               fill=(255, 255, 255, 220), font=f_sub)
     try:
         date_pretty = datetime.strptime(c['date'], '%Y-%m-%d').strftime('%A, %d %b %Y').upper()
     except Exception:
         date_pretty = c['date']
-    draw.text((text_x, 124), date_pretty, fill=(255, 200, 200), font=f_body_b)
+    draw.text((text_x, 158), date_pretty, fill=(255, 216, 216), font=f_body_b)
 
-    y = h_header + 24
+    y = h_header + 28
 
     # Meta card
-    _rounded(draw, (PAD, y, W - PAD, y + h_meta - 24), radius=14, fill=(255, 255, 255))
+    _rounded(draw, (PAD, y, W - PAD, y + h_meta), radius=18, fill=(255, 255, 255))
+    draw.rectangle((PAD, y, PAD + 10, y + h_meta), fill=color)
     pct = round(c['done_tasks'] / c['total_tasks'] * 100) if c['total_tasks'] else 0
     pills = [
         (f'{c["done_tasks"]}/{c["total_tasks"]} TASKS', OK if pct >= 90 else (255, 152, 0)),
@@ -530,88 +672,127 @@ def build_checklist_png(session_id: int) -> bytes:
     if c.get('verified'):
         pills.append(('VERIFIED', NAVY))
 
-    px = PAD + 24
+    px = PAD + CARD_PAD
     for txt, col in pills:
-        tw = draw.textbbox((0, 0), txt, font=f_chip)[2] + 24
-        _rounded(draw, (px, y + 20, px + tw, y + 54), radius=14, fill=col)
-        draw.text((px + 12, y + 28), txt, fill=(255, 255, 255), font=f_chip)
-        px += tw + 8
+        tw = draw.textbbox((0, 0), txt, font=f_chip)[2] + 30
+        _rounded(draw, (px, y + 26, px + tw, y + 66), radius=18, fill=col)
+        draw.text((px + 15, y + 36), txt, fill=(255, 255, 255), font=f_chip)
+        px += tw + 10
 
-    lines = [
-        f"Submitted by: {c.get('submitted_by') or '-'}",
-        f"Responsible: {c.get('responsible') or '-'}",
-        f"Submitted at: {(c.get('submitted_at') or '-')[:16]}",
-    ]
-    if c.get('general_note'):
-        lines.append(f"Note: {c['general_note']}")
-    my = y + 70
-    for line in lines:
-        for sub in _wrap_text(draw, line, f_body, W - PAD * 2 - 56)[:1]:
-            draw.text((PAD + 24, my), sub, fill=(51, 51, 51), font=f_body)
-            my += 28
-    y += h_meta
+    my = y + 88
+    for line in detail_lines:
+        draw.text((PAD + CARD_PAD, my), line, fill=TEXT, font=f_body)
+        my += line_h(f_body) + 8
+
+    def draw_note_box(box_y: int, label: str, note_lines: list[str],
+                      fill=(255, 249, 232), accent=(229, 156, 40)) -> int:
+        box_h = note_box_h(note_lines)
+        bx1, bx2 = PAD + CARD_PAD, W - PAD - CARD_PAD
+        _rounded(draw, (bx1, box_y, bx2, box_y + box_h), radius=14, fill=fill,
+                 outline=(245, 223, 166), width=1)
+        draw.rectangle((bx1, box_y, bx1 + 7, box_y + box_h), fill=accent)
+        draw.text((bx1 + 24, box_y + 18), label, fill=(103, 72, 21), font=f_note_b)
+        ly = box_y + 18 + line_h(f_note_b) + 12
+        for line in note_lines:
+            draw.text((bx1 + 24, ly), line, fill=TEXT, font=f_note)
+            ly += line_h(f_note) + 7
+        return box_h
+
+    if general_note_lines:
+        my += 8
+        my += draw_note_box(my, 'GENERAL NOTE', general_note_lines) + 14
+
+    if c.get('verified') or manager_note_lines or issues_lines or action_lines:
+        verification_lines = []
+        if c.get('verified'):
+            verified_by = c.get('verified_by') or '-'
+            verified_at = (c.get('verified_at') or '-')[:16]
+            verification_lines.extend(wrap(f"Verified by: {verified_by}    Verified at: {verified_at}", f_note, inner_w - 40))
+        if c.get('overall_result'):
+            verification_lines.extend(wrap(f"Result: {c.get('overall_result')}", f_note, inner_w - 40))
+        if issues_lines:
+            verification_lines.extend(['Issues found:'] + issues_lines)
+        if action_lines:
+            verification_lines.extend(['Action responsible:'] + action_lines)
+        if manager_note_lines:
+            verification_lines.extend(['Manager notes:'] + manager_note_lines)
+        my += draw_note_box(my, 'MANAGER REVIEW', verification_lines or ['Verified'],
+                            fill=(238, 246, 255), accent=(33, 150, 243)) + 14
+
+    y += h_meta + 24
 
     # Tasks card
-    _rounded(draw, (PAD, y, W - PAD, y + h_tasks - 12), radius=14, fill=(255, 255, 255))
-    draw.text((PAD + 24, y + 18), 'TASKS', fill=NAVY, font=f_h2)
-    ty = y + 60
-    for i, t in enumerate(c['tasks']):
+    _rounded(draw, (PAD, y, W - PAD, y + h_tasks), radius=18, fill=(255, 255, 255))
+    draw.text((PAD + CARD_PAD, y + 24), 'TASKS', fill=NAVY, font=f_h2)
+    ty = y + 78
+    for i, (t, name_lines, note_lines, row_h) in enumerate(task_rows):
         # Status icon
-        icon_x = PAD + 30
+        row_fill = (255, 255, 255) if i % 2 == 0 else (248, 250, 253)
+        if not t['done']:
+            row_fill = (255, 246, 246)
+        _rounded(draw, (PAD + CARD_PAD - 10, ty, W - PAD - CARD_PAD + 10, ty + row_h - 10),
+                 radius=12, fill=row_fill)
+        icon_x = PAD + CARD_PAD
         if t['done']:
-            _rounded(draw, (icon_x, ty + 6, icon_x + 22, ty + 28), radius=4, fill=OK)
-            draw.text((icon_x + 4, ty + 4), '✓', fill=(255, 255, 255), font=f_chip)
-            txt_color = (40, 40, 40)
+            _rounded(draw, (icon_x, ty + 19, icon_x + 32, ty + 51), radius=7, fill=OK)
+            draw.text((icon_x + 8, ty + 22), '✓', fill=(255, 255, 255), font=f_chip)
+            txt_color = TEXT
         else:
-            _rounded(draw, (icon_x, ty + 6, icon_x + 22, ty + 28), radius=4, fill=BAD)
-            draw.text((icon_x + 5, ty + 4), '×', fill=(255, 255, 255), font=f_chip)
+            _rounded(draw, (icon_x, ty + 19, icon_x + 32, ty + 51), radius=7, fill=BAD)
+            draw.text((icon_x + 10, ty + 22), '×', fill=(255, 255, 255), font=f_chip)
             txt_color = BAD
-        # Task name (wrap-safe — truncate to one line)
-        name = t['task_name']
-        line = _wrap_text(draw, name, f_task, W - PAD * 2 - 100)[0]
-        draw.text((icon_x + 36, ty + 8), line, fill=txt_color, font=f_task)
-        if t.get('note'):
-            note_line = _wrap_text(draw, f"Note: {t['note']}", f_small, W - PAD * 2 - 100)[0]
-            # Render second line — we already reserved a uniform row height; if
-            # the note pushes it taller it just overlaps the next row slightly,
-            # acceptable trade-off for keeping the layout tidy.
-            draw.text((icon_x + 36, ty + 22), note_line, fill=MUTED, font=f_small)
-        ty += h_tasks_row
-    y += h_tasks
+        text_x = icon_x + 50
+        line_y = ty + 18
+        for line in name_lines:
+            draw.text((text_x, line_y), line, fill=txt_color, font=f_task_b if not t['done'] else f_task)
+            line_y += line_h(f_task) + 7
+        if note_lines:
+            note_y = line_y + 8
+            draw.text((text_x, note_y), 'Note:', fill=(129, 91, 25), font=f_note_b)
+            note_y += line_h(f_note_b) + 8
+            for line in note_lines:
+                draw.text((text_x + 26, note_y), line, fill=MUTED, font=f_note)
+                note_y += line_h(f_note) + 7
+        ty += row_h
+    y += h_tasks + 24
 
     # Photos card
     if c['photos']:
-        _rounded(draw, (PAD, y, W - PAD, y + h_photos - 12), radius=14, fill=(255, 255, 255))
-        draw.text((PAD + 24, y + 18), f"PHOTOS ({len(c['photos'])})", fill=NAVY, font=f_h2)
-        py = y + 60
-        for ix, p in enumerate(c['photos']):
-            col = ix % 2
-            row = ix // 2
-            px = PAD + 24 + col * (PHOTO + 24)
-            ppy = py + row * (PHOTO + 24)
+        _rounded(draw, (PAD, y, W - PAD, y + h_photos), radius=18, fill=(255, 255, 255))
+        draw.text((PAD + CARD_PAD, y + 24), f"PHOTO EVIDENCE ({len(c['photos'])})", fill=NAVY, font=f_h2)
+        py = y + 82
+        for item in photo_layout:
+            ix = item['index']
+            p = c['photos'][ix]
+            px = item['x']
+            ppy = py + item['y']
+            tile_w = item['w']
+            photo_h = item['h']
             src = os.path.join(UPLOAD_DIR, p['filename'])
+            label = f"Photo {int(p.get('photo_number') or 0) + 1}"
+            _rounded(draw, (px, ppy, px + 128, ppy + 34),
+                     radius=16, fill=(0, 0, 0))
+            draw.text((px + 18, ppy + 8), label, fill=(255, 255, 255), font=f_chip)
+            ppy += photo_label_h
             if not os.path.exists(src):
-                _rounded(draw, (px, ppy, px + PHOTO, ppy + PHOTO),
-                         radius=10, fill=(245, 245, 245))
-                draw.text((px + 90, ppy + PHOTO // 2 - 12),
+                _rounded(draw, (px, ppy, px + tile_w, ppy + photo_h),
+                         radius=16, fill=(245, 245, 245))
+                draw.text((px + 150, ppy + photo_h // 2 - 12),
                           'photo missing', fill=MUTED, font=f_small)
                 continue
             try:
-                thumb = Image.open(src).convert('RGB')
-                tw, th = thumb.size
-                sz = min(tw, th)
-                left = (tw - sz) // 2
-                top  = (th - sz) // 2
-                thumb = thumb.crop((left, top, left + sz, top + sz))
-                thumb = thumb.resize((PHOTO, PHOTO), Image.LANCZOS)
-                mask = Image.new('L', (PHOTO, PHOTO), 0)
+                photo = trim_photo_borders(ImageOps.exif_transpose(Image.open(src)).convert('RGB'))
+                frame = Image.new('RGB', (tile_w, photo_h), (235, 238, 244))
+                photo.thumbnail((tile_w, photo_h), Image.LANCZOS)
+                frame.paste(photo, ((tile_w - photo.width) // 2, (photo_h - photo.height) // 2))
+                mask = Image.new('L', (tile_w, photo_h), 0)
                 ImageDraw.Draw(mask).rounded_rectangle(
-                    (0, 0, PHOTO, PHOTO), radius=10, fill=255)
-                img.paste(thumb, (px, ppy), mask)
+                    (0, 0, tile_w, photo_h), radius=16, fill=255)
+                img.paste(frame, (px, ppy), mask)
             except Exception:
-                _rounded(draw, (px, ppy, px + PHOTO, ppy + PHOTO),
-                         radius=10, fill=(245, 245, 245))
-        y += h_photos
+                _rounded(draw, (px, ppy, px + tile_w, ppy + photo_h),
+                         radius=16, fill=(245, 245, 245))
+        y += h_photos + 24
 
     # Footer
     fy = total_h - h_footer

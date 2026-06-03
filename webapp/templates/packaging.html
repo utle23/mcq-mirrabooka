@@ -455,23 +455,53 @@ function refreshSummary() {
 document.querySelectorAll('.qty-input').forEach(i => updateRowState(i));
 refreshSummary();
 
-async function composeOrder(channel) {
+let preparedOrder = null;
+let prepareOrderPromise = null;
+let prepareOrderTimer = null;
+let prepareOrderSeq = 0;
+
+function orderContext() {
   const form = document.getElementById('orderForm');
   const fd = new FormData(form);
-  const resp = await fetch('/packaging/compose', { method:'POST', body:fd });
-  const data = await resp.json();
-  if (!resp.ok || data.error) { toast(data.error || 'Compose failed', true); return; }
+  return { form, fd, key: new URLSearchParams(fd).toString() };
+}
 
-  // Update preview
+function selectedLineCount() {
+  let lines = 0;
+  document.querySelectorAll('.qty-input').forEach(i => {
+    const v = parseInt(i.value || '0', 10) || 0;
+    if (v > 0) lines++;
+  });
+  return lines;
+}
+
+function invalidatePreparedOrder() {
+  preparedOrder = null;
+  prepareOrderPromise = null;
+  prepareOrderSeq += 1;
+}
+
+function isIPadLike() {
+  return /iPad/i.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+    || (/Macintosh/i.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+}
+
+function prefersGmailApp() {
+  return /iPhone|iPod|Android/i.test(navigator.userAgent) || isIPadLike();
+}
+
+function renderPreview(data, scroll=false) {
   const card = document.getElementById('previewCard');
   card.classList.remove('d-none');
   document.getElementById('prSubject').textContent = data.subject;
   document.getElementById('prTo').textContent = data.to || '—';
   document.getElementById('prCc').textContent = data.cc || '—';
   document.getElementById('prBody').textContent = data.body;
-  card.scrollIntoView({ behavior:'smooth', block:'nearest' });
+  if (scroll) card.scrollIntoView({ behavior:'smooth', block:'nearest' });
+}
 
-  // Log the click + open external app for the chosen channel
+function logOrderAction(channel, fd, data) {
   const logFd = new FormData();
   logFd.append('supplier_id', fd.get('supplier_id'));
   logFd.append('delivery_date', fd.get('delivery_date'));
@@ -479,33 +509,117 @@ async function composeOrder(channel) {
   logFd.append('subject', data.subject);
   logFd.append('body', data.body);
   logFd.append('channel', channel);
-  fetch('/packaging/log-action', { method:'POST', body: logFd });
-
-  if (channel === 'gmail') {
-    // On iPhone / iPad open the Gmail app directly via the custom URL
-    // scheme so the user lands inside Gmail, not Safari. Same scheme also
-    // works on Android when the Gmail app is installed.
-    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-    if (isMobile && data.gmail_app_url) {
-      // Use a hidden iframe so iOS doesn't show a "browser navigated away"
-      // banner if the Gmail app isn't installed. If the deep link fails,
-      // fall back to the web URL after a short timeout.
-      const before = Date.now();
-      window.location.href = data.gmail_app_url;
-      setTimeout(() => {
-        if (Date.now() - before < 1800 && document.visibilityState === 'visible') {
-          // Still on the page → Gmail app didn't intercept → fall back to web
-          window.open(data.gmail_url, '_blank', 'noopener');
-        }
-      }, 1500);
-    } else {
-      window.open(data.gmail_url, '_blank', 'noopener');
-    }
-  } else if (channel === 'mailto') {
-    window.location.href = data.mailto;
-  }
-  toast(`${data.item_count} item(s), ${data.total_qty} unit(s) — ready`);
+  fetch('/packaging/log-action', { method:'POST', body: logFd, keepalive:true }).catch(() => {});
 }
+
+function openGmail(data) {
+  if (prefersGmailApp() && data.gmail_app_url) {
+    const before = Date.now();
+    window.location.href = data.gmail_app_url;
+    setTimeout(() => {
+      if (Date.now() - before < 1800 && document.visibilityState === 'visible') {
+        window.location.href = data.gmail_url;
+      }
+    }, 1500);
+    return;
+  }
+
+  const popup = window.open(data.gmail_url, '_blank');
+  if (popup) {
+    popup.opener = null;
+  } else {
+    window.location.href = data.gmail_url;
+  }
+}
+
+function queuePrepareOrder() {
+  clearTimeout(prepareOrderTimer);
+  if (selectedLineCount() === 0) {
+    invalidatePreparedOrder();
+    return;
+  }
+  prepareOrderTimer = setTimeout(() => {
+    prepareOrder({ silent:true }).catch(() => {});
+  }, 350);
+}
+
+async function prepareOrder({ silent=false } = {}) {
+  const ctx = orderContext();
+  if (selectedLineCount() === 0) {
+    const msg = 'No items selected. Set a quantity > 0 on at least one row.';
+    if (!silent) toast(msg, true);
+    throw new Error(msg);
+  }
+
+  if (preparedOrder?.key === ctx.key) return preparedOrder;
+  if (prepareOrderPromise?.key === ctx.key) return prepareOrderPromise.promise;
+
+  const seq = ++prepareOrderSeq;
+  const promise = fetch('/packaging/compose', { method:'POST', body:ctx.fd })
+    .then(async resp => {
+      const data = await resp.json();
+      if (!resp.ok || data.error) throw new Error(data.error || 'Compose failed');
+      if (seq === prepareOrderSeq) {
+        preparedOrder = { key:ctx.key, data };
+        if (!document.getElementById('previewCard').classList.contains('d-none')) {
+          renderPreview(data);
+        }
+      }
+      return { key:ctx.key, data };
+    })
+    .catch(e => {
+      if (!silent) {
+        e.toastShown = true;
+        toast(e.message || 'Compose failed', true);
+      }
+      throw e;
+    })
+    .finally(() => {
+      if (seq === prepareOrderSeq) prepareOrderPromise = null;
+    });
+
+  prepareOrderPromise = { key:ctx.key, promise };
+  return promise;
+}
+
+async function composeOrder(channel) {
+  const ctx = orderContext();
+  try {
+    let order = preparedOrder?.key === ctx.key ? preparedOrder : null;
+    if (!order) {
+      order = await prepareOrder({ silent:false });
+      renderPreview(order.data, true);
+      if (channel !== 'preview') {
+        toast('Email ready. Tap Open in Gmail again.');
+        return;
+      }
+    }
+
+    const data = order.data;
+    renderPreview(data, channel === 'preview');
+    logOrderAction(channel, ctx.fd, data);
+
+    if (channel === 'gmail') {
+      openGmail(data);
+    } else if (channel === 'mailto') {
+      window.location.href = data.mailto;
+    }
+
+    toast(`${data.item_count} item(s), ${data.total_qty} unit(s) — ready`);
+  } catch (e) {
+    if (e.message && !e.toastShown) toast(e.message, true);
+  }
+}
+
+document.getElementById('orderForm').addEventListener('input', () => {
+  invalidatePreparedOrder();
+  queuePrepareOrder();
+});
+document.getElementById('orderForm').addEventListener('change', () => {
+  invalidatePreparedOrder();
+  queuePrepareOrder();
+});
+queuePrepareOrder();
 
 function copyPreview() {
   const body = document.getElementById('prBody').textContent;

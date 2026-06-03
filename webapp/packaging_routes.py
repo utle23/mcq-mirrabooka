@@ -273,13 +273,13 @@ def _mailto_url(to: str, subject: str, body: str, cc: str = '') -> str:
 
 
 def _gmail_app_url(to: str, subject: str, body: str, cc: str = '') -> str:
-    """Deep-link to the Gmail iOS / Android app: googlegmail://co?…
+    """Deep-link to the Gmail iOS / Android app: googlegmail:///co?…
     On iOS this opens the Gmail app directly; on Android the same scheme is
     also recognised when Gmail is installed."""
     qs = {'to': to or '', 'subject': subject, 'body': body}
     if cc:
         qs['cc'] = cc
-    return 'googlegmail://co?' + urllib.parse.urlencode(qs, quote_via=urllib.parse.quote)
+    return 'googlegmail:///co?' + urllib.parse.urlencode(qs, quote_via=urllib.parse.quote)
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────

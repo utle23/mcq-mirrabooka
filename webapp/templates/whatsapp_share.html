@@ -258,15 +258,39 @@
 
 {% block scripts %}
 <script>
+let preparedShare = null;
+let preparePromise = null;
+let prepareTimer = null;
+let prepareRequestId = 0;
+
+function selectedCards() {
+  return [...document.querySelectorAll('.report-card')].filter(
+    c => c.querySelector('.share-include')?.checked);
+}
+
+function selectionKey(cards) {
+  return cards.map(c => `${c.dataset.url}::${c.dataset.fname}`).join('|');
+}
+
+function invalidatePreparedShare() {
+  preparedShare = null;
+  preparePromise = null;
+  prepareRequestId += 1;
+}
+
 // ── Selection tracking ────────────────────────────────────────────────
 function updateShareBtn() {
-  const checked = document.querySelectorAll('.share-include:checked').length;
+  const checked = selectedCards().length;
   const btn = document.getElementById('shareBtn');
   document.getElementById('shareCount').textContent = checked;
   btn.disabled = checked === 0;
 }
 document.querySelectorAll('.share-include').forEach(cb => {
-  cb.addEventListener('change', updateShareBtn);
+  cb.addEventListener('change', () => {
+    invalidatePreparedShare();
+    updateShareBtn();
+    queuePrepareSelected();
+  });
 });
 updateShareBtn();
 
@@ -295,31 +319,120 @@ function previewImage(btn) {
 }
 
 // ── Share selected images ────────────────────────────────────────────
+async function fetchShareFiles(cards) {
+  return Promise.all(cards.map(async card => {
+    const url = card.dataset.url + (card.dataset.url.includes('?') ? '&' : '?') + '_t=' + Date.now();
+    const fname = card.dataset.fname;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`Failed to load ${fname} (HTTP ${resp.status})`);
+    const blob = await resp.blob();
+    return new File([blob], fname, { type: 'image/png' });
+  }));
+}
+
+function downloadFiles(files) {
+  files.forEach(file => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(file);
+    a.download = file.name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+  });
+}
+
+function openWhatsAppFallback(files, status, reason = '') {
+  downloadFiles(files);
+  const text = encodeURIComponent('MCQ Mirrabooka Cafe - daily operations summary for {{ date }}\n\n(' + files.length + ' images downloaded - attach them manually to the WhatsApp message)');
+  const whatsappUrl = `https://wa.me/?text=${text}`;
+  const popup = window.open(whatsappUrl, '_blank');
+  if (popup) {
+    popup.opener = null;
+  } else {
+    window.location.href = whatsappUrl;
+  }
+
+  const prefix = reason ? reason + ' ' : '';
+  status.innerHTML = '<i class="fas fa-info-circle"></i> ' + prefix + files.length + ' image(s) downloaded. WhatsApp opening - attach the files manually.';
+}
+
+function shareUnavailableMessage(e) {
+  if (e && e.name === 'NotAllowedError') {
+    return 'Native share is blocked in this browser/context.';
+  }
+  return 'Native share is unavailable here.';
+}
+
+function queuePrepareSelected() {
+  clearTimeout(prepareTimer);
+  prepareTimer = setTimeout(() => {
+    prepareSelected({ silent: true }).catch(() => {});
+  }, 250);
+}
+
+async function prepareSelected({ silent = false } = {}) {
+  const cards = selectedCards();
+  if (cards.length === 0) return null;
+
+  const key = selectionKey(cards);
+  if (preparedShare?.key === key) return preparedShare.files;
+  if (preparePromise?.key === key) return preparePromise.promise;
+
+  const status = document.getElementById('shareStatus');
+  const btn = document.getElementById('shareBtn');
+  const requestId = ++prepareRequestId;
+
+  if (!silent) {
+    btn.disabled = true;
+    status.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating ' + cards.length + ' image(s)...';
+  } else if (!status.textContent.trim()) {
+    status.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing images...';
+  }
+
+  const promise = fetchShareFiles(cards)
+    .then(files => {
+      if (requestId === prepareRequestId) {
+        preparedShare = { key, files };
+        status.innerHTML = '<i class="fas fa-check-circle"></i> ' + files.length + ' image(s) ready to share.';
+      }
+      return files;
+    })
+    .catch(e => {
+      if (requestId === prepareRequestId) {
+        status.innerHTML = '<i class="fas fa-circle-exclamation"></i> ' + e.message;
+      }
+      throw e;
+    })
+    .finally(() => {
+      if (requestId === prepareRequestId) {
+        preparePromise = null;
+        btn.disabled = false;
+        updateShareBtn();
+      }
+    });
+
+  preparePromise = { key, promise };
+  return promise;
+}
+
 async function shareSelected() {
-  const cards = [...document.querySelectorAll('.report-card')].filter(
-    c => c.querySelector('.share-include')?.checked);
+  const cards = selectedCards();
   if (cards.length === 0) return;
 
   const status = document.getElementById('shareStatus');
   const btn = document.getElementById('shareBtn');
+  const key = selectionKey(cards);
   btn.disabled = true;
-  status.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating ' + cards.length + ' image(s)…';
 
   try {
-    // Fetch all PNGs in parallel
-    const files = [];
-    await Promise.all(cards.map(async card => {
-      const url   = card.dataset.url + (card.dataset.url.includes('?') ? '&' : '?') + '_t=' + Date.now();
-      const fname = card.dataset.fname;
-      const resp = await fetch(url);
-      if (!resp.ok) throw new Error(`Failed to load ${fname} (HTTP ${resp.status})`);
-      const blob = await resp.blob();
-      files.push(new File([blob], fname, { type: 'image/png' }));
-    }));
+    if (preparedShare?.key !== key) {
+      await prepareSelected({ silent: false });
+      status.innerHTML = '<i class="fas fa-check-circle"></i> Images are ready. Tap Share to WhatsApp again to open the share sheet.';
+      return;
+    }
 
+    const files = preparedShare.files;
     status.innerHTML = '<i class="fas fa-share-alt"></i> Opening share sheet…';
 
-    // Web Share API with multiple files
     if (navigator.canShare && navigator.canShare({ files })) {
       await navigator.share({
         files,
@@ -328,20 +441,13 @@ async function shareSelected() {
       });
       status.innerHTML = '<i class="fas fa-check-circle"></i> Done. Pick a WhatsApp group from the share sheet.';
     } else {
-      // Fallback: download all PNGs then open wa.me to compose
-      files.forEach(f => {
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(f);
-        a.download = f.name; a.click();
-        setTimeout(() => URL.revokeObjectURL(a.href), 1500);
-      });
-      const text = encodeURIComponent('MCQ Mirrabooka Cafe — daily operations summary for {{ date }}\n\n(' + files.length + ' images downloaded — attach them manually to the WhatsApp message)');
-      setTimeout(() => window.open(`https://wa.me/?text=${text}`, '_blank'), 1200);
-      status.innerHTML = '<i class="fas fa-info-circle"></i> ' + files.length + ' image(s) downloaded. WhatsApp Web opening — attach the files manually.';
+      openWhatsAppFallback(files, status);
     }
   } catch (e) {
     if (e.name === 'AbortError') {
       status.innerHTML = '<i class="fas fa-circle-info"></i> Share cancelled.';
+    } else if (preparedShare?.key === key) {
+      openWhatsAppFallback(preparedShare.files, status, shareUnavailableMessage(e));
     } else {
       status.innerHTML = '<i class="fas fa-circle-exclamation"></i> ' + e.message;
     }
@@ -350,5 +456,7 @@ async function shareSelected() {
     updateShareBtn();
   }
 }
+
+queuePrepareSelected();
 </script>
 {% endblock %}
