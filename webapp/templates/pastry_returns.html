@@ -103,8 +103,13 @@
 {% if not rows %}
 <div class="empty-state">
   <i class="fas fa-boxes-stacked fa-2x mb-2 d-block opacity-25"></i>
-  No pastries received on <strong>{{ date }}</strong>. Record deliveries on the
-  <a href="/pastry/today">Today's Pastry</a> page first, then come back here to log returns.
+  No returnable pastries scheduled or received on <strong>{{ date }}</strong>.
+  <div class="small mt-2">
+    Only items marked <em>returnable</em> in
+    <a href="/pastry/items">Manage Items</a> show up here.
+    Items scheduled for delivery on this weekday will appear automatically
+    even if the delivery hasn't been formally recorded yet.
+  </div>
 </div>
 {% else %}
 
@@ -132,13 +137,14 @@
   </div>
 
   {% for r in rows %}
-  <div class="return-row {% if not r.returnable %}not-returnable{% endif %}"
-       data-cost="{{ r.cost_price }}" id="row-{{ r.id }}">
+  <div class="return-row" data-cost="{{ r.cost_price }}" id="row-{{ r.id }}">
     <input type="hidden" name="item_id[]" value="{{ r.id }}">
     <div class="info">
       <div class="name-en">{{ r.name_en }}
-        {% if not r.returnable %}
-        <span class="pill bg-secondary ms-1" title="This item is not marked returnable">N/R</span>
+        {% if r.has_delivery %}
+        <span class="pill bg-success ms-1" title="Delivery has been recorded for this date">DELIVERED {{ r.qty_received }}</span>
+        {% else %}
+        <span class="pill bg-info text-dark ms-1" title="Delivery scheduled for this weekday but not yet recorded">SCHEDULED</span>
         {% endif %}
         {% if r.delivery_condition and r.delivery_condition != 'good' %}
         <span class="pill bg-warning text-dark ms-1">{{ r.delivery_condition|upper }}</span>
@@ -157,11 +163,12 @@
       <input type="number" id="qty_{{ r.id }}"
              name="qty_returned_{{ r.id }}"
              class="form-control form-control-sm qty-input"
-             min="0" max="{{ r.qty_received if r.qty_received else 999 }}"
+             min="0" max="999"
              value="{{ r.qty_returned }}"
-             {% if not r.returnable %}disabled{% endif %}
              oninput="updateRefund({{ r.id }})">
+      {% if r.qty_received %}
       <span class="text-muted small">/ {{ r.qty_received }}</span>
+      {% endif %}
     </div>
 
     <input type="text" name="note_{{ r.id }}" class="form-control form-control-sm note-input"

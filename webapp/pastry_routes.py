@@ -297,12 +297,22 @@ def record_sales(item_id):
 @pastry.route('/returns')
 @_login_required
 def pastry_returns():
-    """Show pastries received today (or for a chosen date) plus an input for
-    how many of each item are being returned to the supplier."""
+    """Show ONLY items flagged `returnable = 1` whose supplier delivers on
+    the chosen date (matching delivery_days OR with an explicit delivery /
+    sales record for the date). Staff enters how many of each are being
+    returned to the supplier."""
     date_str = (request.args.get('date') or date.today().isoformat()).strip()
+
+    # Which weekday is the chosen date? (mon/tue/wed/...)
+    try:
+        chosen_dt  = datetime.strptime(date_str, '%Y-%m-%d').date()
+        chosen_day = DAYS[chosen_dt.weekday()]
+    except Exception:
+        chosen_day = _today_day()
+
     with _get_db() as conn:
         items = _get_items_with_supplier(conn)
-        # Pull today's deliveries to know what was actually received
+        # Today's deliveries — gives the actual qty_received per item
         delivery_rows = conn.execute(
             'SELECT item_id, qty_received, condition, notes FROM pastry_delivery WHERE date=?',
             (date_str,)).fetchall()
@@ -313,17 +323,21 @@ def pastry_returns():
             'FROM pastry_sales WHERE date=?', (date_str,)).fetchall()
         sales = {r['item_id']: dict(r) for r in sales_rows}
 
-    # Compose display rows — focus on items that were either delivered today
-    # OR already have a return / sale entry for the date (so re-editing works).
     rows = []
     for it in items:
+        # Filter 1 — only returnable items appear on this screen.
+        if not it.get('returnable'):
+            continue
+
         d = deliveries.get(it['id'])
         s = sales.get(it['id'])
-        # Skip items that weren't delivered AND have no existing entry; the
-        # admin doesn't need to scroll past unrelated items every day.
-        if not d and not s:
+        # Filter 2 — show items that either had a record on the date OR
+        # are scheduled for delivery on that weekday (so admin can still
+        # enter returns even before delivery has been formally recorded).
+        scheduled_today = chosen_day in (it.get('days_list') or [])
+        if not d and not s and not scheduled_today:
             continue
-        recv = (d or {}).get('qty_received') or 0
+
         rows.append({
             'id': it['id'],
             'name_en': it['name_en'],
@@ -332,7 +346,7 @@ def pastry_returns():
             'returnable': it['returnable'],
             'cost_price': float(it['cost_price'] or 0),
             'selling_price': float(it['selling_price'] or 0),
-            'qty_received': recv,
+            'qty_received': (d or {}).get('qty_received') or 0,
             'qty_returned': (s or {}).get('qty_returned') or 0,
             'qty_sold':     (s or {}).get('qty_sold') or 0,
             'qty_wasted':   (s or {}).get('qty_wasted') or 0,
@@ -340,6 +354,8 @@ def pastry_returns():
             'note': (s or {}).get('notes') or '',
             'recorded_by': (s or {}).get('recorded_by') or '',
             'recorded_at': (s or {}).get('recorded_at') or '',
+            'scheduled_today': scheduled_today,
+            'has_delivery':  bool(d),
         })
 
     # KPI strip
