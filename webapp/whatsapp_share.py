@@ -428,6 +428,393 @@ def build_daily_png(date_str: str) -> bytes:
     return out.getvalue()
 
 
+# ── Per-checklist detail PNG ─────────────────────────────────────────────────
+
+def _checklist_detail(session_id: int) -> dict | None:
+    with _conn() as conn:
+        sess = conn.execute('''
+            SELECT cs.*,
+                   (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id) AS total_tasks,
+                   (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id AND done=1) AS done_tasks
+            FROM checklist_sessions cs WHERE cs.id=?''', (session_id,)).fetchone()
+        if not sess:
+            return None
+        sess = dict(sess)
+        sess['tasks'] = [dict(r) for r in conn.execute(
+            'SELECT task_order, task_name, done, note FROM checklist_tasks '
+            'WHERE session_id=? ORDER BY task_order', (session_id,)).fetchall()]
+        sess['photos'] = [dict(r) for r in conn.execute(
+            'SELECT filename, photo_number FROM checklist_photos '
+            'WHERE session_id=? ORDER BY photo_number', (session_id,)).fetchall()]
+        sess['meta'] = CHECKLISTS_META.get(sess['type'], {})
+    return sess
+
+
+def build_checklist_png(session_id: int) -> bytes:
+    from PIL import Image, ImageDraw
+
+    c = _checklist_detail(session_id)
+    if c is None:
+        raise ValueError(f'Checklist session {session_id} not found')
+
+    W = 1080
+    PAD = 32
+    NAVY = (26, 26, 46)
+    LIGHT_BG = (244, 246, 250)
+    MUTED = (110, 117, 125)
+    OK = (46, 125, 50)
+    BAD = (198, 40, 40)
+    PHOTO = 320
+
+    color = _hex_to_rgb(c['meta'].get('color'))
+
+    f_title  = _font(40, bold=True)
+    f_sub    = _font(22)
+    f_h2     = _font(28, bold=True)
+    f_body   = _font(22)
+    f_body_b = _font(22, bold=True)
+    f_small  = _font(18)
+    f_task   = _font(20)
+    f_chip   = _font(16, bold=True)
+
+    # Measure
+    h_header  = 200
+    h_meta    = 180
+    h_tasks_row = 42
+    h_tasks   = 70 + len(c['tasks']) * h_tasks_row
+    # Photos: 2 per row at PHOTO height each
+    photo_rows = (len(c['photos']) + 1) // 2
+    h_photos  = (70 + photo_rows * (PHOTO + 24)) if c['photos'] else 0
+    h_footer  = 90
+    total_h = h_header + h_meta + h_tasks + h_photos + h_footer + 30
+
+    img = Image.new('RGB', (W, total_h), LIGHT_BG)
+    draw = ImageDraw.Draw(img)
+
+    # Header
+    draw.rectangle((0, 0, W, h_header), fill=NAVY)
+    draw.rectangle((0, h_header - 8, W, h_header), fill=color)
+    logo_path = os.path.join(STATIC_DIR, 'logo.png') if STATIC_DIR else ''
+    if os.path.exists(logo_path):
+        try:
+            logo = Image.open(logo_path).convert('RGBA')
+            logo.thumbnail((120, 120), Image.LANCZOS)
+            lx, ly = PAD, 36
+            _rounded(draw, (lx - 8, ly - 8, lx + logo.width + 8, ly + logo.height + 8),
+                     radius=14, fill=(255, 255, 255))
+            img.paste(logo, (lx, ly), logo)
+        except Exception:
+            pass
+    text_x = PAD + 150
+    title = (c['meta'].get('title') or c['type']).upper()
+    section_label = (c['section'] or '').upper()
+    draw.text((text_x, 36), f"{title}", fill=(255, 255, 255), font=f_title)
+    draw.text((text_x, 88), f"{section_label} CHECKLIST",
+              fill=(255, 255, 255, 220), font=f_sub)
+    try:
+        date_pretty = datetime.strptime(c['date'], '%Y-%m-%d').strftime('%A, %d %b %Y').upper()
+    except Exception:
+        date_pretty = c['date']
+    draw.text((text_x, 124), date_pretty, fill=(255, 200, 200), font=f_body_b)
+
+    y = h_header + 24
+
+    # Meta card
+    _rounded(draw, (PAD, y, W - PAD, y + h_meta - 24), radius=14, fill=(255, 255, 255))
+    pct = round(c['done_tasks'] / c['total_tasks'] * 100) if c['total_tasks'] else 0
+    pills = [
+        (f'{c["done_tasks"]}/{c["total_tasks"]} TASKS', OK if pct >= 90 else (255, 152, 0)),
+        (f'{pct}% COMPLETE', (33, 150, 243)),
+        ('LATE' if c.get('is_late') else 'ON TIME', BAD if c.get('is_late') else OK),
+    ]
+    if c.get('verified'):
+        pills.append(('VERIFIED', NAVY))
+
+    px = PAD + 24
+    for txt, col in pills:
+        tw = draw.textbbox((0, 0), txt, font=f_chip)[2] + 24
+        _rounded(draw, (px, y + 20, px + tw, y + 54), radius=14, fill=col)
+        draw.text((px + 12, y + 28), txt, fill=(255, 255, 255), font=f_chip)
+        px += tw + 8
+
+    lines = [
+        f"Submitted by: {c.get('submitted_by') or '-'}",
+        f"Responsible: {c.get('responsible') or '-'}",
+        f"Submitted at: {(c.get('submitted_at') or '-')[:16]}",
+    ]
+    if c.get('general_note'):
+        lines.append(f"Note: {c['general_note']}")
+    my = y + 70
+    for line in lines:
+        for sub in _wrap_text(draw, line, f_body, W - PAD * 2 - 56)[:1]:
+            draw.text((PAD + 24, my), sub, fill=(51, 51, 51), font=f_body)
+            my += 28
+    y += h_meta
+
+    # Tasks card
+    _rounded(draw, (PAD, y, W - PAD, y + h_tasks - 12), radius=14, fill=(255, 255, 255))
+    draw.text((PAD + 24, y + 18), 'TASKS', fill=NAVY, font=f_h2)
+    ty = y + 60
+    for i, t in enumerate(c['tasks']):
+        # Status icon
+        icon_x = PAD + 30
+        if t['done']:
+            _rounded(draw, (icon_x, ty + 6, icon_x + 22, ty + 28), radius=4, fill=OK)
+            draw.text((icon_x + 4, ty + 4), '✓', fill=(255, 255, 255), font=f_chip)
+            txt_color = (40, 40, 40)
+        else:
+            _rounded(draw, (icon_x, ty + 6, icon_x + 22, ty + 28), radius=4, fill=BAD)
+            draw.text((icon_x + 5, ty + 4), '×', fill=(255, 255, 255), font=f_chip)
+            txt_color = BAD
+        # Task name (wrap-safe — truncate to one line)
+        name = t['task_name']
+        line = _wrap_text(draw, name, f_task, W - PAD * 2 - 100)[0]
+        draw.text((icon_x + 36, ty + 8), line, fill=txt_color, font=f_task)
+        if t.get('note'):
+            note_line = _wrap_text(draw, f"Note: {t['note']}", f_small, W - PAD * 2 - 100)[0]
+            # Render second line — we already reserved a uniform row height; if
+            # the note pushes it taller it just overlaps the next row slightly,
+            # acceptable trade-off for keeping the layout tidy.
+            draw.text((icon_x + 36, ty + 22), note_line, fill=MUTED, font=f_small)
+        ty += h_tasks_row
+    y += h_tasks
+
+    # Photos card
+    if c['photos']:
+        _rounded(draw, (PAD, y, W - PAD, y + h_photos - 12), radius=14, fill=(255, 255, 255))
+        draw.text((PAD + 24, y + 18), f"PHOTOS ({len(c['photos'])})", fill=NAVY, font=f_h2)
+        py = y + 60
+        for ix, p in enumerate(c['photos']):
+            col = ix % 2
+            row = ix // 2
+            px = PAD + 24 + col * (PHOTO + 24)
+            ppy = py + row * (PHOTO + 24)
+            src = os.path.join(UPLOAD_DIR, p['filename'])
+            if not os.path.exists(src):
+                _rounded(draw, (px, ppy, px + PHOTO, ppy + PHOTO),
+                         radius=10, fill=(245, 245, 245))
+                draw.text((px + 90, ppy + PHOTO // 2 - 12),
+                          'photo missing', fill=MUTED, font=f_small)
+                continue
+            try:
+                thumb = Image.open(src).convert('RGB')
+                tw, th = thumb.size
+                sz = min(tw, th)
+                left = (tw - sz) // 2
+                top  = (th - sz) // 2
+                thumb = thumb.crop((left, top, left + sz, top + sz))
+                thumb = thumb.resize((PHOTO, PHOTO), Image.LANCZOS)
+                mask = Image.new('L', (PHOTO, PHOTO), 0)
+                ImageDraw.Draw(mask).rounded_rectangle(
+                    (0, 0, PHOTO, PHOTO), radius=10, fill=255)
+                img.paste(thumb, (px, ppy), mask)
+            except Exception:
+                _rounded(draw, (px, ppy, px + PHOTO, ppy + PHOTO),
+                         radius=10, fill=(245, 245, 245))
+        y += h_photos
+
+    # Footer
+    fy = total_h - h_footer
+    draw.rectangle((0, fy, W, total_h), fill=NAVY)
+    draw.text((PAD, fy + 22),
+              f'Generated {datetime.now().strftime("%a %d %b %Y · %H:%M")}',
+              fill=(255, 255, 255, 180), font=f_body)
+    draw.text((PAD, fy + 54),
+              'MCQ Mirrabooka Cafe — Vietnamese Street Food',
+              fill=(255, 200, 200), font=f_small)
+
+    out = BytesIO()
+    img.save(out, 'PNG', optimize=True)
+    out.seek(0)
+    return out.getvalue()
+
+
+# ── Per-temperature detail PNG ──────────────────────────────────────────────
+
+def _temperature_detail(session_id: int) -> dict | None:
+    with _conn() as conn:
+        sess = conn.execute(
+            'SELECT * FROM temp_sessions WHERE id=?', (session_id,)).fetchone()
+        if not sess:
+            return None
+        sess = dict(sess)
+        rows = conn.execute('''
+            SELECT tr.*, COALESCE(ft.food_kind, 'cold') AS food_kind
+            FROM temp_readings tr
+            LEFT JOIN temp_food_templates ft
+              ON ft.temp_type=? AND ft.food_name=tr.food_name
+            WHERE tr.session_id=?
+            ORDER BY tr.food_order''', (sess['type'], session_id)).fetchall()
+        sess['readings'] = [dict(r) for r in rows]
+        sess['meta']     = TEMPERATURES_META.get(sess['type'], {})
+    return sess
+
+
+def _temp_unsafe(kind: str, v) -> bool:
+    if v is None:
+        return False
+    if kind == 'hot':
+        return v < 60
+    return v > 5
+
+
+def build_temperature_png(session_id: int) -> bytes:
+    from PIL import Image, ImageDraw
+
+    t = _temperature_detail(session_id)
+    if t is None:
+        raise ValueError(f'Temperature session {session_id} not found')
+
+    W = 1080
+    PAD = 32
+    NAVY = (26, 26, 46)
+    LIGHT_BG = (244, 246, 250)
+    MUTED = (110, 117, 125)
+    OK = (46, 125, 50)
+    BAD = (198, 40, 40)
+
+    color = _hex_to_rgb(t['meta'].get('color'))
+
+    f_title  = _font(38, bold=True)
+    f_sub    = _font(22)
+    f_h2     = _font(28, bold=True)
+    f_body   = _font(22)
+    f_body_b = _font(22, bold=True)
+    f_small  = _font(17)
+    f_food   = _font(22, bold=True)
+    f_chip   = _font(15, bold=True)
+    f_temp   = _font(20, bold=True)
+
+    h_header = 200
+    h_meta   = 130
+    row_h    = 70
+    h_table  = 90 + len(t['readings']) * row_h
+    h_footer = 90
+    total_h  = h_header + h_meta + h_table + h_footer + 30
+
+    img = Image.new('RGB', (W, total_h), LIGHT_BG)
+    draw = ImageDraw.Draw(img)
+
+    # Header
+    draw.rectangle((0, 0, W, h_header), fill=NAVY)
+    draw.rectangle((0, h_header - 8, W, h_header), fill=color)
+    logo_path = os.path.join(STATIC_DIR, 'logo.png') if STATIC_DIR else ''
+    if os.path.exists(logo_path):
+        try:
+            logo = Image.open(logo_path).convert('RGBA')
+            logo.thumbnail((120, 120), Image.LANCZOS)
+            lx, ly = PAD, 36
+            _rounded(draw, (lx - 8, ly - 8, lx + logo.width + 8, ly + logo.height + 8),
+                     radius=14, fill=(255, 255, 255))
+            img.paste(logo, (lx, ly), logo)
+        except Exception:
+            pass
+    text_x = PAD + 150
+    draw.text((text_x, 36),
+              (t['meta'].get('title') or t['type']).upper(),
+              fill=(255, 255, 255), font=f_title)
+    draw.text((text_x, 90), 'TEMPERATURE RECORD',
+              fill=(255, 255, 255, 220), font=f_sub)
+    try:
+        date_pretty = datetime.strptime(t['date'], '%Y-%m-%d').strftime('%A, %d %b %Y').upper()
+    except Exception:
+        date_pretty = t['date']
+    draw.text((text_x, 124), date_pretty, fill=(255, 200, 200), font=f_body_b)
+
+    y = h_header + 24
+
+    # Meta card
+    _rounded(draw, (PAD, y, W - PAD, y + h_meta - 24), radius=14, fill=(255, 255, 255))
+    unsafe_count = sum(
+        1 for r in t['readings']
+        for col in ('c1_temp', 'c2_temp', 'c3_temp', 'c4_temp', 'c5_temp')
+        if _temp_unsafe(r['food_kind'], r[col])
+    )
+    discarded = sum(1 for r in t['readings'] if (r.get('discarded') or 'N').upper() == 'Y')
+    pills = [
+        (f'{len(t["readings"])} FOODS', OK),
+        (f'{unsafe_count} OUT-OF-ZONE', BAD if unsafe_count else OK),
+    ]
+    if discarded:
+        pills.append((f'{discarded} DISCARDED', BAD))
+
+    px = PAD + 24
+    for txt, col in pills:
+        tw = draw.textbbox((0, 0), txt, font=f_chip)[2] + 24
+        _rounded(draw, (px, y + 18, px + tw, y + 50), radius=14, fill=col)
+        draw.text((px + 12, y + 26), txt, fill=(255, 255, 255), font=f_chip)
+        px += tw + 8
+
+    draw.text((PAD + 24, y + 70),
+              f"Recorded by: {t.get('recorded_by') or '-'}    Checked by: {t.get('checked_by') or '-'}",
+              fill=(51, 51, 51), font=f_body)
+    y += h_meta
+
+    # Table card
+    _rounded(draw, (PAD, y, W - PAD, y + h_table - 12), radius=14, fill=(255, 255, 255))
+    # Header row
+    hx = PAD + 24
+    draw.text((hx, y + 18), 'FOOD ITEM', fill=NAVY, font=f_h2)
+    # Column labels
+    col_xs = [W - PAD - 24 - i * 90 for i in reversed(range(5))]
+    for ci, cx in enumerate(col_xs):
+        draw.text((cx - 24, y + 24), f'C{ci+1}', fill=MUTED, font=f_small)
+    ty = y + 62
+    for r in t['readings']:
+        kind = r['food_kind'] or 'cold'
+        # Kind badge
+        kind_label = 'HOT' if kind == 'hot' else 'COLD'
+        kind_col   = (192, 57, 43) if kind == 'hot' else (21, 101, 192)
+        kind_bg    = (255, 224, 178) if kind == 'hot' else (225, 245, 254)
+        kw = draw.textbbox((0, 0), kind_label, font=f_chip)[2] + 18
+        _rounded(draw, (PAD + 24, ty + 14, PAD + 24 + kw, ty + 42), radius=10, fill=kind_bg)
+        draw.text((PAD + 32, ty + 20), kind_label, fill=kind_col, font=f_chip)
+        # Food name
+        name = r['food_name']
+        name_line = _wrap_text(draw, name, f_food, 380)[0]
+        draw.text((PAD + 24 + kw + 12, ty + 18), name_line, fill=(40, 40, 40), font=f_food)
+        # Notes line
+        if r.get('notes'):
+            nx = PAD + 24 + kw + 12
+            note_line = _wrap_text(draw, f"Note: {r['notes']}", f_small, 480)[0]
+            draw.text((nx, ty + 46), note_line, fill=MUTED, font=f_small)
+        # Discarded flag
+        if (r.get('discarded') or 'N').upper() == 'Y':
+            draw.text((PAD + 24 + kw + 12 + 380, ty + 18),
+                      'DISCARDED', fill=BAD, font=f_chip)
+        # Temp columns
+        for ci, cx in enumerate(col_xs):
+            v = r[f'c{ci+1}_temp']
+            if v is None:
+                draw.text((cx - 18, ty + 22), '—', fill=MUTED, font=f_temp)
+                continue
+            unsafe = _temp_unsafe(kind, v)
+            col = BAD if unsafe else OK
+            txt = f'{v:g}°'
+            tw_ = draw.textbbox((0, 0), txt, font=f_temp)[2]
+            draw.text((cx - tw_, ty + 22), txt, fill=col, font=f_temp)
+        # Row separator
+        draw.line((PAD + 24, ty + row_h, W - PAD - 24, ty + row_h),
+                  fill=(238, 240, 243), width=1)
+        ty += row_h
+    y += h_table
+
+    # Footer
+    fy = total_h - h_footer
+    draw.rectangle((0, fy, W, total_h), fill=NAVY)
+    draw.text((PAD, fy + 22),
+              f'Generated {datetime.now().strftime("%a %d %b %Y · %H:%M")}',
+              fill=(255, 255, 255, 180), font=f_body)
+    draw.text((PAD, fy + 54),
+              'MCQ Mirrabooka Cafe — Vietnamese Street Food',
+              fill=(255, 200, 200), font=f_small)
+
+    out = BytesIO()
+    img.save(out, 'PNG', optimize=True)
+    out.seek(0)
+    return out.getvalue()
+
+
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 @whatsapp_bp.route('/')
@@ -456,3 +843,31 @@ def whatsapp_png():
     return send_file(buf, mimetype='image/png',
                      as_attachment=False,
                      download_name=f'MCQ_Daily_{date_str}.png')
+
+
+@whatsapp_bp.route('/checklist/<int:session_id>.png')
+@_login_required
+def whatsapp_checklist_png(session_id):
+    try:
+        png_bytes = build_checklist_png(session_id)
+    except ValueError as e:
+        return str(e), 404
+    except Exception as e:
+        return f'PNG generation failed: {type(e).__name__}: {e}', 500
+    buf = BytesIO(png_bytes); buf.seek(0)
+    return send_file(buf, mimetype='image/png', as_attachment=False,
+                     download_name=f'MCQ_Checklist_{session_id}.png')
+
+
+@whatsapp_bp.route('/temperature/<int:session_id>.png')
+@_login_required
+def whatsapp_temperature_png(session_id):
+    try:
+        png_bytes = build_temperature_png(session_id)
+    except ValueError as e:
+        return str(e), 404
+    except Exception as e:
+        return f'PNG generation failed: {type(e).__name__}: {e}', 500
+    buf = BytesIO(png_bytes); buf.seek(0)
+    return send_file(buf, mimetype='image/png', as_attachment=False,
+                     download_name=f'MCQ_Temperature_{session_id}.png')
