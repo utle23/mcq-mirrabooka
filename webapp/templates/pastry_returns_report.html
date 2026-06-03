@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}Pastry Returns Report{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-chart-line me-2" style="color:#AB47BC"></i>Pastry Returns Report</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.kpi-card {
+  background: #fff; border: 1px solid #e8eaed; border-radius: 12px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.04);
+  padding: 16px 20px;
+}
+.kpi-card .label { font-size: 0.72rem; color: #888; text-transform: uppercase; letter-spacing: .08em; }
+.kpi-card .value { font-size: 2rem; font-weight: 800; }
+.kpi-card .sub   { font-size: 0.8rem; color: #888; }
+
+.daily-bar {
+  display: flex; align-items: flex-end; gap: 4px;
+  height: 110px; padding: 6px 0;
+}
+.daily-bar .bar {
+  flex: 1 1 0;
+  background: linear-gradient(180deg, #AB47BC 0%, #6A1B9A 100%);
+  border-radius: 4px 4px 0 0;
+  min-height: 4px;
+  position: relative;
+}
+.daily-bar .bar:hover { filter: brightness(1.1); }
+.daily-bar .bar .label {
+  position: absolute; bottom: -22px; left: 0; right: 0;
+  text-align: center; font-size: 0.62rem; color: #888;
+  transform: rotate(-30deg); transform-origin: 50% 0;
+  white-space: nowrap;
+}
+.daily-bar-wrap {
+  border: 1px solid #e8eaed; border-radius: 10px;
+  padding: 12px 14px 36px; background: #fff; margin-bottom: 16px;
+}
+
+.empty-state {
+  background: #f7f9fb; border: 1px dashed #ccd; border-radius: 10px;
+  padding: 22px; text-align: center; color: #888;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Filters -->
+<div class="card shadow-sm mb-3">
+  <div class="card-body py-3">
+    <form method="GET" class="row g-2 align-items-end">
+      <div class="col-md-3">
+        <label class="form-label fw-semibold small mb-1">Month</label>
+        <input type="month" name="month" class="form-control form-control-sm" value="{{ month }}">
+      </div>
+      <div class="col-md-3 text-muted small">
+        or pick a custom range →
+      </div>
+      <div class="col-md-2">
+        <label class="form-label fw-semibold small mb-1">From</label>
+        <input type="date" name="from" class="form-control form-control-sm" value="{{ date_from }}">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label fw-semibold small mb-1">To</label>
+        <input type="date" name="to" class="form-control form-control-sm" value="{{ date_to }}">
+      </div>
+      <div class="col-md-2 d-flex gap-2">
+        <button class="btn btn-sm btn-primary"><i class="fas fa-filter me-1"></i>Apply</button>
+        <a href="/pastry/returns" class="btn btn-sm btn-outline-secondary"
+           title="Back to returns entry"><i class="fas fa-rotate-left me-1"></i>Entry</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- KPI strip -->
+<div class="row g-3 mb-3">
+  <div class="col-md-4">
+    <div class="kpi-card" style="border-top:4px solid #FB8C00">
+      <div class="label">Total Items Returned</div>
+      <div class="value" style="color:#FB8C00">{{ total_qty }}</div>
+      <div class="sub">{{ date_from }} → {{ date_to }}</div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="kpi-card" style="border-top:4px solid #2E7D32">
+      <div class="label">Total Refund Amount</div>
+      <div class="value" style="color:#2E7D32">${{ '%.2f'|format(total_refund) }}</div>
+      <div class="sub">qty × cost price per item</div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="kpi-card" style="border-top:4px solid #1565C0">
+      <div class="label">Different Items Returned</div>
+      <div class="value" style="color:#1565C0">{{ rows|length }}</div>
+      <div class="sub">unique products in period</div>
+    </div>
+  </div>
+</div>
+
+<!-- Daily bar chart -->
+{% if daily %}
+<div class="daily-bar-wrap">
+  <div class="fw-semibold small mb-2"><i class="fas fa-calendar-day me-1"></i>Returns per day</div>
+  <div class="daily-bar">
+    {% for d in daily %}
+    {% set h = (d.qty / max_day_qty * 100)|round|int %}
+    <div class="bar" style="height:{{ h if h > 4 else 4 }}%"
+         title="{{ d.date }}: {{ d.qty }} returned">
+      <div class="label">{{ d.date[5:] }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- Item breakdown table -->
+{% if not rows %}
+<div class="empty-state">
+  <i class="fas fa-rotate-left fa-2x mb-2 d-block opacity-25"></i>
+  No returns recorded in this period.
+</div>
+{% else %}
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead style="background:#1A1A2E;color:#fff">
+        <tr>
+          <th>Item</th>
+          <th>Supplier</th>
+          <th class="text-end">Qty Returned</th>
+          <th class="text-end">Cost / unit</th>
+          <th class="text-end">Refund</th>
+          <th class="text-center">Days w/ return</th>
+          <th>First → Last</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>
+            <div class="fw-bold">{{ r.name_en }}</div>
+            {% if r.name_vi %}<div class="text-muted small">{{ r.name_vi }}</div>{% endif %}
+          </td>
+          <td class="small">{{ r.supplier_name or '—' }}</td>
+          <td class="text-end fw-bold" style="color:#FB8C00">{{ r.total_returned }}</td>
+          <td class="text-end small">${{ '%.2f'|format(r.cost_price) }}</td>
+          <td class="text-end fw-bold" style="color:#2E7D32">${{ '%.2f'|format(r.refund_amount) }}</td>
+          <td class="text-center">{{ r.return_days }}</td>
+          <td class="small text-muted">{{ r.first_return }} → {{ r.last_return }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot style="background:#F4F6F9">
+        <tr>
+          <td colspan="2" class="fw-bold">TOTAL</td>
+          <td class="text-end fw-bold" style="color:#FB8C00">{{ total_qty }}</td>
+          <td></td>
+          <td class="text-end fw-bold" style="color:#2E7D32">${{ '%.2f'|format(total_refund) }}</td>
+          <td colspan="2"></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}

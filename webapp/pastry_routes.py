@@ -292,6 +292,173 @@ def record_sales(item_id):
         return jsonify({'ok': True})
     return redirect(url_for('pastry.pastry_today'))
 
+# ── Returns (separate, focused workflow) ─────────────────────────────────────
+
+@pastry.route('/returns')
+@_login_required
+def pastry_returns():
+    """Show pastries received today (or for a chosen date) plus an input for
+    how many of each item are being returned to the supplier."""
+    date_str = (request.args.get('date') or date.today().isoformat()).strip()
+    with _get_db() as conn:
+        items = _get_items_with_supplier(conn)
+        # Pull today's deliveries to know what was actually received
+        delivery_rows = conn.execute(
+            'SELECT item_id, qty_received, condition, notes FROM pastry_delivery WHERE date=?',
+            (date_str,)).fetchall()
+        deliveries = {r['item_id']: dict(r) for r in delivery_rows}
+
+        sales_rows = conn.execute(
+            'SELECT item_id, qty_returned, qty_sold, qty_wasted, recorded_by, notes, recorded_at '
+            'FROM pastry_sales WHERE date=?', (date_str,)).fetchall()
+        sales = {r['item_id']: dict(r) for r in sales_rows}
+
+    # Compose display rows — focus on items that were either delivered today
+    # OR already have a return / sale entry for the date (so re-editing works).
+    rows = []
+    for it in items:
+        d = deliveries.get(it['id'])
+        s = sales.get(it['id'])
+        # Skip items that weren't delivered AND have no existing entry; the
+        # admin doesn't need to scroll past unrelated items every day.
+        if not d and not s:
+            continue
+        recv = (d or {}).get('qty_received') or 0
+        rows.append({
+            'id': it['id'],
+            'name_en': it['name_en'],
+            'name_vi': it['name_vi'],
+            'supplier_name': it['supplier_name'],
+            'returnable': it['returnable'],
+            'cost_price': float(it['cost_price'] or 0),
+            'selling_price': float(it['selling_price'] or 0),
+            'qty_received': recv,
+            'qty_returned': (s or {}).get('qty_returned') or 0,
+            'qty_sold':     (s or {}).get('qty_sold') or 0,
+            'qty_wasted':   (s or {}).get('qty_wasted') or 0,
+            'delivery_condition': (d or {}).get('condition') or '',
+            'note': (s or {}).get('notes') or '',
+            'recorded_by': (s or {}).get('recorded_by') or '',
+            'recorded_at': (s or {}).get('recorded_at') or '',
+        })
+
+    # KPI strip
+    total_recv     = sum(r['qty_received'] for r in rows)
+    total_returned = sum(r['qty_returned'] for r in rows)
+    total_refund   = sum(r['qty_returned'] * r['cost_price'] for r in rows)
+
+    return render_template('pastry_returns.html',
+        rows=rows, date=date_str,
+        total_recv=total_recv,
+        total_returned=total_returned,
+        total_refund=total_refund,
+        staff_list=_get_staff(),
+        is_admin=_is_admin())
+
+
+@pastry.route('/returns/save', methods=['POST'])
+@_login_required
+def pastry_returns_save():
+    target_date = (request.form.get('date') or date.today().isoformat()).strip()
+    recorded_by = request.form.get('recorded_by', '').strip()
+    now         = datetime.now().strftime('%Y-%m-%d %H:%M')
+
+    item_ids = request.form.getlist('item_id[]')
+    with _get_db() as conn:
+        for iid in item_ids:
+            try:
+                iid_int = int(iid)
+            except (TypeError, ValueError):
+                continue
+            qty_ret = request.form.get(f'qty_returned_{iid_int}', '0').strip()
+            note    = request.form.get(f'note_{iid_int}', '').strip()
+            try:
+                qty_ret_int = max(0, int(qty_ret or 0))
+            except ValueError:
+                qty_ret_int = 0
+            # Upsert into pastry_sales — keep existing qty_sold/wasted so we
+            # don't clobber data entered on the daily sales screen.
+            existing = conn.execute(
+                'SELECT qty_sold, qty_wasted FROM pastry_sales WHERE item_id=? AND date=?',
+                (iid_int, target_date)).fetchone()
+            qty_sold   = (existing['qty_sold']   if existing else 0) or 0
+            qty_wasted = (existing['qty_wasted'] if existing else 0) or 0
+            conn.execute('''INSERT INTO pastry_sales
+                (item_id, date, qty_sold, qty_returned, qty_wasted,
+                 recorded_by, recorded_at, notes)
+                VALUES (?,?,?,?,?,?,?,?)
+                ON CONFLICT(item_id, date) DO UPDATE SET
+                  qty_returned = excluded.qty_returned,
+                  recorded_by  = excluded.recorded_by,
+                  recorded_at  = excluded.recorded_at,
+                  notes        = excluded.notes''',
+                (iid_int, target_date, qty_sold, qty_ret_int, qty_wasted,
+                 recorded_by, now, note))
+    return redirect(url_for('pastry.pastry_returns', date=target_date, saved=1))
+
+
+@pastry.route('/returns/report')
+@_login_required
+def pastry_returns_report():
+    """Aggregate returns by item across a chosen month (or arbitrary range).
+    Money refunded = qty_returned × cost_price (what supplier owes back)."""
+    month = request.args.get('month', '').strip()
+    if not month:
+        month = date.today().strftime('%Y-%m')
+    try:
+        y, m = month.split('-')
+        y_i, m_i = int(y), int(m)
+        first = date(y_i, m_i, 1)
+        if m_i == 12:
+            last = date(y_i + 1, 1, 1) - timedelta(days=1)
+        else:
+            last = date(y_i, m_i + 1, 1) - timedelta(days=1)
+    except Exception:
+        first = date.today().replace(day=1)
+        last  = first
+        month = first.strftime('%Y-%m')
+
+    date_from = request.args.get('from') or first.isoformat()
+    date_to   = request.args.get('to')   or last.isoformat()
+
+    with _get_db() as conn:
+        rows = [dict(r) for r in conn.execute('''
+            SELECT i.id,
+                   i.name_en, i.name_vi, i.cost_price, i.selling_price,
+                   s.name AS supplier_name,
+                   SUM(COALESCE(ps.qty_returned, 0)) AS total_returned,
+                   COUNT(CASE WHEN ps.qty_returned > 0 THEN 1 END) AS return_days,
+                   MIN(ps.date) AS first_return,
+                   MAX(ps.date) AS last_return
+            FROM pastry_sales ps
+            JOIN pastry_items i ON i.id = ps.item_id
+            LEFT JOIN pastry_suppliers s ON s.id = i.supplier_id
+            WHERE ps.date BETWEEN ? AND ? AND ps.qty_returned > 0
+            GROUP BY i.id
+            ORDER BY total_returned DESC, i.name_en
+        ''', (date_from, date_to)).fetchall()]
+
+    for r in rows:
+        r['refund_amount'] = (r['total_returned'] or 0) * (r['cost_price'] or 0)
+
+    total_qty    = sum(r['total_returned'] for r in rows)
+    total_refund = sum(r['refund_amount']  for r in rows)
+
+    # Daily timeline (small chart on the page) — qty per day
+    with _get_db() as conn:
+        daily_rows = [dict(r) for r in conn.execute('''
+            SELECT date, SUM(qty_returned) AS qty
+            FROM pastry_sales WHERE date BETWEEN ? AND ? AND qty_returned > 0
+            GROUP BY date ORDER BY date''', (date_from, date_to)).fetchall()]
+    max_day_qty = max((d['qty'] for d in daily_rows), default=1)
+
+    return render_template('pastry_returns_report.html',
+        rows=rows, daily=daily_rows, max_day_qty=max_day_qty,
+        month=month, date_from=date_from, date_to=date_to,
+        total_qty=total_qty, total_refund=total_refund,
+        is_admin=_is_admin())
+
+
 @pastry.route('/weekly')
 @_login_required
 def pastry_weekly():

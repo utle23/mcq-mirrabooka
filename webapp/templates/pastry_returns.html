@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+{% block title %}Pastry Returns{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-rotate-left me-2" style="color:#AB47BC"></i>Pastry Returns</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.kpi-card {
+  background: #fff; border: 1px solid #e8eaed; border-radius: 12px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.04);
+  padding: 14px 18px; text-align: center;
+}
+.kpi-card .label { font-size: 0.72rem; color: #888; text-transform: uppercase; letter-spacing: .08em; }
+.kpi-card .value { font-size: 1.7rem; font-weight: 800; }
+
+.return-row {
+  background: #fff; border: 1px solid #e8eaed; border-radius: 10px;
+  padding: 12px 16px; margin-bottom: 10px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.03);
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+}
+.return-row.not-returnable { opacity: .65; background: #fafbfc; }
+.return-row .info { flex: 1 1 280px; min-width: 0; }
+.return-row .name-en { font-weight: 700; color: #1A1A2E; }
+.return-row .name-vi { color: #777; font-size: 0.84rem; }
+.return-row .meta { color: #555; font-size: 0.82rem; margin-top: 2px; }
+.return-row .meta strong { color: #1A1A2E; }
+.return-row .qty-cell {
+  display: flex; align-items: center; gap: 8px;
+  background: #FFF8E1; padding: 6px 12px; border-radius: 8px;
+  border: 1px solid #FFE082;
+}
+.return-row .qty-cell input { width: 80px; }
+.return-row .refund {
+  font-weight: 700; font-size: 0.95rem; color: #2E7D32;
+  background: #E8F5E9; padding: 4px 10px; border-radius: 8px;
+  min-width: 90px; text-align: right;
+}
+.return-row .note-input { flex: 1 1 200px; }
+.return-row .pill {
+  display: inline-block; padding: 1px 9px; border-radius: 10px;
+  font-size: 0.7rem; font-weight: 700; color: #fff;
+}
+.empty-state {
+  background: #f7f9fb; border: 1px dashed #ccd; border-radius: 10px;
+  padding: 22px; text-align: center; color: #888;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+
+{% if request.args.get('saved') %}
+<div class="alert alert-success py-2 small">
+  <i class="fas fa-check-circle me-1"></i>Returns saved.
+</div>
+{% endif %}
+
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+  <div>
+    <h5 class="fw-bold mb-0">Pastry Returns</h5>
+    <div class="text-muted small">
+      Enter how many of each item you're sending back to the supplier today.
+      Refund amount is calculated automatically from the item cost price.
+    </div>
+  </div>
+  <div class="d-flex gap-2 align-items-center flex-wrap">
+    <form method="GET" class="d-flex gap-2 align-items-center">
+      <input type="date" name="date" class="form-control form-control-sm" value="{{ date }}">
+      <button type="submit" class="btn btn-sm btn-outline-secondary">
+        <i class="fas fa-calendar-day me-1"></i>Go
+      </button>
+    </form>
+    <a href="/pastry/returns/report" class="btn btn-sm btn-primary">
+      <i class="fas fa-chart-line me-1"></i>Report
+    </a>
+  </div>
+</div>
+
+<!-- KPI strip -->
+<div class="row g-3 mb-3">
+  <div class="col-6 col-md-4">
+    <div class="kpi-card" style="border-top:3px solid #1565C0">
+      <div class="label">Received Today</div>
+      <div class="value" style="color:#1565C0">{{ total_recv }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4">
+    <div class="kpi-card" style="border-top:3px solid #FB8C00">
+      <div class="label">Returning to Supplier</div>
+      <div class="value" style="color:#FB8C00">{{ total_returned }}</div>
+    </div>
+  </div>
+  <div class="col-12 col-md-4">
+    <div class="kpi-card" style="border-top:3px solid #2E7D32">
+      <div class="label">Refund Amount</div>
+      <div class="value" style="color:#2E7D32">${{ '%.2f'|format(total_refund) }}</div>
+    </div>
+  </div>
+</div>
+
+{% if not rows %}
+<div class="empty-state">
+  <i class="fas fa-boxes-stacked fa-2x mb-2 d-block opacity-25"></i>
+  No pastries received on <strong>{{ date }}</strong>. Record deliveries on the
+  <a href="/pastry/today">Today's Pastry</a> page first, then come back here to log returns.
+</div>
+{% else %}
+
+<form method="POST" action="/pastry/returns/save">
+  <input type="hidden" name="date" value="{{ date }}">
+
+  <div class="card shadow-sm mb-3" style="border-left:4px solid #AB47BC">
+    <div class="card-body py-3">
+      <div class="row g-2 align-items-end">
+        <div class="col-md-4">
+          <label class="form-label fw-semibold small mb-1">Recorded by</label>
+          <input type="text" name="recorded_by" class="form-control form-control-sm"
+                 list="staff-list" placeholder="Staff name" required>
+          <datalist id="staff-list">
+            {% for s in staff_list %}<option value="{{ s }}">{% endfor %}
+          </datalist>
+        </div>
+        <div class="col-md-8 text-muted small">
+          <i class="fas fa-info-circle me-1"></i>Tip: only items received on this date are shown.
+          Items not flagged <em>returnable</em> are shown but disabled — change that in
+          <a href="/pastry/items">Manage Items</a> if needed.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% for r in rows %}
+  <div class="return-row {% if not r.returnable %}not-returnable{% endif %}"
+       data-cost="{{ r.cost_price }}" id="row-{{ r.id }}">
+    <input type="hidden" name="item_id[]" value="{{ r.id }}">
+    <div class="info">
+      <div class="name-en">{{ r.name_en }}
+        {% if not r.returnable %}
+        <span class="pill bg-secondary ms-1" title="This item is not marked returnable">N/R</span>
+        {% endif %}
+        {% if r.delivery_condition and r.delivery_condition != 'good' %}
+        <span class="pill bg-warning text-dark ms-1">{{ r.delivery_condition|upper }}</span>
+        {% endif %}
+      </div>
+      {% if r.name_vi %}<div class="name-vi">{{ r.name_vi }}</div>{% endif %}
+      <div class="meta">
+        <strong>Supplier:</strong> {{ r.supplier_name or '—' }} ·
+        <strong>Received:</strong> {{ r.qty_received }} ·
+        <strong>Cost:</strong> ${{ '%.2f'|format(r.cost_price) }}
+      </div>
+    </div>
+
+    <div class="qty-cell">
+      <label class="small fw-semibold mb-0" for="qty_{{ r.id }}">Return</label>
+      <input type="number" id="qty_{{ r.id }}"
+             name="qty_returned_{{ r.id }}"
+             class="form-control form-control-sm qty-input"
+             min="0" max="{{ r.qty_received if r.qty_received else 999 }}"
+             value="{{ r.qty_returned }}"
+             {% if not r.returnable %}disabled{% endif %}
+             oninput="updateRefund({{ r.id }})">
+      <span class="text-muted small">/ {{ r.qty_received }}</span>
+    </div>
+
+    <input type="text" name="note_{{ r.id }}" class="form-control form-control-sm note-input"
+           value="{{ r.note }}" placeholder="Optional note (e.g. mouldy, broken)">
+
+    <div class="refund" id="refund-{{ r.id }}">
+      $0.00
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="d-flex gap-2 mt-3 flex-wrap align-items-center">
+    <button type="submit" class="btn btn-success">
+      <i class="fas fa-save me-1"></i>Save Returns
+    </button>
+    <a href="/pastry/returns/report" class="btn btn-outline-primary">
+      <i class="fas fa-chart-line me-1"></i>View Report
+    </a>
+    <span class="text-muted small ms-auto">
+      Running total refund: <strong id="grand-refund" style="color:#2E7D32">${{ '%.2f'|format(total_refund) }}</strong>
+    </span>
+  </div>
+</form>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function updateRefund(itemId) {
+  const row    = document.getElementById('row-' + itemId);
+  const input  = document.getElementById('qty_' + itemId);
+  const cost   = parseFloat(row.dataset.cost || '0') || 0;
+  const qty    = parseInt(input.value || '0', 10) || 0;
+  const refund = qty * cost;
+  document.getElementById('refund-' + itemId).textContent = '$' + refund.toFixed(2);
+
+  // Recompute grand total
+  let grand = 0;
+  document.querySelectorAll('.return-row').forEach(r => {
+    const c = parseFloat(r.dataset.cost || '0') || 0;
+    const i = r.querySelector('.qty-input');
+    const v = i ? (parseInt(i.value || '0', 10) || 0) : 0;
+    grand += c * v;
+  });
+  document.getElementById('grand-refund').textContent = '$' + grand.toFixed(2);
+}
+
+// Initial render
+document.querySelectorAll('.return-row').forEach(r => {
+  const id = r.id.replace('row-', '');
+  updateRefund(id);
+});
+</script>
+{% endblock %}
