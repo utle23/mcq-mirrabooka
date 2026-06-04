@@ -6,14 +6,123 @@
 
 {% block head %}
 <style>
-.ss-card { background:#fff; border:1px solid #e8eaed; border-radius:16px; box-shadow:0 2px 12px rgba(0,0,0,.06); overflow:hidden; }
+:root {
+  --ss-navy:#1A2740;
+  --ss-panel:#2D415F;
+  --ss-gold:#BD975C;
+  --ss-cream:#FAF6EC;
+  --ss-muted:#8F8678;
+}
 .ss-toolbar { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px; }
-.ss-frame { background:#FAF6EC; padding:18px; border-radius:14px; border:1px solid #ece3cf; text-align:center; }
-.ss-frame img { max-width:100%; height:auto; border-radius:8px; box-shadow:0 4px 20px rgba(0,0,0,.10); }
 .ss-meta { color:#888; font-size:.82rem; }
-.ss-empty { background:#f7f9fb; border:2px dashed #ccd; border-radius:12px; padding:48px 20px; text-align:center; color:#999; }
-.btn-ss { border-radius:10px; font-weight:600; }
-.upload-box { border:1px dashed #c9cfd6; border-radius:12px; padding:14px; background:#fbfcfd; }
+.btn-ss { border-radius:10px; font-weight:700; }
+.ss-live {
+  background:var(--ss-cream);
+  border:2px solid var(--ss-gold);
+  outline:1px solid #d8c29a;
+  outline-offset:-12px;
+  border-radius:6px;
+  padding:38px 42px 42px;
+  position:relative;
+  overflow:hidden;
+  box-shadow:0 4px 24px rgba(0,0,0,.08);
+}
+.ss-logo {
+  width:74px; height:74px; object-fit:contain; display:block;
+  margin:4px auto 18px; background:#fff; border:1px solid var(--ss-gold);
+  border-radius:12px; padding:8px;
+}
+.ss-title { text-align:center; color:var(--ss-navy); font-family:Georgia, serif; font-size:2.4rem; font-weight:800; letter-spacing:.04em; line-height:1.1; }
+.ss-banner {
+  width:min(520px, 90%); margin:20px auto 10px; background:var(--ss-panel);
+  color:#fff; border:3px solid var(--ss-gold); text-align:center;
+  font-size:1.25rem; font-weight:800; letter-spacing:.42em; padding:8px 14px;
+}
+.ss-subtitle { text-align:center; color:var(--ss-muted); font-family:Georgia, serif; font-style:italic; letter-spacing:.08em; margin-bottom:70px; }
+.ss-manager { display:flex; justify-content:center; margin-bottom:44px; position:relative; }
+.ss-manager::after { content:''; position:absolute; left:50%; bottom:-45px; height:45px; border-left:2px solid var(--ss-gold); }
+.ss-manager-card {
+  width:330px; background:var(--ss-panel); color:#fff; border:3px solid var(--ss-gold);
+  text-align:center; padding:18px 20px 20px;
+}
+.ss-manager-card .role { color:var(--ss-gold); font-size:.78rem; font-weight:800; letter-spacing:.5em; margin-bottom:8px; }
+.ss-manager-card .name { font-family:Georgia, serif; font-size:2.15rem; font-weight:800; line-height:1; }
+.ss-rule { height:2px; background:var(--ss-gold); margin:0 10% 38px; }
+.ss-grid {
+  display:grid;
+  grid-template-columns:repeat(6, minmax(0, 1fr));
+  gap:18px;
+  align-items:start;
+}
+.ss-dept { text-align:center; --accent:#1A3A5C; }
+.ss-dept-card {
+  background:#fff; border:2px solid var(--accent); min-height:146px;
+}
+.ss-dept-title {
+  background:var(--accent); color:#fff; font-weight:800; letter-spacing:.2em;
+  padding:10px 6px; font-size:.72rem;
+  white-space:nowrap;
+}
+.ss-lead-name { font-family:Georgia, serif; color:var(--accent); font-weight:800; font-size:1.55rem; line-height:1; padding:22px 6px 10px; }
+.ss-lead-badge {
+  display:inline-block; min-width:76px; background:var(--accent); color:#fff;
+  padding:5px 12px; margin-bottom:16px; font-size:.78rem; font-weight:800; letter-spacing:.26em;
+}
+.ss-stack { display:flex; flex-direction:column; align-items:center; color:var(--accent); }
+.ss-stem { height:25px; border-left:2px solid var(--accent); }
+.ss-level {
+  min-width:96px; border:2px solid var(--accent); background:#eef7ff;
+  font-size:.68rem; font-weight:800; letter-spacing:.24em; padding:3px 6px;
+}
+.ss-person {
+  min-width:104px; border:2px solid var(--accent); background:#fff;
+  font-family:Georgia, serif; font-size:1.08rem; font-weight:800;
+  padding:7px 10px; margin-bottom:12px;
+}
+.ss-footer {
+  display:flex; justify-content:space-between; gap:16px; color:var(--ss-muted);
+  font-size:.72rem; letter-spacing:.28em; margin-top:78px;
+}
+.ss-admin {
+  background:#fff; border:1px solid #e8eaed; border-radius:14px;
+  box-shadow:0 2px 12px rgba(0,0,0,.05); padding:16px; margin-top:18px;
+}
+.ss-admin h6 { font-weight:800; color:var(--ss-navy); }
+.ss-admin-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:12px; }
+.ss-edit-row {
+  display:grid; grid-template-columns:1fr 86px 1fr 84px auto; gap:6px;
+  align-items:center; border-top:1px solid #eef0f3; padding-top:8px; margin-top:8px;
+}
+.ss-member-row {
+  display:grid; grid-template-columns:96px 1fr auto; gap:6px;
+  align-items:center; margin-top:6px;
+}
+.ss-icon-btn { width:32px; height:32px; display:inline-flex; align-items:center; justify-content:center; padding:0; }
+.legacy-frame { background:#fbfcfd; border:1px dashed #c9cfd6; border-radius:12px; padding:14px; }
+.legacy-frame img { max-width:100%; height:auto; border-radius:8px; }
+@media (min-width: 1280px) {
+  .ss-grid { gap:22px; }
+  .ss-lead-name { font-size:1.8rem; }
+  .ss-level { min-width:125px; font-size:.78rem; letter-spacing:.28em; }
+  .ss-person { min-width:135px; font-size:1.22rem; }
+}
+@media (max-width: 1100px) {
+  .ss-grid { grid-template-columns:repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 700px) {
+  .ss-live { padding:24px 18px 28px; }
+  .ss-title { font-size:1.75rem; }
+  .ss-banner { letter-spacing:.2em; font-size:1rem; }
+  .ss-subtitle { margin-bottom:42px; }
+  .ss-rule { margin-left:0; margin-right:0; }
+  .ss-grid { grid-template-columns:1fr; }
+  .ss-dept-title { letter-spacing:.32em; font-size:.85rem; }
+  .ss-lead-name { font-size:1.8rem; }
+  .ss-level { min-width:125px; font-size:.78rem; letter-spacing:.28em; }
+  .ss-person { min-width:135px; font-size:1.22rem; }
+  .ss-edit-row, .ss-member-row { grid-template-columns:1fr; }
+  .ss-footer { flex-direction:column; letter-spacing:.12em; }
+}
 </style>
 {% endblock %}
 
@@ -21,47 +130,163 @@
 <div class="ss-toolbar">
   <div>
     <div class="fw-bold fs-5">Restaurant Staff Structure</div>
-    {% if updated_at %}<div class="ss-meta"><i class="fas fa-clock me-1"></i>Last updated {{ updated_at }}{% if updated_by and updated_by != 'seed' %} by {{ updated_by }}{% endif %}</div>{% endif %}
+    {% if chart.settings.live_updated_at %}
+    <div class="ss-meta"><i class="fas fa-clock me-1"></i>Last updated {{ chart.settings.live_updated_at }}{% if chart.settings.live_updated_by and chart.settings.live_updated_by not in ['seed', 'seed-upgrade'] %} by {{ chart.settings.live_updated_by }}{% endif %}</div>
+    {% endif %}
   </div>
   <div class="d-flex gap-2">
-    {% if has_image %}
     <a href="/structure/pdf" target="_blank" class="btn btn-ss text-white" style="background:#1A3A5C">
       <i class="fas fa-file-pdf me-1"></i>Export PDF
     </a>
     <a href="/structure/image" download class="btn btn-ss btn-outline-secondary">
       <i class="fas fa-download me-1"></i>Download Image
     </a>
-    {% endif %}
   </div>
 </div>
 
-<div class="ss-card p-3 mb-3">
-  {% if has_image %}
-  <div class="ss-frame">
-    <img src="{{ img_url }}" alt="MCQ Mirrabooka Staff Structure">
+<section class="ss-live">
+  <img class="ss-logo" src="/static/logo.png" alt="MCQ">
+  <div class="ss-title">MCQ Mirrabooka Restaurant</div>
+  <div class="ss-banner">STAFF STRUCTURE</div>
+  <div class="ss-subtitle">Reporting lines & staff levels by department</div>
+
+  <div class="ss-manager">
+    <div class="ss-manager-card">
+      <div class="role">{{ chart.settings.manager_title or 'MANAGER' }}</div>
+      <div class="name">{{ chart.settings.manager_name or '—' }}</div>
+    </div>
   </div>
-  {% else %}
-  <div class="ss-empty">
-    <i class="fas fa-sitemap fa-2x mb-2 d-block opacity-25"></i>
-    No staff structure uploaded yet.
-    {% if is_admin %}Use the upload box below to add one.{% else %}Ask an admin to upload the chart.{% endif %}
+  <div class="ss-rule"></div>
+
+  <div class="ss-grid">
+    {% for dept in chart.departments %}
+    <div class="ss-dept" style="--accent:{{ dept.color }}">
+      <div class="ss-dept-card">
+        <div class="ss-dept-title">{{ dept.name }}</div>
+        <div class="ss-lead-name">{{ dept.lead_name or '—' }}</div>
+        <div class="ss-lead-badge">{{ dept.lead_badge or 'LEAD' }}</div>
+      </div>
+      {% if dept.members %}
+      <div class="ss-stack">
+        <div class="ss-stem"></div>
+        {% for member in dept.members %}
+          {% if member.level_label %}
+          <div class="ss-level">{{ member.level_label }}</div>
+          <div class="ss-stem"></div>
+          {% endif %}
+          <div class="ss-person">{{ member.staff_name }}</div>
+          {% if not loop.last %}<div class="ss-stem"></div>{% endif %}
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
   </div>
-  {% endif %}
-</div>
+
+  <div class="ss-footer">
+    <span>MCQ MIRRABOOKA RESTAURANT</span>
+    <span>CONFIDENTIAL</span>
+  </div>
+</section>
 
 {% if is_admin %}
-<div class="ss-card p-3">
-  <h6 class="fw-bold mb-2"><i class="fas fa-cloud-arrow-up me-1"></i>Update Structure</h6>
-  <p class="text-muted small mb-3">When the staff structure changes, upload the new chart here. PNG, JPG, WEBP or PDF — the page and the PDF export update automatically.</p>
-  <form method="POST" action="/structure/upload" enctype="multipart/form-data" class="upload-box">
+<section class="ss-admin">
+  <h6 class="mb-3"><i class="fas fa-pen-to-square me-1"></i>Live Editor</h6>
+  <div class="ss-admin-grid">
+    <form method="POST" action="/structure/settings" class="border rounded p-3">
+      <div class="fw-semibold small mb-2">Manager</div>
+      <input name="manager_title" class="form-control form-control-sm mb-2" value="{{ chart.settings.manager_title or 'MANAGER' }}" placeholder="Title">
+      <input name="manager_name" class="form-control form-control-sm mb-2" value="{{ chart.settings.manager_name or '' }}" placeholder="Name" list="staff-list">
+      <button class="btn btn-sm btn-ss text-white" style="background:#1A3A5C">
+        <i class="fas fa-save me-1"></i>Save Manager
+      </button>
+    </form>
+
+    <form method="POST" action="/structure/department/add" class="border rounded p-3">
+      <div class="fw-semibold small mb-2">Add Department</div>
+      <div class="row g-2">
+        <div class="col-7"><input name="name" class="form-control form-control-sm" placeholder="Department" required></div>
+        <div class="col-5"><input type="color" name="color" class="form-control form-control-sm form-control-color w-100" value="#1A3A5C"></div>
+        <div class="col-7"><input name="lead_name" class="form-control form-control-sm" placeholder="Lead name" list="staff-list"></div>
+        <div class="col-5"><input name="lead_badge" class="form-control form-control-sm" placeholder="LEAD" value="LEAD"></div>
+      </div>
+      <button class="btn btn-sm btn-ss text-white mt-2" style="background:#1A3A5C">
+        <i class="fas fa-plus me-1"></i>Add Department
+      </button>
+    </form>
+
+    <form method="POST" action="/structure/member/add" class="border rounded p-3">
+      <div class="fw-semibold small mb-2">Add Level / Staff</div>
+      <select name="department_id" class="form-select form-select-sm mb-2" required>
+        <option value="">Department</option>
+        {% for dept in chart.departments %}<option value="{{ dept.id }}">{{ dept.name }}</option>{% endfor %}
+      </select>
+      <input name="level_label" class="form-control form-control-sm mb-2" placeholder="LEVEL 2">
+      <input name="staff_name" class="form-control form-control-sm mb-2" placeholder="Staff name" list="staff-list" required>
+      <button class="btn btn-sm btn-ss text-white" style="background:#1A3A5C">
+        <i class="fas fa-plus me-1"></i>Add Level
+      </button>
+    </form>
+  </div>
+
+  <datalist id="staff-list">
+    {% for name in staff_options %}<option value="{{ name }}">{% endfor %}
+  </datalist>
+
+  <div class="mt-3">
+    {% for dept in chart.departments %}
+    <details class="border rounded p-2 mb-2">
+      <summary class="fw-semibold" style="color:{{ dept.color }}">{{ dept.name }}</summary>
+      <form method="POST" action="/structure/department/{{ dept.id }}/update" class="ss-edit-row">
+        <input name="name" class="form-control form-control-sm" value="{{ dept.name }}" required>
+        <input type="color" name="color" class="form-control form-control-sm form-control-color w-100" value="{{ dept.color }}">
+        <input name="lead_name" class="form-control form-control-sm" value="{{ dept.lead_name }}" list="staff-list" placeholder="Lead">
+        <input name="lead_badge" class="form-control form-control-sm" value="{{ dept.lead_badge or 'LEAD' }}">
+        <div class="d-flex gap-1">
+          <button class="btn btn-sm btn-outline-success ss-icon-btn" title="Save"><i class="fas fa-save"></i></button>
+          <button formaction="/structure/department/{{ dept.id }}/move/up" class="btn btn-sm btn-outline-secondary ss-icon-btn" title="Move up"><i class="fas fa-arrow-left"></i></button>
+          <button formaction="/structure/department/{{ dept.id }}/move/down" class="btn btn-sm btn-outline-secondary ss-icon-btn" title="Move down"><i class="fas fa-arrow-right"></i></button>
+          <button formaction="/structure/department/{{ dept.id }}/delete" class="btn btn-sm btn-outline-danger ss-icon-btn" title="Delete" onclick="return confirm('Remove {{ dept.name }} from the live chart?')"><i class="fas fa-trash"></i></button>
+        </div>
+      </form>
+
+      {% for member in dept.members %}
+      <form method="POST" action="/structure/member/{{ member.id }}/update" class="ss-member-row">
+        <select name="department_id" class="form-select form-select-sm">
+          {% for d in chart.departments %}<option value="{{ d.id }}" {% if d.id == dept.id %}selected{% endif %}>{{ d.name }}</option>{% endfor %}
+        </select>
+        <div class="d-flex gap-1">
+          <input name="level_label" class="form-control form-control-sm" value="{{ member.level_label }}" placeholder="LEVEL 2">
+          <input name="staff_name" class="form-control form-control-sm" value="{{ member.staff_name }}" list="staff-list" required>
+        </div>
+        <div class="d-flex gap-1">
+          <button class="btn btn-sm btn-outline-success ss-icon-btn" title="Save"><i class="fas fa-save"></i></button>
+          <button formaction="/structure/member/{{ member.id }}/move/up" class="btn btn-sm btn-outline-secondary ss-icon-btn" title="Move up"><i class="fas fa-arrow-up"></i></button>
+          <button formaction="/structure/member/{{ member.id }}/move/down" class="btn btn-sm btn-outline-secondary ss-icon-btn" title="Move down"><i class="fas fa-arrow-down"></i></button>
+          <button formaction="/structure/member/{{ member.id }}/delete" class="btn btn-sm btn-outline-danger ss-icon-btn" title="Delete" onclick="return confirm('Remove {{ member.staff_name }} from {{ dept.name }}?')"><i class="fas fa-trash"></i></button>
+        </div>
+      </form>
+      {% else %}
+      <div class="text-muted small mt-2">No lower levels yet.</div>
+      {% endfor %}
+    </details>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="ss-admin">
+  <h6 class="mb-2"><i class="fas fa-cloud-arrow-up me-1"></i>Legacy Upload</h6>
+  <form method="POST" action="/structure/upload" enctype="multipart/form-data" class="legacy-frame">
     <div class="d-flex gap-2 flex-wrap align-items-center">
       <input type="file" name="image" accept="image/*,application/pdf" class="form-control" style="max-width:380px" required>
       <button type="submit" class="btn btn-ss text-white" style="background:#1A3A5C">
-        <i class="fas fa-upload me-1"></i>Upload & Replace
+        <i class="fas fa-upload me-1"></i>Upload
       </button>
+      {% if has_image %}
+      <a href="{{ img_url }}" target="_blank" class="btn btn-sm btn-outline-secondary">View Uploaded Chart</a>
+      {% endif %}
     </div>
-    <div class="text-muted small mt-2"><i class="fas fa-circle-info me-1"></i>The new image replaces the current one for everyone.</div>
   </form>
-</div>
+</section>
 {% endif %}
 {% endblock %}
