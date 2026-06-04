@@ -227,6 +227,9 @@
 <script>
 const PDF_URL = '/whatsapp/pdf?date={{ date }}';
 const PDF_FNAME = 'MCQ_Daily_Report_{{ date }}.pdf';
+let preparedPdf = null;
+let preparePdfPromise = null;
+let preparePdfTimer = null;
 
 // Load PDF preview inside iframe
 (function loadPreview() {
@@ -250,40 +253,111 @@ const PDF_FNAME = 'MCQ_Daily_Report_{{ date }}.pdf';
   }, 4000);
 })();
 
+function pdfText() {
+  return 'MCQ Mirrabooka Cafe - daily operations report ({{ date }})';
+}
+
+function downloadPdf(blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = PDF_FNAME;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+function openPdfFallback(blob, status, reason = '') {
+  downloadPdf(blob);
+  const text = encodeURIComponent(pdfText() + '\n\n(The PDF has been downloaded - attach it to the WhatsApp message)');
+  const whatsappUrl = `https://wa.me/?text=${text}`;
+  const popup = window.open(whatsappUrl, '_blank');
+  if (popup) {
+    popup.opener = null;
+  } else {
+    window.location.href = whatsappUrl;
+  }
+
+  const prefix = reason ? reason + ' ' : '';
+  status.innerHTML = '<i class="fas fa-info-circle"></i> ' + prefix + 'PDF downloaded - attach it to WhatsApp manually.';
+}
+
+function sharePdfBlockedMessage(e) {
+  if (e && e.name === 'NotAllowedError') {
+    return 'Native share is blocked in this browser/context.';
+  }
+  return 'Native PDF share is unavailable here.';
+}
+
+async function preparePdf({ silent = false } = {}) {
+  if (preparedPdf) return preparedPdf;
+  if (preparePdfPromise) return preparePdfPromise;
+
+  const status = document.getElementById('shareStatus');
+  if (!silent) {
+    status.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating PDF...';
+  } else if (!status.textContent.trim()) {
+    status.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing PDF...';
+  }
+
+  preparePdfPromise = fetch(PDF_URL + '&_t=' + Date.now())
+    .then(async resp => {
+      if (!resp.ok) throw new Error('PDF generation failed (HTTP ' + resp.status + ')');
+      const blob = await resp.blob();
+      const file = new File([blob], PDF_FNAME, { type: 'application/pdf' });
+      preparedPdf = { blob, file };
+      status.innerHTML = '<i class="fas fa-check-circle"></i> PDF ready to share.';
+      return preparedPdf;
+    })
+    .catch(e => {
+      if (!silent) {
+        status.innerHTML = '<i class="fas fa-circle-exclamation"></i> ' + e.message;
+      }
+      throw e;
+    })
+    .finally(() => {
+      preparePdfPromise = null;
+    });
+
+  return preparePdfPromise;
+}
+
+function queuePreparePdf() {
+  clearTimeout(preparePdfTimer);
+  preparePdfTimer = setTimeout(() => {
+    preparePdf({ silent: true }).catch(() => {});
+  }, 700);
+}
+
 async function sharePdf() {
   const status = document.getElementById('shareStatus');
   const btn = document.getElementById('shareBtn');
   btn.disabled = true;
-  status.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating PDF…';
 
   try {
-    const resp = await fetch(PDF_URL + '&_t=' + Date.now());
-    if (!resp.ok) throw new Error('PDF generation failed (HTTP ' + resp.status + ')');
-    const blob = await resp.blob();
-    const file = new File([blob], PDF_FNAME, { type: 'application/pdf' });
+    if (!preparedPdf) {
+      await preparePdf({ silent: false });
+      status.innerHTML = '<i class="fas fa-check-circle"></i> PDF is ready. Tap Share PDF to WhatsApp again to open the share sheet.';
+      return;
+    }
 
     status.innerHTML = '<i class="fas fa-share-alt"></i> Opening share sheet…';
 
+    const { blob, file } = preparedPdf;
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       await navigator.share({
         files: [file],
         title: 'MCQ Daily Report — {{ date }}',
-        text:  'MCQ Mirrabooka Cafe — daily operations report ({{ date }})',
+        text:  pdfText(),
       });
       status.innerHTML = '<i class="fas fa-check-circle"></i> Pick a WhatsApp group from the share sheet.';
     } else {
-      // Desktop fallback: download + open WhatsApp Web to compose with text
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = PDF_FNAME; a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1500);
-      const text = encodeURIComponent('MCQ Mirrabooka Cafe — daily operations report ({{ date }})\n\n(The PDF has been downloaded — attach it to the WhatsApp message)');
-      setTimeout(() => window.open(`https://wa.me/?text=${text}`, '_blank'), 800);
-      status.innerHTML = '<i class="fas fa-info-circle"></i> PDF downloaded — attach it to WhatsApp manually (sharing this way needs a phone or Chrome/Edge).';
+      openPdfFallback(blob, status);
     }
   } catch (e) {
     if (e.name === 'AbortError') {
       status.innerHTML = '<i class="fas fa-circle-info"></i> Share cancelled.';
+    } else if (preparedPdf) {
+      openPdfFallback(preparedPdf.blob, status, sharePdfBlockedMessage(e));
     } else {
       status.innerHTML = '<i class="fas fa-circle-exclamation"></i> ' + e.message;
     }
@@ -291,5 +365,7 @@ async function sharePdf() {
     btn.disabled = false;
   }
 }
+
+queuePreparePdf();
 </script>
 {% endblock %}
