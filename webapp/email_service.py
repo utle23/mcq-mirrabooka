@@ -1044,6 +1044,9 @@ def collect_daily_digest(target_date: str, checklists_meta: dict | None = None,
                 v = r.get(f'c{n}_temp')
                 if v is None:
                     continue
+                # Pastry hot display: 3rd check is informational — no alert.
+                if r.get('temp_type') == 'pastry' and n == 3:
+                    continue
                 unsafe = (kind == 'cold' and v > 5) or (kind == 'hot' and v < 60)
                 if unsafe:
                     bad.append(f'{v}°C')
@@ -1102,10 +1105,20 @@ def collect_daily_digest(target_date: str, checklists_meta: dict | None = None,
         except sqlite3.OperationalError:
             pass
 
+        # ── Equipment temperatures today (fridges / freezers / hot units) ──
+        equipment = None
+        try:
+            import equipment_routes
+            equipment_routes.DB_PATH = DB_PATH
+            equipment = equipment_routes.collect_equipment_for_date(conn, target_date)
+        except Exception:
+            equipment = None
+
     prep_week = collect_weekly_prep(target_date)
 
     return {
         'date': target_date,
+        'equipment': equipment,
         'checklist_matrix': checklist_matrix,
         'chk_total_done':   chk_total_done,
         'chk_total_late':   chk_total_late,
@@ -1354,6 +1367,37 @@ def build_digest_html(data: dict, base_url: str = '') -> str:
 
     prep_html = build_prep_week_section_html(data.get('prep_week') or {}, base_url=base_url)
 
+    # Equipment temperatures (fridges / freezers / hot units)
+    equipment_html = ''
+    equip = data.get('equipment')
+    if equip and equip.get('total'):
+        kind_lbl = {'cold': 'Fridge 0–5°C', 'freezer': 'Freezer -20 to -15°C', 'hot': 'Hot ≥60°C'}
+        eq_rows = []
+        for u in equip['units']:
+            if u['temp'] is None:
+                temp_cell = '<td style="padding:7px;text-align:center;background:#fff;border:1px solid #eef0f3;color:#bbb;font-size:12px">— not recorded</td>'
+            else:
+                col = '#C62828' if u['unsafe'] else '#1B5E20'
+                bg  = '#FFEBEE' if u['unsafe'] else '#F1F8E9'
+                bd  = '#F0A9A0' if u['unsafe'] else '#C5E1A5'
+                tag = 'OUT OF RANGE' if u['unsafe'] else 'OK'
+                temp_cell = (f'<td style="padding:7px;background:{bg};border:1px solid {bd};font-size:12px;text-align:center">'
+                             f'<b style="color:{col};font-size:14px">{u["temp"]:g}°C</b> '
+                             f'<span style="color:{col};font-weight:700;font-size:10px">{tag}</span></td>')
+            eq_rows.append(
+                f'<tr><td style="padding:7px;background:#fafafa;border:1px solid #eef0f3;font-weight:700;color:#1A1A2E;font-size:12px">'
+                f'{escape(u["name"])}<div style="color:#888;font-weight:400;font-size:10px">{escape(kind_lbl.get(u["kind"], u["kind"]))}</div></td>'
+                f'{temp_cell}</tr>')
+        equipment_html = (
+            f'<div style="font-size:12px;color:#555;margin-bottom:6px">'
+            f'{equip["recorded"]}/{equip["total"]} recorded · '
+            f'<b style="color:{"#C62828" if equip["alerts"] else "#1B5E20"}">{equip["alerts"]} out of range</b></div>'
+            '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse">'
+            '<tr><th style="padding:8px;background:#00838F;color:#fff;font-size:11px;text-align:left;border:1px solid #00838F">Equipment</th>'
+            '<th style="padding:8px;background:#00838F;color:#fff;font-size:11px;text-align:center;border:1px solid #00838F">Temperature</th></tr>'
+            + ''.join(eq_rows) + '</table>'
+        )
+
     # Link
     link_html = ''
     if base_url:
@@ -1366,6 +1410,8 @@ def build_digest_html(data: dict, base_url: str = '') -> str:
     sections = []
     sections.append(_digest_section_html('Daily Checklists', '#2E7D32', '📋', checklist_html))
     sections.append(_digest_section_html('Temperature Records', '#D84315', '🌡', temp_html + (f'<div style="margin-top:8px">{oos_html}</div>' if oos_html else '')))
+    if equipment_html:
+        sections.append(_digest_section_html('Equipment Temperature', '#00838F', '🧊', equipment_html))
     sections.append(_digest_section_html('Weekly Prep Schedule', '#1565C0', 'Prep', prep_html))
     sections.append(_digest_section_html('Issues Reported', '#E65100', '⚠', issues_html))
     sections.append(_digest_section_html('Staff Violations', '#C62828', '🚨', viol_html))

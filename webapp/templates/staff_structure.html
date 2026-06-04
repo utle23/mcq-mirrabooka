@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Staff Structure{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-sitemap me-2" style="color:#1A3A5C"></i>Staff Structure</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.ss-card { background:#fff; border:1px solid #e8eaed; border-radius:16px; box-shadow:0 2px 12px rgba(0,0,0,.06); overflow:hidden; }
+.ss-toolbar { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px; }
+.ss-frame { background:#FAF6EC; padding:18px; border-radius:14px; border:1px solid #ece3cf; text-align:center; }
+.ss-frame img { max-width:100%; height:auto; border-radius:8px; box-shadow:0 4px 20px rgba(0,0,0,.10); }
+.ss-meta { color:#888; font-size:.82rem; }
+.ss-empty { background:#f7f9fb; border:2px dashed #ccd; border-radius:12px; padding:48px 20px; text-align:center; color:#999; }
+.btn-ss { border-radius:10px; font-weight:600; }
+.upload-box { border:1px dashed #c9cfd6; border-radius:12px; padding:14px; background:#fbfcfd; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="ss-toolbar">
+  <div>
+    <div class="fw-bold fs-5">Restaurant Staff Structure</div>
+    {% if updated_at %}<div class="ss-meta"><i class="fas fa-clock me-1"></i>Last updated {{ updated_at }}{% if updated_by and updated_by != 'seed' %} by {{ updated_by }}{% endif %}</div>{% endif %}
+  </div>
+  <div class="d-flex gap-2">
+    {% if has_image %}
+    <a href="/structure/pdf" target="_blank" class="btn btn-ss text-white" style="background:#1A3A5C">
+      <i class="fas fa-file-pdf me-1"></i>Export PDF
+    </a>
+    <a href="/structure/image" download class="btn btn-ss btn-outline-secondary">
+      <i class="fas fa-download me-1"></i>Download Image
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="ss-card p-3 mb-3">
+  {% if has_image %}
+  <div class="ss-frame">
+    <img src="{{ img_url }}" alt="MCQ Mirrabooka Staff Structure">
+  </div>
+  {% else %}
+  <div class="ss-empty">
+    <i class="fas fa-sitemap fa-2x mb-2 d-block opacity-25"></i>
+    No staff structure uploaded yet.
+    {% if is_admin %}Use the upload box below to add one.{% else %}Ask an admin to upload the chart.{% endif %}
+  </div>
+  {% endif %}
+</div>
+
+{% if is_admin %}
+<div class="ss-card p-3">
+  <h6 class="fw-bold mb-2"><i class="fas fa-cloud-arrow-up me-1"></i>Update Structure</h6>
+  <p class="text-muted small mb-3">When the staff structure changes, upload the new chart here. PNG, JPG, WEBP or PDF — the page and the PDF export update automatically.</p>
+  <form method="POST" action="/structure/upload" enctype="multipart/form-data" class="upload-box">
+    <div class="d-flex gap-2 flex-wrap align-items-center">
+      <input type="file" name="image" accept="image/*,application/pdf" class="form-control" style="max-width:380px" required>
+      <button type="submit" class="btn btn-ss text-white" style="background:#1A3A5C">
+        <i class="fas fa-upload me-1"></i>Upload & Replace
+      </button>
+    </div>
+    <div class="text-muted small mt-2"><i class="fas fa-circle-info me-1"></i>The new image replaces the current one for everyone.</div>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

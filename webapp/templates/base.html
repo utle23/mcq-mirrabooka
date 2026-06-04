@@ -21,6 +21,42 @@
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
 <link href="/static/style.css" rel="stylesheet">
+<style>
+/* ── Collapsible sidebar nav groups ─────────────────────────────── */
+.nav-group { border-bottom: 1px solid rgba(255,255,255,0.05); }
+.nav-group-head {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 11px 14px; background: transparent; border: 0;
+  color: rgba(255,255,255,0.82); font-size: 12.5px; font-weight: 700;
+  letter-spacing: .4px; text-transform: uppercase; cursor: pointer;
+  text-align: left; transition: background .15s, color .15s;
+}
+.nav-group-head:hover { background: rgba(255,255,255,0.06); color: #fff; }
+.nav-group-head .fa-fw { width: 18px; text-align: center; font-size: 14px; }
+.nav-group-head .chev { margin-left: auto; font-size: 10px; opacity: .55; transition: transform .25s; }
+.nav-group.open > .nav-group-head { color: var(--sidebar-active, #52B788); }
+.nav-group.open > .nav-group-head .chev { transform: rotate(180deg); opacity: .9; }
+.nav-group.has-active > .nav-group-head { color: var(--sidebar-active, #52B788); }
+.nav-group.has-active > .nav-group-head::before {
+  content: ''; position: absolute; left: 0; width: 3px; height: 20px;
+  background: var(--sidebar-active, #52B788); border-radius: 0 2px 2px 0;
+}
+.nav-group-head { position: relative; }
+.nav-group-body { max-height: 0; overflow: hidden; transition: max-height .28s ease; }
+.nav-group.open > .nav-group-body { max-height: 720px; }
+.nav-group-body .nav-link-item { padding-left: 34px; font-size: 13px; }
+.nav-group-count {
+  margin-left: 6px; background: rgba(255,255,255,0.12); color: #fff;
+  font-size: 9.5px; font-weight: 700; padding: 1px 6px; border-radius: 9px;
+}
+.nav-solo { margin-bottom: 2px; }
+/* Collapsed (icon-only) sidebar: show every group expanded, icons only */
+.sidebar.collapsed .nav-group-head span,
+.sidebar.collapsed .nav-group-head .chev,
+.sidebar.collapsed .nav-group-count { display: none; }
+.sidebar.collapsed .nav-group-body { max-height: none !important; overflow: visible; }
+.sidebar.collapsed .nav-group-body .nav-link-item { padding-left: 14px; }
+</style>
 {% block head %}{% endblock %}
 </head>
 <body>
@@ -46,155 +82,224 @@
 
     <div class="sidebar-scroll">
       {% if is_admin %}
-      <a href="/" class="nav-link-item {% if current_ep=='dashboard' %}active{% endif %}">
-        <i class="fas fa-tachometer-alt fa-fw"></i><span>Dashboard</span>
+      <a href="/" class="nav-link-item nav-solo {% if current_ep=='dashboard' %}active{% endif %}">
+        <i class="fas fa-gauge-high fa-fw"></i><span>Dashboard</span>
       </a>
       {% endif %}
 
-      <div class="nav-section-label">DAILY CHECKLIST</div>
-      {% for key, chk in checklists.items() %}
-      <a href="/checklist/{{ key }}" class="nav-link-item {% if current_ep in ('checklist_form','checklist_view') and request.view_args.get('chk_type')==key %}active{% endif %}" style="border-left-color:{{ chk.color }}">
-        <i class="fas fa-clipboard-check fa-fw"></i><span>{{ chk.short }}</span>
-      </a>
-      {% endfor %}
+      <!-- ORDERS -->
+      <div class="nav-group" data-group="orders">
+        <button type="button" class="nav-group-head" onclick="toggleNavGroup(this)">
+          <i class="fas fa-receipt fa-fw"></i><span>Orders</span><i class="fas fa-chevron-down chev"></i>
+        </button>
+        <div class="nav-group-body">
+          {% if user_role != 'kitchen' %}
+          <a href="/orders/new" class="nav-link-item {% if current_ep in ('orders.new_order','orders.edit_order','orders.save_order') %}active{% endif %}" style="border-left-color:#00897B">
+            <i class="fas fa-plus-circle fa-fw"></i><span>New Order</span>
+          </a>
+          <a href="/orders/list" class="nav-link-item {% if current_ep in ('orders.order_list','orders.order_detail') %}active{% endif %}" style="border-left-color:#2196F3">
+            <i class="fas fa-list-check fa-fw"></i><span>Orders</span>
+          </a>
+          {% endif %}
+          <a href="/orders/kitchen" class="nav-link-item {% if current_ep=='orders.kitchen' %}active{% endif %}" style="border-left-color:#FB8C00">
+            <i class="fas fa-fire-burner fa-fw"></i><span>Kitchen Display</span>
+          </a>
+          {% if user_role != 'kitchen' %}
+          <a href="/orders/history" class="nav-link-item {% if current_ep=='orders.history' %}active{% endif %}" style="border-left-color:#607D8B">
+            <i class="fas fa-clock-rotate-left fa-fw"></i><span>Order History</span>
+          </a>
+          {% endif %}
+          {% if is_admin %}
+          <a href="/orders/menu" class="nav-link-item {% if 'orders.menu' in current_ep or current_ep in ('orders.category_add','orders.item_add') %}active{% endif %}" style="border-left-color:#26A69A">
+            <i class="fas fa-book-open fa-fw"></i><span>Menu Management</span>
+          </a>
+          <a href="/orders/reports" class="nav-link-item {% if current_ep=='orders.reports' %}active{% endif %}" style="border-left-color:#7B1FA2">
+            <i class="fas fa-chart-line fa-fw"></i><span>Order Reports</span>
+          </a>
+          {% endif %}
+        </div>
+      </div>
 
-      {% for key, temp in temperatures.items() %}
-      <a href="/temperature/{{ key }}" class="nav-link-item {% if current_ep in ('temperature_form','temperature_view') and request.view_args.get('temp_type')==key %}active{% endif %}" style="border-left-color:{{ temp.color }}">
-        <i class="fas fa-thermometer-half fa-fw"></i><span>{{ temp.short }}</span>
-      </a>
-      {% endfor %}
+      <!-- CHECKLISTS & TEMPERATURE -->
+      <div class="nav-group" data-group="checks">
+        <button type="button" class="nav-group-head" onclick="toggleNavGroup(this)">
+          <i class="fas fa-clipboard-check fa-fw"></i><span>Checklists &amp; Temp</span><i class="fas fa-chevron-down chev"></i>
+        </button>
+        <div class="nav-group-body">
+          {% for key, chk in checklists.items() %}
+          <a href="/checklist/{{ key }}" class="nav-link-item {% if current_ep in ('checklist_form','checklist_view') and request.view_args.get('chk_type')==key %}active{% endif %}" style="border-left-color:{{ chk.color }}">
+            <i class="fas fa-clipboard-check fa-fw"></i><span>{{ chk.short }}</span>
+          </a>
+          {% endfor %}
+          {% for key, temp in temperatures.items() %}
+          <a href="/temperature/{{ key }}" class="nav-link-item {% if current_ep in ('temperature_form','temperature_view') and request.view_args.get('temp_type')==key %}active{% endif %}" style="border-left-color:{{ temp.color }}">
+            <i class="fas fa-thermometer-half fa-fw"></i><span>{{ temp.short }} Temp</span>
+          </a>
+          {% endfor %}
+          <a href="/equipment/" class="nav-link-item {% if 'equipment' in current_ep %}active{% endif %}" style="border-left-color:#00838F">
+            <i class="fas fa-temperature-half fa-fw"></i><span>Equipment Temp</span>
+          </a>
+          {% if is_admin %}
+          <a href="/history" class="nav-link-item {% if current_ep=='history' %}active{% endif %}" style="border-left-color:#607D8B">
+            <i class="fas fa-history fa-fw"></i><span>Checklist History</span>
+          </a>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- PREP SCHEDULE -->
+      <div class="nav-group" data-group="prep">
+        <button type="button" class="nav-group-head" onclick="toggleNavGroup(this)">
+          <i class="fas fa-calendar-week fa-fw"></i><span>Prep Schedule</span><i class="fas fa-chevron-down chev"></i>
+        </button>
+        <div class="nav-group-body">
+          {% if is_admin %}
+          <a href="/prep/dashboard" class="nav-link-item {% if 'prep_dashboard' in current_ep %}active{% endif %}" style="border-left-color:#4CAF50">
+            <i class="fas fa-chart-bar fa-fw"></i><span>Prep Dashboard</span>
+          </a>
+          {% endif %}
+          <a href="/prep/weekly/{{ week_start_nav }}" class="nav-link-item {% if 'prep_weekly' in current_ep or current_ep=='prep.prep_today' %}active{% endif %}" style="border-left-color:#2196F3">
+            <i class="fas fa-calendar-week fa-fw"></i><span>Weekly Prep Schedule</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- PASTRY DELIVERY -->
+      <div class="nav-group" data-group="pastry">
+        <button type="button" class="nav-group-head" onclick="toggleNavGroup(this)">
+          <i class="fas fa-cookie-bite fa-fw"></i><span>Pastry Delivery</span><i class="fas fa-chevron-down chev"></i>
+        </button>
+        <div class="nav-group-body">
+          <a href="/pastry/today" class="nav-link-item {% if 'pastry_today' in current_ep %}active{% endif %}" style="border-left-color:#FF7043">
+            <i class="fas fa-cookie-bite fa-fw"></i><span>Today's Pastry</span>
+          </a>
+          <a href="/pastry/returns" class="nav-link-item {% if 'pastry_returns' in current_ep %}active{% endif %}" style="border-left-color:#AB47BC">
+            <i class="fas fa-rotate-left fa-fw"></i><span>Pastry Returns</span>
+          </a>
+          <a href="/pastry/weekly" class="nav-link-item {% if 'pastry_weekly' in current_ep %}active{% endif %}" style="border-left-color:#FFA726">
+            <i class="fas fa-calendar-week fa-fw"></i><span>Weekly Schedule</span>
+          </a>
+          {% if is_admin %}
+          <a href="/pastry/dashboard" class="nav-link-item {% if 'pastry_dashboard' in current_ep %}active{% endif %}" style="border-left-color:#AB47BC">
+            <i class="fas fa-chart-bar fa-fw"></i><span>Pastry Dashboard</span>
+          </a>
+          <a href="/pastry/items" class="nav-link-item {% if 'pastry_items' in current_ep %}active{% endif %}" style="border-left-color:#26A69A">
+            <i class="fas fa-list fa-fw"></i><span>Manage Items</span>
+          </a>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- INVENTORY -->
+      <div class="nav-group" data-group="inventory">
+        <button type="button" class="nav-group-head" onclick="toggleNavGroup(this)">
+          <i class="fas fa-boxes-stacked fa-fw"></i><span>Inventory</span><i class="fas fa-chevron-down chev"></i>
+        </button>
+        <div class="nav-group-body">
+          <a href="/inventory/" class="nav-link-item {% if 'inventory' in current_ep %}active{% endif %}" style="border-left-color:#26A69A">
+            <i class="fas fa-boxes-stacked fa-fw"></i><span>Item List</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- STAFF & HR -->
+      <div class="nav-group" data-group="hr">
+        <button type="button" class="nav-group-head" onclick="toggleNavGroup(this)">
+          <i class="fas fa-users fa-fw"></i><span>Staff &amp; HR</span><i class="fas fa-chevron-down chev"></i>
+        </button>
+        <div class="nav-group-body">
+          <a href="/structure/" class="nav-link-item {% if 'structure' in current_ep %}active{% endif %}" style="border-left-color:#1A3A5C">
+            <i class="fas fa-sitemap fa-fw"></i><span>Staff Structure</span>
+          </a>
+          <a href="/jobs/" class="nav-link-item {% if 'job' in current_ep %}active{% endif %}" style="border-left-color:#7B1FA2">
+            <i class="fas fa-id-badge fa-fw"></i><span>Job Schedule</span>
+          </a>
+          <a href="/training/" class="nav-link-item {% if 'training' in current_ep %}active{% endif %}" style="border-left-color:#C0392B">
+            <i class="fas fa-graduation-cap fa-fw"></i><span>Training Assessment</span>
+          </a>
+          {% if is_admin %}
+          <a href="/staff" class="nav-link-item {% if current_ep=='staff_page' %}active{% endif %}" style="border-left-color:#52B788">
+            <i class="fas fa-users fa-fw"></i><span>Staff Members</span>
+          </a>
+          <a href="/admin/violations" class="nav-link-item {% if current_ep in ('violation_rules','update_violation','add_violation_rule','update_violation_rule','delete_violation_rule') %}active{% endif %}" style="border-left-color:#C62828">
+            <i class="fas fa-triangle-exclamation fa-fw"></i><span>Violation Rules</span>
+          </a>
+          <a href="/admin/monthly-rewards" class="nav-link-item {% if current_ep in ('monthly_rewards','monthly_reward_decision','monthly_reward_decision_delete','monthly_reward_adjustment','monthly_reward_adjustment_update','monthly_reward_adjustment_delete') %}active{% endif %}" style="border-left-color:#2E7D32">
+            <i class="fas fa-award fa-fw"></i><span>Monthly Rewards</span>
+          </a>
+          <a href="/admin/raise-reviews" class="nav-link-item {% if current_ep in ('raise_reviews','raise_review_update','raise_review_delete') %}active{% endif %}" style="border-left-color:#6A1B9A">
+            <i class="fas fa-hand-holding-dollar fa-fw"></i><span>Raise Salary Review</span>
+          </a>
+          <a href="/admin/birthdays" class="nav-link-item {% if current_ep=='birthday_giveaways' %}active{% endif %}" style="border-left-color:#F9A825">
+            <i class="fas fa-cake-candles fa-fw"></i><span>Birthday Giveaways</span>
+          </a>
+          {% endif %}
+        </div>
+      </div>
+
       {% if is_admin %}
-      <a href="/history" class="nav-link-item {% if current_ep=='history' %}active{% endif %}" style="border-left-color:#607D8B">
-        <i class="fas fa-history fa-fw"></i><span>History</span>
-      </a>
+      <!-- SUPPLIERS & SHARING -->
+      <div class="nav-group" data-group="suppliers">
+        <button type="button" class="nav-group-head" onclick="toggleNavGroup(this)">
+          <i class="fas fa-truck-fast fa-fw"></i><span>Suppliers &amp; Sharing</span><i class="fas fa-chevron-down chev"></i>
+        </button>
+        <div class="nav-group-body">
+          <a href="/packaging/" class="nav-link-item {% if 'packaging' in current_ep %}active{% endif %}" style="border-left-color:#6D4C41">
+            <i class="fas fa-boxes-packing fa-fw"></i><span>Packaging Order</span>
+          </a>
+          <a href="/whatsapp/" class="nav-link-item {% if 'whatsapp' in current_ep %}active{% endif %}" style="border-left-color:#25D366">
+            <i class="fab fa-whatsapp fa-fw"></i><span>WhatsApp Daily Share</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- MANAGEMENT -->
+      <div class="nav-group" data-group="management">
+        <button type="button" class="nav-group-head" onclick="toggleNavGroup(this)">
+          <i class="fas fa-user-shield fa-fw"></i><span>Management</span><i class="fas fa-chevron-down chev"></i>
+        </button>
+        <div class="nav-group-body">
+          <a href="/manager" class="nav-link-item {% if current_ep=='manager' %}active{% endif %}" style="border-left-color:#52B788">
+            <i class="fas fa-user-shield fa-fw"></i><span>Manager Panel</span>
+          </a>
+          <a href="/admin/photos" class="nav-link-item {% if current_ep=='photo_gallery' %}active{% endif %}" style="border-left-color:#26A69A">
+            <i class="fas fa-images fa-fw"></i><span>Photo Gallery</span>
+          </a>
+          <a href="/admin/compliance" class="nav-link-item {% if current_ep=='compliance_report' %}active{% endif %}" style="border-left-color:#1565C0">
+            <i class="fas fa-chart-pie fa-fw"></i><span>Compliance</span>
+          </a>
+          <a href="/analytics" class="nav-link-item {% if current_ep=='analytics' %}active{% endif %}" style="border-left-color:#7B1FA2">
+            <i class="fas fa-chart-line fa-fw"></i><span>Analytics</span>
+          </a>
+          <a href="/admin/email-settings" class="nav-link-item {% if current_ep in ('email_settings','email_settings_save','email_settings_test','email_recipient_add','email_recipient_update','email_recipient_toggle','email_recipient_delete') %}active{% endif %}" style="border-left-color:#1565C0">
+            <i class="fas fa-envelope fa-fw"></i><span>Email Notifications</span>
+          </a>
+          <a href="/admin/data-management" class="nav-link-item {% if current_ep in ('admin_data_management','admin_data_purge','admin_data_vacuum') %}active{% endif %}" style="border-left-color:#C0392B">
+            <i class="fas fa-database fa-fw"></i><span>Data Management</span>
+          </a>
+        </div>
+      </div>
       {% endif %}
 
-      <div class="nav-section-label">PREP SCHEDULE</div>
-      {% if is_admin %}
-      <a href="/prep/dashboard" class="nav-link-item {% if 'prep_dashboard' in current_ep %}active{% endif %}" style="border-left-color:#4CAF50">
-        <i class="fas fa-chart-bar fa-fw"></i><span>Prep Dashboard</span>
-      </a>
-      {% endif %}
-      <a href="/prep/weekly/{{ week_start_nav }}" class="nav-link-item {% if 'prep_weekly' in current_ep or current_ep=='prep.prep_today' %}active{% endif %}" style="border-left-color:#2196F3">
-        <i class="fas fa-calendar-week fa-fw"></i><span>Weekly Prep Schedule</span>
-      </a>
-      {% if is_admin %}<div class="nav-section-label">MANAGEMENT</div>{% endif %}
-
-      {% if is_admin %}
-      <a href="/manager" class="nav-link-item {% if current_ep=='manager' %}active{% endif %}">
-        <i class="fas fa-user-shield fa-fw"></i><span>Manager Panel</span>
-      </a>
-      <a href="/admin/photos" class="nav-link-item {% if current_ep=='photo_gallery' %}active{% endif %}">
-        <i class="fas fa-images fa-fw"></i><span>Photo Gallery</span>
-      </a>
-      <a href="/admin/compliance" class="nav-link-item {% if current_ep=='compliance_report' %}active{% endif %}">
-        <i class="fas fa-chart-pie fa-fw"></i><span>Compliance</span>
-      </a>
-      <a href="/analytics" class="nav-link-item {% if current_ep=='analytics' %}active{% endif %}">
-        <i class="fas fa-chart-line fa-fw"></i><span>Analytics</span>
-      </a>
-      {% endif %}
-
-      {% if is_admin %}
-      <div class="nav-section-label">VIOLATION RULES</div>
-      <a href="/admin/violations" class="nav-link-item {% if current_ep in ('violation_rules','update_violation','add_violation_rule','update_violation_rule','delete_violation_rule') %}active{% endif %}" style="border-left-color:#C62828">
-        <i class="fas fa-triangle-exclamation fa-fw"></i><span>Violation Rules</span>
-      </a>
-      {% endif %}
-
-      {% if is_admin %}
-      <div class="nav-section-label">MONTHLY REWARD</div>
-      <a href="/admin/monthly-rewards" class="nav-link-item {% if current_ep in ('monthly_rewards','monthly_reward_decision','monthly_reward_decision_delete','monthly_reward_adjustment','monthly_reward_adjustment_update','monthly_reward_adjustment_delete') %}active{% endif %}" style="border-left-color:#2E7D32">
-        <i class="fas fa-award fa-fw"></i><span>Monthly Rewards</span>
-      </a>
-      {% endif %}
-
-      {% if is_admin %}
-      <div class="nav-section-label">RAISE SALARY REVIEW</div>
-      <a href="/admin/raise-reviews" class="nav-link-item {% if current_ep in ('raise_reviews','raise_review_update','raise_review_delete') %}active{% endif %}" style="border-left-color:#6A1B9A">
-        <i class="fas fa-hand-holding-dollar fa-fw"></i><span>Raise Salary Review</span>
-      </a>
-      {% endif %}
-
-      {% if is_admin %}
-      <div class="nav-section-label">BIRTHDAY</div>
-      <a href="/admin/birthdays" class="nav-link-item {% if current_ep=='birthday_giveaways' %}active{% endif %}" style="border-left-color:#F9A825">
-        <i class="fas fa-cake-candles fa-fw"></i><span>Birthday Giveaways</span>
-      </a>
-      {% endif %}
-
-      <div class="nav-section-label">PASTRY DELIVERY</div>
-      <a href="/pastry/today" class="nav-link-item {% if 'pastry_today' in current_ep %}active{% endif %}" style="border-left-color:#FF7043">
-        <i class="fas fa-cookie-bite fa-fw"></i><span>Today's Pastry</span>
-      </a>
-      <a href="/pastry/returns" class="nav-link-item {% if 'pastry_returns' in current_ep %}active{% endif %}" style="border-left-color:#AB47BC">
-        <i class="fas fa-rotate-left fa-fw"></i><span>Pastry Returns</span>
-      </a>
-      <a href="/pastry/weekly" class="nav-link-item {% if 'pastry_weekly' in current_ep %}active{% endif %}" style="border-left-color:#FFA726">
-        <i class="fas fa-calendar-week fa-fw"></i><span>Weekly Schedule</span>
-      </a>
-      {% if is_admin %}
-      <a href="/pastry/dashboard" class="nav-link-item {% if 'pastry_dashboard' in current_ep %}active{% endif %}" style="border-left-color:#AB47BC">
-        <i class="fas fa-chart-bar fa-fw"></i><span>Pastry Dashboard</span>
-      </a>
-      <a href="/pastry/items" class="nav-link-item {% if 'pastry_items' in current_ep %}active{% endif %}" style="border-left-color:#26A69A">
-        <i class="fas fa-list fa-fw"></i><span>Manage Items</span>
-      </a>
-      {% endif %}
-
-      <div class="nav-section-label">INVENTORY</div>
-      <a href="/inventory/" class="nav-link-item {% if 'inventory' in current_ep %}active{% endif %}" style="border-left-color:#26A69A">
-        <i class="fas fa-boxes-stacked fa-fw"></i><span>Item List</span>
-      </a>
-
-      <div class="nav-section-label">JOB DESCRIPTIONS</div>
-      <a href="/jobs/" class="nav-link-item {% if 'job' in current_ep %}active{% endif %}" style="border-left-color:#7B1FA2">
-        <i class="fas fa-id-badge fa-fw"></i><span>Job Schedule</span>
-      </a>
-
-      <div class="nav-section-label">TRAINING</div>
-      <a href="/training/" class="nav-link-item {% if 'training' in current_ep %}active{% endif %}" style="border-left-color:#C0392B">
-        <i class="fas fa-graduation-cap fa-fw"></i><span>Training Assessment</span>
-      </a>
-
-      {% if is_admin %}
-      <div class="nav-section-label">SUPPLIER ORDERS</div>
-      <a href="/packaging/" class="nav-link-item {% if 'packaging' in current_ep %}active{% endif %}" style="border-left-color:#6D4C41">
-        <i class="fas fa-boxes-packing fa-fw"></i><span>Packaging Order</span>
-      </a>
-
-      <div class="nav-section-label">SHARE TO TEAM</div>
-      <a href="/whatsapp/" class="nav-link-item {% if 'whatsapp' in current_ep %}active{% endif %}" style="border-left-color:#25D366">
-        <i class="fab fa-whatsapp fa-fw"></i><span>WhatsApp Daily Share</span>
-      </a>
-      {% endif %}
-
-      <div class="nav-section-label">REPORT</div>
-      <a href="/report" class="nav-link-item {% if current_ep=='report_issue' %}active{% endif %}" style="border-left-color:#e53935">
-        <i class="fas fa-flag fa-fw"></i><span>Report Issue</span>
-      </a>
-      {% if is_admin %}
-      <a href="/admin/reports" class="nav-link-item {% if current_ep=='admin_reports' %}active{% endif %}">
-        <i class="fas fa-flag fa-fw"></i><span>Issue Reports</span>
-      </a>
-      {% endif %}
-
-      <div class="nav-section-label">RESTAURANT RULES</div>
-      <a href="/rules" class="nav-link-item {% if current_ep in ('rules.rules_view','rules.rules_print') %}active{% endif %}" style="border-left-color:#C0392B">
-        <i class="fas fa-book-open fa-fw"></i><span>Restaurant Rules</span>
-      </a>
-
-      {% if is_admin %}
-      <a href="/staff" class="nav-link-item {% if current_ep=='staff_page' %}active{% endif %}">
-        <i class="fas fa-users fa-fw"></i><span>Staff</span>
-      </a>
-      <a href="/admin/email-settings" class="nav-link-item {% if current_ep in ('email_settings','email_settings_save','email_settings_test','email_recipient_add','email_recipient_update','email_recipient_toggle','email_recipient_delete') %}active{% endif %}" style="border-left-color:#1565C0">
-        <i class="fas fa-envelope fa-fw"></i><span>Email Notifications</span>
-      </a>
-      <a href="/admin/data-management" class="nav-link-item {% if current_ep in ('admin_data_management','admin_data_purge','admin_data_vacuum') %}active{% endif %}" style="border-left-color:#C0392B">
-        <i class="fas fa-database fa-fw"></i><span>Data Management</span>
-      </a>
-      {% endif %}
+      <!-- REPORTS & RULES -->
+      <div class="nav-group" data-group="reports">
+        <button type="button" class="nav-group-head" onclick="toggleNavGroup(this)">
+          <i class="fas fa-flag fa-fw"></i><span>Reports &amp; Rules</span><i class="fas fa-chevron-down chev"></i>
+        </button>
+        <div class="nav-group-body">
+          <a href="/rules" class="nav-link-item {% if current_ep in ('rules.rules_view','rules.rules_print') %}active{% endif %}" style="border-left-color:#C0392B">
+            <i class="fas fa-book-open fa-fw"></i><span>Restaurant Rules</span>
+          </a>
+          <a href="/report" class="nav-link-item {% if current_ep=='report_issue' %}active{% endif %}" style="border-left-color:#e53935">
+            <i class="fas fa-flag fa-fw"></i><span>Report Issue</span>
+          </a>
+          {% if is_admin %}
+          <a href="/admin/reports" class="nav-link-item {% if current_ep=='admin_reports' %}active{% endif %}" style="border-left-color:#e53935">
+            <i class="fas fa-flag-checkered fa-fw"></i><span>Issue Reports</span>
+          </a>
+          {% endif %}
+        </div>
+      </div>
 
       <div class="sidebar-footer sidebar-footer-row">
         <a href="#" id="pwa-install-btn" onclick="installPwa();return false;"
@@ -262,6 +367,33 @@ function toggleSidebar(){
     mainArea.classList.toggle('full');
   }
 }
+
+// ── Collapsible sidebar nav groups ──
+function toggleNavGroup(btn){
+  const g = btn.closest('.nav-group');
+  if (!g) return;
+  g.classList.toggle('open');
+  try {
+    const open = [...document.querySelectorAll('.nav-group.open')].map(x => x.dataset.group);
+    localStorage.setItem('mcqNavOpen', JSON.stringify(open));
+  } catch(e){}
+}
+document.addEventListener('DOMContentLoaded', function(){
+  let activeEl = null;
+  // Open + mark the group that contains the current page
+  document.querySelectorAll('.nav-group').forEach(g => {
+    const a = g.querySelector('.nav-link-item.active');
+    if (a) { g.classList.add('has-active', 'open'); activeEl = a; }
+  });
+  // Restore previously-opened groups
+  try {
+    const saved = JSON.parse(localStorage.getItem('mcqNavOpen') || '[]');
+    document.querySelectorAll('.nav-group').forEach(g => {
+      if (saved.includes(g.dataset.group)) g.classList.add('open');
+    });
+  } catch(e){}
+  if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
+});
 document.addEventListener('click', function(e){
   const sidebar = document.getElementById('sidebar');
   const toggle = document.querySelector('.sidebar-toggle');

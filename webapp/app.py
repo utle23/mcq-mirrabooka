@@ -23,6 +23,9 @@ from rules_routes     import rules_bp,                  init_rules_tables
 from training_routes  import training_bp,               init_training_tables
 from whatsapp_share   import whatsapp_bp,                init_whatsapp
 from packaging_routes import packaging_bp,               init_packaging
+from orders_routes    import orders     as orders_bp,    init_order_tables
+from equipment_routes import equipment  as equipment_bp, init_equipment_tables
+from structure_routes import structure  as structure_bp, init_structure_tables
 import email_service
 app.register_blueprint(prep_bp)
 app.register_blueprint(pastry_bp)
@@ -32,6 +35,9 @@ app.register_blueprint(rules_bp)
 app.register_blueprint(training_bp)
 app.register_blueprint(whatsapp_bp)
 app.register_blueprint(packaging_bp)
+app.register_blueprint(orders_bp)
+app.register_blueprint(equipment_bp)
+app.register_blueprint(structure_bp)
 DB_PATH      = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mcq_restaurant.db')
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -1192,9 +1198,10 @@ def register_pdf_fonts():
 
 # ─── Auth ──────────────────────────────────────────────────────────────────────
 
-USER_PASSWORD  = '7777'
-ADMIN_PASSWORD = '77771'
-LOCATION       = 'mirrabooka'
+USER_PASSWORD    = '7777'
+ADMIN_PASSWORD   = '77771'
+KITCHEN_PASSWORD = '8888'
+LOCATION         = 'mirrabooka'
 
 def is_admin():
     return session.get('role') == 'admin'
@@ -1289,18 +1296,27 @@ def login_page():
         branch = request.form.get('branch', '').strip()
         if branch not in BRANCHES:
             error = 'Please select a valid branch.'
-        elif pw == USER_PASSWORD or pw == ADMIN_PASSWORD:
+        elif pw in (USER_PASSWORD, ADMIN_PASSWORD, KITCHEN_PASSWORD):
             now = datetime.now()
+            if pw == ADMIN_PASSWORD:
+                role = 'admin'
+            elif pw == KITCHEN_PASSWORD:
+                role = 'kitchen'
+            else:
+                role = 'user'
             session.clear()
             session.update({
                 'logged_in':     True,
-                'role':          'admin' if pw == ADMIN_PASSWORD else 'user',
+                'role':          role,
                 'branch':        branch,
                 'login_time':    now.strftime('%Y-%m-%d %H:%M'),
                 'login_ts':      now.isoformat(timespec='seconds'),
                 'last_activity': now.isoformat(timespec='seconds'),
             })
             session.permanent = True
+            # Kitchen staff go straight to the Kitchen Display.
+            if role == 'kitchen':
+                return redirect(url_for('orders.kitchen'))
             return redirect(url_for('dashboard'))
         else:
             error = 'Incorrect password. Please try again.'
@@ -1821,6 +1837,9 @@ def temperature_save(temp_type):
         for n in range(1, 6):
             tv = r.get(f'c{n}_temp')
             if tv is None:
+                continue
+            # Pastry hot display: the 3rd check is informational only — no alert.
+            if temp_type == 'pastry' and n == 3:
                 continue
             unsafe = (r['food_kind'] == 'cold' and tv > 5) or \
                      (r['food_kind'] == 'hot'  and tv < 60)
@@ -3998,6 +4017,9 @@ email_service.init_email_tables(DB_PATH)
 init_whatsapp(DB_PATH, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static'),
               UPLOAD_FOLDER, CHECKLISTS, TEMPERATURES)
 init_packaging(DB_PATH)
+init_order_tables(DB_PATH)
+init_equipment_tables(DB_PATH)
+init_structure_tables(DB_PATH, UPLOAD_FOLDER)
 
 if __name__ == '__main__':
     print('\n' + '='*50)

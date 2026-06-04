@@ -1,0 +1,345 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if mode=='edit' else 'New' }} Order{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-plus-circle me-2" style="color:#00897B"></i>{{ 'Edit Order ' ~ order.code if mode=='edit' else 'New Order' }}</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.of-grid { display:grid; grid-template-columns: 1fr 380px; gap:18px; align-items:start; }
+@media (max-width: 992px){ .of-grid { grid-template-columns: 1fr; } }
+.card-soft { background:#fff; border:1px solid #e8eaed; border-radius:14px; box-shadow:0 1px 4px rgba(0,0,0,.04); }
+.section-title { font-size:.78rem; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:#888; margin-bottom:10px; }
+.cat-tabs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
+.cat-tab { border:1px solid #d8dde2; background:#fff; color:#444; border-radius:999px; padding:5px 14px; font-size:.82rem; font-weight:600; cursor:pointer; }
+.cat-tab.active { background:#00897B; color:#fff; border-color:#00897B; }
+.menu-grid { display:grid; grid-template-columns: repeat(auto-fill,minmax(150px,1fr)); gap:8px; max-height:430px; overflow:auto; padding:2px; }
+.menu-btn { border:1px solid #e0e4e8; background:#fff; border-radius:10px; padding:10px; text-align:left; cursor:pointer; transition:.12s; }
+.menu-btn:hover { border-color:#00897B; box-shadow:0 2px 8px rgba(0,137,123,.15); transform:translateY(-1px); }
+.menu-btn .mn { font-weight:700; font-size:.86rem; color:#1A1A2E; line-height:1.2; }
+.menu-btn .mp { color:#00897B; font-weight:800; font-size:.82rem; margin-top:3px; }
+.menu-btn.catering { border-color:#FB8C00; background:#FFF8E1; }
+.menu-btn.catering .mp { color:#E65100; }
+.line-row { display:flex; gap:8px; align-items:flex-start; padding:10px; border:1px solid #eee; border-radius:10px; margin-bottom:8px; background:#fbfcfd; }
+.line-row .ln-main { flex:1 1 auto; min-width:0; }
+.line-row .ln-name { font-weight:700; color:#1A1A2E; font-size:.9rem; }
+.line-row input.qty { width:64px; text-align:center; }
+.line-row input.disc { width:62px; text-align:center; }
+.line-row .ln-total { font-weight:800; color:#1A1A2E; min-width:74px; text-align:right; }
+.disc-chip { border:1px solid #d8dde2; background:#fff; border-radius:8px; padding:5px 12px; font-weight:700; font-size:.82rem; cursor:pointer; }
+.disc-chip.active { background:#7B1FA2; color:#fff; border-color:#7B1FA2; }
+.totsum { display:flex; justify-content:space-between; padding:6px 0; font-size:.95rem; }
+.totsum.grand { border-top:2px solid #eee; margin-top:6px; padding-top:12px; font-size:1.35rem; font-weight:800; color:#00897B; }
+.empty-lines { text-align:center; color:#aaa; padding:24px; border:2px dashed #e0e4e8; border-radius:10px; }
+.field-label { font-size:.78rem; font-weight:700; color:#555; margin-bottom:3px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<form method="POST" action="/orders/save" id="orderForm">
+<input type="hidden" name="order_id" value="{{ order.id if order else '' }}">
+
+<div class="of-grid">
+  <!-- LEFT: customer + menu -->
+  <div>
+    <div class="card-soft p-3 mb-3">
+      <div class="section-title"><i class="fas fa-user me-1"></i>Customer & Pickup</div>
+      <div class="row g-2">
+        <div class="col-md-6">
+          <div class="field-label">Customer Name *</div>
+          <input name="customer_name" class="form-control" required
+                 value="{{ order.customer_name if order else '' }}" placeholder="e.g. John Nguyen">
+        </div>
+        <div class="col-md-6">
+          <div class="field-label">Phone Number</div>
+          <input name="phone" class="form-control" value="{{ order.phone if order else '' }}" placeholder="04xx xxx xxx">
+        </div>
+        <div class="col-md-4">
+          <div class="field-label">Store / Branch</div>
+          <select name="branch" class="form-select">
+            {% for b in branches %}
+            <option value="{{ b }}" {% if (order and order.branch==b) or (not order and branch==b) %}selected{% endif %}>{{ b }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-4">
+          <div class="field-label">Type</div>
+          <select name="order_type" class="form-select">
+            <option value="pickup"   {% if order and order.order_type=='pickup' %}selected{% endif %}>Pickup</option>
+            <option value="delivery" {% if order and order.order_type=='delivery' %}selected{% endif %}>Delivery</option>
+          </select>
+        </div>
+        <div class="col-md-4">
+          <div class="field-label">Payment Method</div>
+          <select name="payment_method" class="form-select">
+            <option value="">— Select —</option>
+            {% for key, label in payment_methods.items() %}
+            <option value="{{ key }}" {% if order and order.payment_method==key %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-2">
+          <div class="field-label">Date</div>
+          <input type="date" name="pickup_date" class="form-control"
+                 value="{{ order.pickup_date if order else today }}">
+        </div>
+        <div class="col-md-2">
+          <div class="field-label">Time</div>
+          <input type="time" name="pickup_time" class="form-control"
+                 value="{{ order.pickup_time if order else '' }}">
+        </div>
+        <div class="col-12">
+          <div class="field-label">Order Notes</div>
+          <input name="notes" class="form-control" value="{{ order.notes if order else '' }}"
+                 placeholder="Allergies, special requests, etc.">
+        </div>
+        <div class="col-md-6">
+          <div class="field-label">Taken by</div>
+          <input name="created_by" class="form-control" list="staff-list"
+                 value="{{ order.created_by if order else '' }}" placeholder="Staff name">
+          <datalist id="staff-list">
+            {% for s in staff_list %}<option value="{{ s }}">{% endfor %}
+          </datalist>
+        </div>
+      </div>
+    </div>
+
+    <div class="card-soft p-3">
+      <div class="section-title"><i class="fas fa-utensils me-1"></i>Add Menu Items</div>
+      <input id="menuSearch" class="form-control mb-2" placeholder="🔍 Search menu…" autocomplete="off">
+      <div class="cat-tabs" id="catTabs">
+        <button type="button" class="cat-tab active" data-cat="all">All</button>
+        {% for c in cats %}<button type="button" class="cat-tab" data-cat="{{ c.id }}">{{ c.name }}</button>{% endfor %}
+      </div>
+      <div class="menu-grid" id="menuGrid">
+        {% for c in cats %}{% for it in c['items'] %}
+        <button type="button" class="menu-btn {% if it.is_catering %}catering{% endif %}"
+                data-cat="{{ c.id }}" data-id="{{ it.id }}"
+                data-name="{{ it.name }}" data-price="{{ '%.2f'|format(it.price) }}"
+                data-catering="{{ it.is_catering }}"
+                data-search="{{ it.name|lower }} {{ c.name|lower }}">
+          <div class="mn">{{ it.name }}</div>
+          <div class="mp">${{ '%.2f'|format(it.price) }}{% if it.is_catering %} / box{% endif %}</div>
+        </button>
+        {% endfor %}{% endfor %}
+      </div>
+
+      <!-- Custom write-in item (e.g. "Double meat charge" $10) -->
+      <div class="mt-3 p-2" style="background:#f5f7f9;border-radius:10px;">
+        <div class="field-label"><i class="fas fa-pen-to-square me-1"></i>Custom item (write your own + price)</div>
+        <div class="d-flex gap-2 flex-wrap">
+          <input id="customName" class="form-control form-control-sm" style="flex:1 1 180px"
+                 placeholder="e.g. Double meat charge" autocomplete="off">
+          <div class="input-group input-group-sm" style="max-width:120px">
+            <span class="input-group-text">$</span>
+            <input id="customPrice" type="number" step="0.01" min="0" class="form-control" placeholder="0.00">
+          </div>
+          <button type="button" id="addCustomBtn" class="btn btn-sm text-white" style="background:#00897B">
+            <i class="fas fa-plus me-1"></i>Add
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: order summary -->
+  <div class="card-soft p-3" style="position:sticky; top:12px;">
+    <div class="section-title"><i class="fas fa-receipt me-1"></i>Order Items</div>
+    <div id="lineList"></div>
+    <div id="emptyLines" class="empty-lines">No items yet — tap a menu item to add.</div>
+
+    <div class="section-title mt-3"><i class="fas fa-tags me-1"></i>Order Discount</div>
+    <div class="d-flex flex-wrap gap-2 mb-2" id="discChips">
+      <span class="disc-chip" data-pct="5">5%</span>
+      <span class="disc-chip" data-pct="10">10%</span>
+      <span class="disc-chip" data-pct="15">15%</span>
+      <span class="disc-chip" data-pct="20">20%</span>
+    </div>
+    <div class="row g-2 align-items-end">
+      <div class="col-7">
+        <select id="discType" name="discount_type" class="form-select form-select-sm">
+          <option value="">No discount</option>
+          <option value="percent">Percent %</option>
+          <option value="amount">Fixed $</option>
+        </select>
+      </div>
+      <div class="col-5">
+        <input id="discValue" name="discount_value" type="number" step="0.01" min="0"
+               class="form-control form-control-sm" placeholder="0" value="{{ order.discount_value if order and order.discount_value else '' }}">
+      </div>
+    </div>
+
+    <div class="mt-3">
+      <div class="totsum"><span>Subtotal</span><span id="sumSubtotal">$0.00</span></div>
+      <div class="totsum"><span>Discount</span><span id="sumDiscount" style="color:#C62828">-$0.00</span></div>
+      <div class="totsum grand"><span>Grand Total</span><span id="sumTotal">$0.00</span></div>
+    </div>
+
+    <button type="submit" class="btn btn-lg w-100 mt-3 text-white" style="background:#00897B">
+      <i class="fas fa-check-circle me-1"></i>{{ 'Update Order' if mode=='edit' else 'Confirm Order' }}
+    </button>
+    {% if mode=='edit' %}
+    <a href="/orders/{{ order.id }}" class="btn btn-outline-secondary w-100 mt-2">Cancel</a>
+    {% endif %}
+  </div>
+</div>
+</form>
+
+<!-- line-item template -->
+<template id="lineTpl">
+  <div class="line-row">
+    <input type="hidden" name="li_item_id[]" class="f-id">
+    <input type="hidden" name="li_catering[]" class="f-cat">
+    <input type="hidden" name="li_name[]" class="f-name">
+    <input type="hidden" name="li_price[]" class="f-price">
+    <div class="ln-main">
+      <div class="ln-name"></div>
+      <div class="d-flex gap-2 align-items-center mt-1 flex-wrap">
+        <input type="number" name="li_qty[]" class="form-control form-control-sm qty f-qty" value="1" min="1">
+        <span class="text-muted small">×</span>
+        <span class="unit-price text-muted small"></span>
+        <div class="d-flex align-items-center gap-1">
+          <input type="number" name="li_disc[]" class="form-control form-control-sm disc f-disc" value="0" min="0" max="100" placeholder="0">
+          <span class="text-muted small">% off</span>
+        </div>
+      </div>
+      <input name="li_notes[]" class="form-control form-control-sm mt-1 f-notes" placeholder="Item note (optional)">
+    </div>
+    <div class="d-flex flex-column align-items-end gap-2">
+      <div class="ln-total">$0.00</div>
+      <button type="button" class="btn btn-sm btn-outline-danger rm"><i class="fas fa-trash"></i></button>
+    </div>
+  </div>
+</template>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const lineList   = document.getElementById('lineList');
+const emptyLines = document.getElementById('emptyLines');
+const lineTpl    = document.getElementById('lineTpl');
+
+function money(n){ return '$' + (Math.round(n*100)/100).toFixed(2); }
+
+function addLine(data){
+  const node = lineTpl.content.firstElementChild.cloneNode(true);
+  node.querySelector('.f-id').value    = data.id || '';
+  node.querySelector('.f-cat').value   = data.catering || '0';
+  node.querySelector('.f-name').value  = data.name;
+  node.querySelector('.f-price').value = data.price;
+  node.querySelector('.ln-name').textContent = data.name;
+  node.querySelector('.unit-price').textContent = money(parseFloat(data.price));
+  node.querySelector('.f-qty').value   = data.qty || 1;
+  node.querySelector('.f-disc').value  = data.disc || 0;
+  node.querySelector('.f-notes').value = data.notes || '';
+  node.querySelectorAll('input').forEach(inp => inp.addEventListener('input', recalc));
+  node.querySelector('.rm').addEventListener('click', () => { node.remove(); recalc(); });
+  lineList.appendChild(node);
+  recalc();
+}
+
+function recalc(){
+  let subtotal = 0;
+  const rows = lineList.querySelectorAll('.line-row');
+  rows.forEach(r => {
+    const price = parseFloat(r.querySelector('.f-price').value) || 0;
+    const qty   = Math.max(1, parseInt(r.querySelector('.f-qty').value) || 1);
+    let disc    = parseFloat(r.querySelector('.f-disc').value) || 0;
+    disc = Math.min(100, Math.max(0, disc));
+    const net = price * qty * (1 - disc/100);
+    r.querySelector('.ln-total').textContent = money(net);
+    subtotal += net;
+  });
+  emptyLines.style.display = rows.length ? 'none' : '';
+
+  const dtype = document.getElementById('discType').value;
+  const dval  = parseFloat(document.getElementById('discValue').value) || 0;
+  let discount = 0;
+  if (dtype === 'percent') discount = subtotal * Math.min(100,Math.max(0,dval)) / 100;
+  else if (dtype === 'amount') discount = Math.min(subtotal, Math.max(0,dval));
+
+  document.getElementById('sumSubtotal').textContent = money(subtotal);
+  document.getElementById('sumDiscount').textContent = '-' + money(discount);
+  document.getElementById('sumTotal').textContent    = money(subtotal - discount);
+}
+
+// Menu buttons → add line
+document.querySelectorAll('.menu-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    addLine({
+      id: btn.dataset.id, name: btn.dataset.name, price: btn.dataset.price,
+      catering: btn.dataset.catering, qty: 1, disc: 0
+    });
+  });
+});
+
+// Custom write-in item
+function addCustom(){
+  const name = document.getElementById('customName').value.trim();
+  let price = parseFloat(document.getElementById('customPrice').value);
+  if (!name){ alert('Type a name for the custom item.'); return; }
+  if (isNaN(price) || price < 0) price = 0;
+  addLine({ id:'', name:name, price:price.toFixed(2), catering:'0', qty:1, disc:0 });
+  document.getElementById('customName').value = '';
+  document.getElementById('customPrice').value = '';
+  document.getElementById('customName').focus();
+}
+document.getElementById('addCustomBtn').addEventListener('click', addCustom);
+document.getElementById('customPrice').addEventListener('keydown', e => { if(e.key==='Enter'){ e.preventDefault(); addCustom(); } });
+document.getElementById('customName').addEventListener('keydown', e => { if(e.key==='Enter'){ e.preventDefault(); document.getElementById('customPrice').focus(); } });
+
+// Category tabs
+document.querySelectorAll('.cat-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.cat-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    const cat = tab.dataset.cat;
+    document.querySelectorAll('.menu-btn').forEach(b => {
+      b.style.display = (cat === 'all' || b.dataset.cat === cat) ? '' : 'none';
+    });
+  });
+});
+
+// Search
+document.getElementById('menuSearch').addEventListener('input', e => {
+  const q = e.target.value.toLowerCase().trim();
+  document.querySelectorAll('.menu-btn').forEach(b => {
+    b.style.display = b.dataset.search.includes(q) ? '' : 'none';
+  });
+});
+
+// Discount preset chips
+document.querySelectorAll('#discChips .disc-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('#discChips .disc-chip').forEach(c => c.classList.remove('active'));
+    chip.classList.add('active');
+    document.getElementById('discType').value = 'percent';
+    document.getElementById('discValue').value = chip.dataset.pct;
+    recalc();
+  });
+});
+document.getElementById('discType').addEventListener('change', recalc);
+document.getElementById('discValue').addEventListener('input', recalc);
+
+// Prevent submit with no items
+document.getElementById('orderForm').addEventListener('submit', e => {
+  if (!lineList.querySelectorAll('.line-row').length){
+    e.preventDefault();
+    alert('Please add at least one item to the order.');
+  }
+});
+
+// Pre-load existing lines (edit mode) and discount type
+{% if lines %}
+{% for ln in lines %}
+addLine({ id: '{{ ln.item_id or '' }}', name: {{ ln.name|tojson }}, price: '{{ '%.2f'|format(ln.unit_price) }}',
+          catering: '{{ ln.is_catering }}', qty: {{ ln.qty }}, disc: {{ ln.line_discount_pct or 0 }},
+          notes: {{ (ln.notes or '')|tojson }} });
+{% endfor %}
+{% endif %}
+{% if order and order.discount_type %}
+document.getElementById('discType').value = '{{ order.discount_type }}';
+{% endif %}
+recalc();
+</script>
+{% endblock %}

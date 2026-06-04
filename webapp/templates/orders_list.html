@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Orders{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-receipt me-2" style="color:#2196F3"></i>Orders</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.o-card { background:#fff; border:1px solid #e8eaed; border-radius:12px; box-shadow:0 1px 4px rgba(0,0,0,.04); padding:14px 16px; margin-bottom:10px; display:flex; gap:14px; align-items:center; flex-wrap:wrap; border-left:5px solid #ccc; }
+.o-time { text-align:center; min-width:74px; }
+.o-time .t { font-size:1.25rem; font-weight:800; color:#1A1A2E; }
+.o-time .d { font-size:.72rem; color:#888; }
+.o-main { flex:1 1 220px; min-width:0; }
+.o-cust { font-weight:700; color:#1A1A2E; }
+.o-meta { color:#777; font-size:.82rem; }
+.o-total { font-weight:800; font-size:1.1rem; color:#00897B; min-width:80px; text-align:right; }
+.status-pill { display:inline-block; padding:2px 12px; border-radius:999px; font-size:.72rem; font-weight:800; color:#fff; text-transform:uppercase; letter-spacing:.04em; }
+.filter-pill { border:1px solid #d8dde2; background:#fff; border-radius:999px; padding:5px 14px; font-size:.82rem; font-weight:600; color:#444; text-decoration:none; }
+.filter-pill.active { background:#2196F3; color:#fff; border-color:#2196F3; }
+.empty-state { background:#f7f9fb; border:1px dashed #ccd; border-radius:10px; padding:30px; text-align:center; color:#999; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+  <div class="d-flex flex-wrap gap-2">
+    <a href="/orders/list" class="filter-pill {% if not status_f %}active{% endif %}">Active</a>
+    {% for s in ['confirmed','preparing','ready'] %}
+    <a href="/orders/list?status={{ s }}" class="filter-pill {% if status_f==s %}active{% endif %}">{{ status_labels[s] }}</a>
+    {% endfor %}
+  </div>
+  <a href="/orders/new" class="btn text-white" style="background:#00897B"><i class="fas fa-plus me-1"></i>New Order</a>
+</div>
+
+{% if not rows %}
+<div class="empty-state"><i class="fas fa-inbox fa-2x mb-2 d-block opacity-25"></i>No active orders. Create one to get started.</div>
+{% else %}
+{% for o in rows %}
+<a href="/orders/{{ o.id }}" class="o-card text-decoration-none text-dark" style="border-left-color:{{ status_colors[o.status] }}">
+  <div class="o-time">
+    <div class="t">{{ o.pickup_time or '—' }}</div>
+    <div class="d">{{ o.pickup_date }}</div>
+  </div>
+  <div class="o-main">
+    <div class="o-cust">{{ o.customer_name }} <span class="text-muted small">{{ o.code }}</span></div>
+    <div class="o-meta"><i class="fas fa-store me-1"></i>{{ o.branch }} · {{ o.n_items }} item(s){% if o.phone %} · <i class="fas fa-phone me-1"></i>{{ o.phone }}{% endif %}{% if o.order_type=='delivery' %} · <span class="text-warning fw-bold">DELIVERY</span>{% endif %}{% if o.payment_method=='bank' %} · <i class="fas fa-building-columns me-1"></i>Bank{% elif o.payment_method=='pickup' %} · <i class="fas fa-hand-holding-dollar me-1"></i>Pay at pickup{% endif %}</div>
+    {% if o.notes %}<div class="o-meta"><i class="fas fa-note-sticky me-1"></i>{{ o.notes }}</div>{% endif %}
+  </div>
+  <span class="status-pill" style="background:{{ status_colors[o.status] }}">{{ status_labels[o.status] }}</span>
+  <div class="o-total">${{ '%.2f'|format(o.total) }}</div>
+</a>
+{% endfor %}
+{% endif %}
+{% endblock %}

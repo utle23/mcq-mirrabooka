@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Equipment Temperature{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-temperature-half me-2" style="color:#00838F"></i>Equipment Temperature Record</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.card-soft { background:#fff; border:1px solid #e8eaed; border-radius:14px; box-shadow:0 1px 4px rgba(0,0,0,.04); }
+.eq-table { border-collapse:separate; border-spacing:0; }
+.eq-table th, .eq-table td { vertical-align:middle; }
+.eq-table thead th { background:#263238; color:#fff; font-size:.8rem; padding:8px 6px; text-align:center; position:sticky; top:0; }
+.eq-table thead th.today { background:#00838F; }
+.eq-unit { font-weight:700; color:#1A1A2E; min-width:210px; }
+.eq-kind { display:inline-block; font-size:.65rem; font-weight:800; padding:1px 8px; border-radius:999px; color:#fff; text-transform:uppercase; letter-spacing:.04em; }
+.eq-table td input { width:64px; text-align:center; border:1px solid #d8dde2; border-radius:7px; padding:5px 4px; font-weight:700; }
+.eq-table td.today-col { background:#E0F7FA55; }
+.eq-cell-safe input   { background:#e6f4ea; color:#1e4620; border-color:#aed6b8; }
+.eq-cell-unsafe input { background:#fdecea; color:#7a1f17; border-color:#f0a9a0; }
+.range-card { border-radius:12px; padding:12px 16px; color:#fff; }
+.legend-dot { display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:5px; vertical-align:middle; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Safe-range knowledge headings -->
+<div class="row g-2 mb-3">
+  {% for k, m in kind_meta.items() %}
+  <div class="col-md-4">
+    <div class="range-card" style="background:linear-gradient(135deg,{{ m.color }},{{ m.color }}cc)">
+      <div class="d-flex align-items-center gap-2">
+        <i class="fas {{ m.icon }} fa-lg"></i>
+        <div>
+          <div class="fw-bold">{{ m.label }}</div>
+          <div class="small">Safe range: <strong>{{ m.range }}</strong></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+<div class="alert alert-info py-2 mb-3">
+  <i class="fas fa-circle-info me-1"></i> Record each unit once per day. Cells turn
+  <span class="legend-dot" style="background:#e6f4ea;border:1px solid #aed6b8"></span><strong>green</strong> when safe,
+  <span class="legend-dot" style="background:#fdecea;border:1px solid #f0a9a0"></span><strong>red</strong> when out of range.
+  Fridges <strong>0–5°C</strong> · Freezers <strong>-20 to -15°C</strong> · Hot units <strong>≥ 60°C</strong>.
+</div>
+
+<!-- Week navigation -->
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+  <div class="d-flex align-items-center gap-2">
+    <a href="/equipment/week/{{ prev_ws }}" class="btn btn-sm btn-outline-secondary"><i class="fas fa-chevron-left"></i></a>
+    <span class="fw-bold">Week of {{ week_dates[0].strftime('%d %b') }} – {{ week_dates[6].strftime('%d %b %Y') }}</span>
+    <a href="/equipment/week/{{ next_ws }}" class="btn btn-sm btn-outline-secondary"><i class="fas fa-chevron-right"></i></a>
+    <input type="date" class="form-control form-control-sm" style="width:160px" value="{{ week_start }}"
+           onchange="location.href='/equipment/week/'+this.value">
+  </div>
+</div>
+
+<form method="POST" action="/equipment/save">
+<input type="hidden" name="week_start" value="{{ week_start }}">
+<div class="card-soft p-2 mb-3">
+  <div class="d-flex flex-wrap gap-2 align-items-end mb-2 px-1">
+    <div>
+      <label class="form-label small fw-bold mb-1">Recorded by</label>
+      <input name="recorded_by" class="form-control form-control-sm" list="eq-staff" style="width:200px" placeholder="Staff name">
+      <datalist id="eq-staff">{% for s in staff %}<option value="{{ s }}">{% endfor %}</datalist>
+    </div>
+    <button type="submit" class="btn btn-sm text-white ms-auto" style="background:#00838F"><i class="fas fa-save me-1"></i>Save Week</button>
+  </div>
+  <div class="table-responsive">
+    <table class="table eq-table mb-0">
+      <thead>
+        <tr>
+          <th class="text-start">Equipment</th>
+          {% for d in week_dates %}
+          <th class="{% if week_iso[loop.index0]==today_iso %}today{% endif %}">
+            {{ days_short[loop.index0] }}<br><span style="font-weight:400;font-size:.72rem">{{ d.strftime('%d/%m') }}</span>
+          </th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in grid %}
+        <tr>
+          <td class="eq-unit">
+            {{ row.unit.name }}
+            <span class="eq-kind" style="background:{{ row.meta.color }}">{{ row.meta.label }}</span>
+          </td>
+          {% for cell in row.cells %}
+          <td class="p-1 {% if cell.date==today_iso %}today-col{% endif %} eq-cell {% if cell.temp is not none %}{% if cell.unsafe %}eq-cell-unsafe{% else %}eq-cell-safe{% endif %}{% endif %}">
+            <input type="number" step="0.1" name="temp_{{ row.unit.id }}_{{ cell.date }}"
+                   data-lo="{{ row.meta.lo }}" data-hi="{{ row.meta.hi if row.meta.hi is not none else '' }}"
+                   value="{{ '%g'|format(cell.temp) if cell.temp is not none else '' }}"
+                   placeholder="—" oninput="colorEq(this)">
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+</form>
+
+{% if is_admin %}
+<div class="card-soft p-3">
+  <h6 class="fw-bold mb-3"><i class="fas fa-screwdriver-wrench me-1"></i>Manage Equipment <span class="text-muted small">(admin)</span></h6>
+  <form method="POST" action="/equipment/unit/add" class="d-flex gap-2 flex-wrap mb-3">
+    <input name="name" class="form-control form-control-sm" style="flex:1 1 220px" placeholder="New equipment name (e.g. Cold Unit 8 – Salad)" required>
+    <select name="kind" class="form-select form-select-sm" style="max-width:170px">
+      {% for k, m in kind_meta.items() %}<option value="{{ k }}">{{ m.label }}</option>{% endfor %}
+    </select>
+    <button class="btn btn-sm btn-success"><i class="fas fa-plus me-1"></i>Add</button>
+  </form>
+  {% for u in units %}
+  <div class="d-flex gap-2 align-items-center mb-2 flex-wrap">
+    <form method="POST" action="/equipment/unit/{{ u.id }}/update" class="d-flex gap-2 align-items-center flex-wrap w-100">
+      <input name="name" value="{{ u.name }}" class="form-control form-control-sm" style="flex:1 1 220px">
+      <select name="kind" class="form-select form-select-sm" style="max-width:170px">
+        {% for k, m in kind_meta.items() %}<option value="{{ k }}" {% if u.kind==k %}selected{% endif %}>{{ m.label }}</option>{% endfor %}
+      </select>
+      <select name="active" class="form-select form-select-sm" style="max-width:110px">
+        <option value="1" {% if u.active %}selected{% endif %}>Active</option>
+        <option value="0" {% if not u.active %}selected{% endif %}>Hidden</option>
+      </select>
+      <button class="btn btn-sm btn-outline-primary">Save</button>
+    </form>
+    <form method="POST" action="/equipment/unit/{{ u.id }}/delete" onsubmit="return confirm('Delete {{ u.name }} and all its readings?')">
+      <button class="btn btn-sm btn-outline-danger"><i class="fas fa-trash"></i></button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function colorEq(input){
+  const td = input.closest('td');
+  td.classList.remove('eq-cell-safe','eq-cell-unsafe');
+  if (input.value === '' || isNaN(parseFloat(input.value))) return;
+  const v = parseFloat(input.value);
+  const lo = parseFloat(input.dataset.lo);
+  const hi = input.dataset.hi === '' ? null : parseFloat(input.dataset.hi);
+  let unsafe;
+  if (hi === null) unsafe = v < lo;          // hot: lower bound only
+  else unsafe = v < lo || v > hi;            // cold / freezer: range
+  td.classList.add(unsafe ? 'eq-cell-unsafe' : 'eq-cell-safe');
+}
+</script>
+{% endblock %}

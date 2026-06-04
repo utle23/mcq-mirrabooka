@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Order History{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-clock-rotate-left me-2" style="color:#607D8B"></i>Order History</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.card-soft { background:#fff; border:1px solid #e8eaed; border-radius:14px; box-shadow:0 1px 4px rgba(0,0,0,.04); }
+.status-pill { display:inline-block; padding:2px 11px; border-radius:999px; font-size:.7rem; font-weight:800; color:#fff; text-transform:uppercase; }
+table.otbl td, table.otbl th { vertical-align:middle; }
+.empty-state { background:#f7f9fb; border:1px dashed #ccd; border-radius:10px; padding:30px; text-align:center; color:#999; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card-soft p-3 mb-3">
+  <form method="GET" class="row g-2 align-items-end">
+    <div class="col-6 col-md-2">
+      <label class="form-label small fw-bold mb-1">From</label>
+      <input type="date" name="date_from" value="{{ f.date_from }}" class="form-control form-control-sm">
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label small fw-bold mb-1">To</label>
+      <input type="date" name="date_to" value="{{ f.date_to }}" class="form-control form-control-sm">
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label small fw-bold mb-1">Branch</label>
+      <select name="branch" class="form-select form-select-sm">
+        <option value="">All</option>
+        {% for b in branches %}<option value="{{ b }}" {% if f.branch==b %}selected{% endif %}>{{ b }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label small fw-bold mb-1">Status</label>
+      <select name="status" class="form-select form-select-sm">
+        <option value="">All</option>
+        {% for s in statuses %}<option value="{{ s }}" {% if f.status==s %}selected{% endif %}>{{ status_labels[s] }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label small fw-bold mb-1">Staff</label>
+      <select name="staff" class="form-select form-select-sm">
+        <option value="">All</option>
+        {% for s in staff_opts %}<option value="{{ s }}" {% if f.staff==s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-12 col-md-2">
+      <label class="form-label small fw-bold mb-1">Search</label>
+      <input name="q" value="{{ f.q }}" class="form-control form-control-sm" placeholder="Name / phone / #ID">
+    </div>
+    <div class="col-12 d-flex gap-2 mt-2">
+      <button class="btn btn-sm btn-primary"><i class="fas fa-filter me-1"></i>Filter</button>
+      <a href="/orders/history" class="btn btn-sm btn-outline-secondary">Reset</a>
+    </div>
+  </form>
+</div>
+
+{% if not rows %}
+<div class="empty-state"><i class="fas fa-inbox fa-2x mb-2 d-block opacity-25"></i>No orders match these filters.</div>
+{% else %}
+<div class="card-soft p-2">
+  <div class="table-responsive">
+    <table class="table table-hover otbl mb-0">
+      <thead><tr class="text-muted small">
+        <th>Order</th><th>Customer</th><th>Pickup</th><th>Branch</th><th>Items</th><th>Staff</th><th>Status</th><th class="text-end">Total</th>
+      </tr></thead>
+      <tbody>
+      {% for o in rows %}
+      <tr onclick="location.href='/orders/{{ o.id }}'" style="cursor:pointer">
+        <td class="fw-bold">{{ o.code }}</td>
+        <td>{{ o.customer_name }}{% if o.phone %}<div class="text-muted small">{{ o.phone }}</div>{% endif %}</td>
+        <td>{{ o.pickup_date }}<div class="text-muted small">{{ o.pickup_time }}</div></td>
+        <td>{{ o.branch }}</td>
+        <td>{{ o.n_items }}</td>
+        <td>{{ o.created_by }}</td>
+        <td><span class="status-pill" style="background:{{ status_colors[o.status] }}">{{ status_labels[o.status] }}</span></td>
+        <td class="text-end fw-bold">${{ '%.2f'|format(o.total) }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<div class="text-muted small mt-2">{{ rows|length }} order(s){% if rows|length == 500 %} (showing latest 500){% endif %}</div>
+{% endif %}
+{% endblock %}

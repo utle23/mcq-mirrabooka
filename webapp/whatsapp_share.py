@@ -49,8 +49,10 @@ def _conn() -> sqlite3.Connection:
 # ── Data collection ──────────────────────────────────────────────────────────
 
 def _collect_today(date_str: str) -> dict:
-    """Pull today's checklist + temperature submissions with photo paths."""
-    out = {'date': date_str, 'checklists': [], 'temperatures': []}
+    """Pull today's checklist + temperature submissions with photo paths,
+    plus equipment temperatures and any logged violations / reported issues."""
+    out = {'date': date_str, 'checklists': [], 'temperatures': [],
+           'equipment': None, 'violations': [], 'issues': []}
     with _conn() as conn:
         # Checklists — one entry per (type, section) combination submitted today
         chk_rows = conn.execute('''
@@ -95,15 +97,49 @@ def _collect_today(date_str: str) -> dict:
             bad = 0
             for rr in reading_rows:
                 kind = rr['kind'] or 'cold'
-                for col in ('c1_temp', 'c2_temp', 'c3_temp', 'c4_temp', 'c5_temp'):
+                for idx, col in enumerate(('c1_temp', 'c2_temp', 'c3_temp', 'c4_temp', 'c5_temp'), start=1):
                     v = rr[col]
                     if v is None:
+                        continue
+                    # Pastry hot display: 3rd check is informational — no alert.
+                    if r['type'] == 'pastry' and idx == 3:
                         continue
                     if (kind == 'cold' and v > 5) or (kind == 'hot' and v < 60):
                         bad += 1
             r['out_of_zone'] = bad
             r['meta']        = meta
             out['temperatures'].append(r)
+
+        # Equipment temperatures for the date (cold/freezer/hot units)
+        try:
+            import equipment_routes
+            equipment_routes.DB_PATH = DB_PATH
+            out['equipment'] = equipment_routes.collect_equipment_for_date(conn, date_str)
+        except Exception:
+            out['equipment'] = None
+
+        # Logged staff violations for the date
+        try:
+            out['violations'] = [dict(v) for v in conn.execute('''
+                SELECT sv.staff_name, sv.severity, sv.description, sv.action_taken,
+                       sv.status, COALESCE(vr.title, '') AS rule_title,
+                       COALESCE(vr.code, '') AS rule_code
+                FROM staff_violations sv
+                LEFT JOIN violation_rules vr ON vr.id = sv.rule_id
+                WHERE sv.incident_date = ?
+                ORDER BY sv.severity DESC, sv.id''', (date_str,)).fetchall()]
+        except Exception:
+            out['violations'] = []
+
+        # Issues reported for the date
+        try:
+            out['issues'] = [dict(i) for i in conn.execute('''
+                SELECT title, category, description, priority, status, reported_by
+                FROM issue_reports WHERE date = ?
+                ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 ELSE 2 END, id
+            ''', (date_str,)).fetchall()]
+        except Exception:
+            out['issues'] = []
     return out
 
 
@@ -250,12 +286,14 @@ def build_daily_png(date_str: str) -> bytes:
     chk_late = sum(1 for c in data['checklists'] if c.get('is_late'))
     temp_done = len(data['temperatures'])
     temp_alerts = sum(c.get('out_of_zone', 0) for c in data['temperatures'])
+    _equip = data.get('equipment') or {}
+    equip_alerts = _equip.get('alerts', 0)
 
     kpi_cards = [
         ('CHECKLISTS', f'{len(data["checklists"])}', (46, 125, 50)),
-        ('FULLY DONE', f'{chk_done}', (33, 150, 83)),
-        ('TEMPERATURE', f'{temp_done}', (216, 67, 21)),
-        ('ALERTS', f'{temp_alerts + chk_late}', (198, 40, 40)),
+        ('FOOD TEMP', f'{temp_done}', (216, 67, 21)),
+        ('EQUIPMENT', f'{_equip.get("recorded", 0)}', (0, 131, 143)),
+        ('ALERTS', f'{temp_alerts + chk_late + equip_alerts + len(data.get("violations", []))}', (198, 40, 40)),
     ]
     card_w = (W - PAD * 2 - 36) // 4
     for i, (label, val, col) in enumerate(kpi_cards):
@@ -1055,10 +1093,10 @@ def build_daily_pdf(date_str: str) -> bytes:
             fontName=font_name, fontSize=11, leading=14,
             textColor=colors.HexColor('#EADCC0'), alignment=TA_LEFT, spaceAfter=0),
         'section':     ParagraphStyle('section', parent=base['Heading2'],
-            fontName=bold_font, fontSize=14, leading=18, textColor=INK,
+            fontName=bold_font, fontSize=16, leading=20, textColor=INK,
             spaceBefore=10, spaceAfter=6),
         'body':        ParagraphStyle('body', parent=base['BodyText'],
-            fontName=font_name, fontSize=10.5, leading=14, textColor=INK),
+            fontName=font_name, fontSize=11.5, leading=15, textColor=INK),
         'body_b':      ParagraphStyle('body_b', parent=base['BodyText'],
             fontName=bold_font, fontSize=10.5, leading=14, textColor=INK),
         'small':       ParagraphStyle('small', parent=base['Normal'],
@@ -1069,9 +1107,9 @@ def build_daily_pdf(date_str: str) -> bytes:
             fontName=bold_font, fontSize=9, leading=11,
             textColor=colors.white, alignment=TA_CENTER),
         'task':        ParagraphStyle('task', parent=base['Normal'],
-            fontName=font_name, fontSize=10, leading=13, textColor=INK),
+            fontName=font_name, fontSize=12.5, leading=17, textColor=INK),
         'task_done':   ParagraphStyle('task_done', parent=base['Normal'],
-            fontName=font_name, fontSize=10, leading=13,
+            fontName=font_name, fontSize=12.5, leading=17,
             textColor=MUTED),
         'photo_cap':   ParagraphStyle('photo_cap', parent=base['Normal'],
             fontName=font_name, fontSize=8, leading=10,
@@ -1087,42 +1125,70 @@ def build_daily_pdf(date_str: str) -> bytes:
     # ── Cover page background painter (drawn on the canvas, behind story) ──
     def _draw_cover(canvas, doc_obj):
         canvas.saveState()
-        # Full-bleed navy with red bottom band + gold rule
-        canvas.setFillColor(NAVY)
+        # Full-bleed deep-navy base
+        canvas.setFillColor(NAVY_DK)
         canvas.rect(0, 0, PAGE_W, PAGE_H, fill=1, stroke=0)
-        # Gradient feel via stacked rectangles (ReportLab has no real grad)
-        for i, alpha in enumerate([(28, 24, 50), (32, 26, 56), (38, 30, 62)]):
-            canvas.setFillColorRGB(alpha[0]/255, alpha[1]/255, alpha[2]/255)
-            canvas.rect(0, PAGE_H - (i + 1) * 70, PAGE_W, 70, fill=1, stroke=0)
-        # Bottom brand band
-        canvas.setFillColor(BRAND)
-        canvas.rect(0, 0, PAGE_W, 14 * mm, fill=1, stroke=0)
-        canvas.setFillColor(GOLD)
-        canvas.rect(0, 14 * mm, PAGE_W, 1.2 * mm, fill=1, stroke=0)
+        # Vertical gradient feel via stacked translucent bands (top lighter)
+        bands = 16
+        for i in range(bands):
+            t = i / float(bands - 1)
+            r = int(26 + t * 14); g = int(22 + t * 12); b = int(48 + t * 20)
+            canvas.setFillColorRGB(r/255, g/255, b/255)
+            canvas.rect(0, PAGE_H - (i + 1) * (PAGE_H / bands), PAGE_W,
+                        PAGE_H / bands + 1, fill=1, stroke=0)
 
-        # Logo (centered, large)
+        # Decorative gold double-frame inset from the edges
+        inset = 9 * mm
+        canvas.setStrokeColor(GOLD)
+        canvas.setLineWidth(1.4)
+        canvas.rect(inset, inset, PAGE_W - 2 * inset, PAGE_H - 2 * inset, fill=0, stroke=1)
+        canvas.setLineWidth(0.5)
+        canvas.rect(inset + 2.2 * mm, inset + 2.2 * mm,
+                    PAGE_W - 2 * (inset + 2.2 * mm), PAGE_H - 2 * (inset + 2.2 * mm),
+                    fill=0, stroke=1)
+        # Corner accents
+        canvas.setFillColor(GOLD)
+        for cx, cy in [(inset, PAGE_H - inset), (PAGE_W - inset, PAGE_H - inset),
+                       (inset, inset), (PAGE_W - inset, inset)]:
+            canvas.circle(cx, cy, 1.6 * mm, fill=1, stroke=0)
+
+        # Bottom brand band + gold rule
+        canvas.setFillColor(BRAND)
+        canvas.rect(0, 0, PAGE_W, 22 * mm, fill=1, stroke=0)
+        canvas.setFillColor(GOLD)
+        canvas.rect(0, 22 * mm, PAGE_W, 1.4 * mm, fill=1, stroke=0)
+        # Tagline inside the brand band
+        canvas.setFont(bold_font, 13)
+        canvas.setFillColor(colors.white)
+        canvas.drawCentredString(PAGE_W / 2, 13.5 * mm, 'Freshly made · authentically Vietnamese')
+        canvas.setFont(font_name, 8.5)
+        canvas.setFillColor(colors.HexColor('#FFE082'))
+        canvas.drawCentredString(PAGE_W / 2, 8 * mm,
+                                 'THANK YOU FOR SUPPORTING LOCAL · MCQ MIRRABOOKA CAFE')
+
+        # Logo (centered, large) on a white rounded card with gold ring
         logo_path = os.path.join(STATIC_DIR, 'logo.png') if STATIC_DIR else ''
         if os.path.exists(logo_path):
             try:
-                size = 70 * mm
+                size = 66 * mm
                 lx = (PAGE_W - size) / 2
-                ly = PAGE_H - 95 * mm
-                # White rounded card under logo
+                ly = PAGE_H - 92 * mm
+                canvas.setFillColor(GOLD)
+                canvas.roundRect(lx - 7.4 * mm, ly - 7.4 * mm, size + 14.8 * mm, size + 14.8 * mm,
+                                 12, fill=1, stroke=0)
                 canvas.setFillColor(colors.white)
                 canvas.roundRect(lx - 6 * mm, ly - 6 * mm, size + 12 * mm, size + 12 * mm,
-                                 8, fill=1, stroke=0)
+                                 10, fill=1, stroke=0)
                 canvas.drawImage(logo_path, lx, ly, width=size, height=size,
                                  preserveAspectRatio=True, mask='auto')
             except Exception:
                 pass
 
-        # Page-numbered footer at bottom of brand band
+        # Footer line above the brand band
         canvas.setFont(font_name, 8)
-        canvas.setFillColor(colors.white)
-        canvas.drawString(MARGIN, 5.5 * mm,
+        canvas.setFillColor(colors.HexColor('#9AA3B2'))
+        canvas.drawCentredString(PAGE_W / 2, 25 * mm,
                           f'Generated {datetime.now().strftime("%a %d %b %Y · %H:%M")}')
-        canvas.drawRightString(PAGE_W - MARGIN, 5.5 * mm,
-                               f'Page {doc_obj.page}')
         canvas.restoreState()
 
     def _draw_page(canvas, doc_obj):
@@ -1174,6 +1240,10 @@ def build_daily_pdf(date_str: str) -> bytes:
                    if c['done_tasks'] == c['total_tasks'] and c['total_tasks'] > 0)
     chk_late = sum(1 for c in data['checklists'] if c.get('is_late'))
     temp_alerts = sum(c.get('out_of_zone', 0) for c in data['temperatures'])
+    _equip = data.get('equipment') or {}
+    equip_recorded = _equip.get('recorded', 0)
+    equip_alerts   = _equip.get('alerts', 0)
+    total_alerts   = temp_alerts + chk_late + equip_alerts + len(data.get('violations', []))
 
     def _kpi(label, value, accent):
         return Table([
@@ -1183,8 +1253,9 @@ def build_daily_pdf(date_str: str) -> bytes:
                        ParagraphStyle('k2', fontName=bold_font, alignment=TA_CENTER))],
         ], colWidths=[40 * mm], rowHeights=[8 * mm, 18 * mm],
             style=TableStyle([
-                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#ffffff10')),
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ffffff20')),
+                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#252544')),
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#32324F')),
+                ('LINEABOVE', (0, 0), (-1, 0), 1.2, GOLD),
                 ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
                 ('TOPPADDING', (0, 0), (-1, -1), 4),
                 ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
@@ -1192,12 +1263,29 @@ def build_daily_pdf(date_str: str) -> bytes:
 
     kpis = Table([[
         _kpi('CHECKLISTS', str(len(data['checklists'])), colors.HexColor('#A5D6A7')),
-        _kpi('FULLY DONE', str(chk_done),                colors.HexColor('#80CBC4')),
-        _kpi('TEMPERATURE', str(len(data['temperatures'])), colors.HexColor('#FFAB91')),
-        _kpi('ALERTS',     str(temp_alerts + chk_late), colors.HexColor('#FFCDD2')),
+        _kpi('FOOD TEMP', str(len(data['temperatures'])), colors.HexColor('#FFAB91')),
+        _kpi('EQUIPMENT', str(equip_recorded),           colors.HexColor('#80DEEA')),
+        _kpi('ALERTS',    str(total_alerts),             colors.HexColor('#FFCDD2')),
     ]], colWidths=[40 * mm] * 4)
     kpis.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE')]))
     story.append(kpis)
+    story.append(Spacer(1, 6 * mm))
+
+    # Status banner: green = all clear, red = attention needed
+    if total_alerts == 0:
+        _bn_txt, _bn_col = 'ALL CLEAR · NO ALERTS TODAY', OK
+    else:
+        _bn_txt, _bn_col = f'{total_alerts} ITEM(S) NEED ATTENTION', BAD
+    banner = Table([[Paragraph(
+        f'<font color="white" size="13"><b>{_bn_txt}</b></font>',
+        ParagraphStyle('bn', fontName=bold_font, alignment=TA_CENTER))]],
+        colWidths=[160 * mm], rowHeights=[11 * mm])
+    banner.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), _bn_col),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+    ]))
+    story.append(banner)
 
     # ── Per-checklist pages ────────────────────────────────────────────────
     if data['checklists']:
@@ -1285,9 +1373,9 @@ def build_daily_pdf(date_str: str) -> bytes:
             ('TEXTCOLOR', (2, 0), (2, -1), MUTED),
             ('TEXTCOLOR', (1, 0), (1, -1), INK),
             ('TEXTCOLOR', (3, 0), (3, -1), INK),
-            ('FONTSIZE', (0, 0), (-1, -1), 9.5),
-            ('TOPPADDING', (0, 0), (-1, -1), 7),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
+            ('FONTSIZE', (0, 0), (-1, -1), 11),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
             ('LEFTPADDING', (0, 0), (-1, -1), 10),
             ('LINEBELOW', (0, 0), (-1, -2), 0.3, SOFT),
             ('LINEAFTER', (1, 0), (1, -1), 0.3, SOFT),
@@ -1312,9 +1400,9 @@ def build_daily_pdf(date_str: str) -> bytes:
             tt.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, -1), colors.white),
                 ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                ('TOPPADDING', (0, 0), (-1, -1), 4),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-                ('LEFTPADDING', (0, 0), (-1, -1), 8),
+                ('TOPPADDING', (0, 0), (-1, -1), 8),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+                ('LEFTPADDING', (0, 0), (-1, -1), 10),
                 ('LINEBELOW', (0, 0), (-1, -1), 0.25, SOFT),
             ]))
             story.append(tt)
@@ -1524,8 +1612,152 @@ def build_daily_pdf(date_str: str) -> bytes:
         ]))
         story.append(rt)
 
+    # ── Equipment temperature page ─────────────────────────────────────────
+    equip = data.get('equipment')
+    if equip and equip.get('recorded'):
+        story.append(PageBreak())
+        eq_col = colors.HexColor('#00838F')
+        hdr = Table([[Paragraph(
+            '<font color="white" size="20"><b>EQUIPMENT TEMPERATURE</b></font><br/>'
+            f'<font color="#D7F2F5" size="11">FRIDGES · FREEZERS · HOT UNITS · {date_str}</font>',
+            ParagraphStyle('eqh', fontName=bold_font, leading=24))]], colWidths=[USABLE_W])
+        hdr.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), eq_col),
+            ('LEFTPADDING', (0, 0), (-1, -1), 16), ('RIGHTPADDING', (0, 0), (-1, -1), 16),
+            ('TOPPADDING', (0, 0), (-1, -1), 14), ('BOTTOMPADDING', (0, 0), (-1, -1), 14),
+        ]))
+        story.append(hdr)
+        story.append(Spacer(1, 4 * mm))
+
+        # Pills
+        e_pills = [(f'{equip["recorded"]}/{equip["total"]} RECORDED', OK),
+                   (f'{equip["alerts"]} OUT OF RANGE', BAD if equip['alerts'] else OK)]
+        e_cells = []
+        for txt, c_ in e_pills:
+            cell = Table([[Paragraph(f'<font color="white"><b>{_esc(txt)}</b></font>',
+                ParagraphStyle('ep', fontName=bold_font, fontSize=9, alignment=TA_CENTER))]],
+                rowHeights=[7 * mm])
+            cell.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, -1), c_),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 12), ('RIGHTPADDING', (0, 0), (-1, -1), 12)]))
+            e_cells.append(cell)
+        epr = Table([e_cells], colWidths=[USABLE_W / len(e_pills)] * len(e_pills))
+        epr.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 2), ('RIGHTPADDING', (0, 0), (-1, -1), 2)]))
+        story.append(epr)
+        story.append(Spacer(1, 4 * mm))
+        story.append(Paragraph(
+            'Safe ranges — Fridge <b>0 to 5°C</b> · Freezer <b>-20 to -15°C</b> · Hot unit <b>≥ 60°C</b>.',
+            S['body']))
+        story.append(Spacer(1, 3 * mm))
+
+        kind_label = {'cold': 'FRIDGE', 'freezer': 'FREEZER', 'hot': 'HOT'}
+        rows_data = [['Equipment', 'Type', 'Safe range', 'Temp', 'Status']]
+        for u in equip['units']:
+            if u['temp'] is None:
+                temp_p = Paragraph('<font color="#999">— not recorded —</font>',
+                    ParagraphStyle('en', fontName=font_name, fontSize=10, alignment=TA_CENTER))
+                status_p = Paragraph('<font color="#999">—</font>',
+                    ParagraphStyle('es', fontName=font_name, fontSize=9, alignment=TA_CENTER))
+            else:
+                col_hex = '#C62828' if u['unsafe'] else '#2E7D32'
+                temp_p = Paragraph(f'<font color="{col_hex}"><b>{u["temp"]:g}°C</b></font>',
+                    ParagraphStyle('et', fontName=bold_font, fontSize=11, alignment=TA_CENTER))
+                status_p = Paragraph(
+                    f'<font color="{col_hex}"><b>{"OUT OF RANGE" if u["unsafe"] else "OK"}</b></font>',
+                    ParagraphStyle('es', fontName=bold_font, fontSize=9, alignment=TA_CENTER))
+            rows_data.append([
+                Paragraph(_esc(u['name']), S['food']),
+                Paragraph(kind_label.get(u['kind'], u['kind'].upper()), S['small_b']),
+                Paragraph(_esc(u.get('range', '')), S['small']),
+                temp_p, status_p,
+            ])
+        et = Table(rows_data, colWidths=[USABLE_W * 0.40, USABLE_W * 0.13,
+                   USABLE_W * 0.20, USABLE_W * 0.13, USABLE_W * 0.14], repeatRows=1)
+        et.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), NAVY),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), bold_font), ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 0.3, SOFT),
+            ('TOPPADDING', (0, 0), (-1, -1), 7), ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8), ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#FAFBFD')]),
+        ]))
+        story.append(et)
+
+    # ── Issues & Violations page ───────────────────────────────────────────
+    violations = data.get('violations', [])
+    issues = data.get('issues', [])
+    if violations or issues:
+        story.append(PageBreak())
+        hdr = Table([[Paragraph(
+            '<font color="white" size="20"><b>ISSUES &amp; VIOLATIONS</b></font><br/>'
+            f'<font color="#FFE0B2" size="11">FLAGGED FOR FOLLOW-UP · {date_str}</font>',
+            ParagraphStyle('ivh', fontName=bold_font, leading=24))]], colWidths=[USABLE_W])
+        hdr.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), BAD),
+            ('LEFTPADDING', (0, 0), (-1, -1), 16), ('RIGHTPADDING', (0, 0), (-1, -1), 16),
+            ('TOPPADDING', (0, 0), (-1, -1), 14), ('BOTTOMPADDING', (0, 0), (-1, -1), 14),
+        ]))
+        story.append(hdr)
+        story.append(Spacer(1, 5 * mm))
+
+        sev_col = {'major': '#C62828', 'serious': '#C62828', 'moderate': '#E65100', 'minor': '#F9A825'}
+        if violations:
+            story.append(Paragraph(f'STAFF VIOLATIONS ({len(violations)})', S['section']))
+            vrows = [['Staff', 'Violation', 'Severity', 'Action / Status']]
+            for v in violations:
+                sc = sev_col.get((v.get('severity') or 'minor').lower(), '#F9A825')
+                vrows.append([
+                    Paragraph(_esc(v.get('staff_name') or '—'), S['body_b']),
+                    Paragraph(_esc(v.get('rule_title') or v.get('description') or '—'), S['body']),
+                    Paragraph(f'<font color="{sc}"><b>{_esc((v.get("severity") or "minor").upper())}</b></font>',
+                              ParagraphStyle('sv', fontName=bold_font, fontSize=9)),
+                    Paragraph(_esc((v.get('action_taken') or v.get('status') or '—')), S['small']),
+                ])
+            vt = Table(vrows, colWidths=[USABLE_W * 0.20, USABLE_W * 0.40,
+                       USABLE_W * 0.14, USABLE_W * 0.26], repeatRows=1)
+            vt.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), NAVY), ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('FONTNAME', (0, 0), (-1, 0), bold_font), ('FONTSIZE', (0, 0), (-1, 0), 9),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'), ('GRID', (0, 0), (-1, -1), 0.3, SOFT),
+                ('TOPPADDING', (0, 0), (-1, -1), 7), ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
+                ('LEFTPADDING', (0, 0), (-1, -1), 8), ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#FFF8F6')]),
+            ]))
+            story.append(vt)
+            story.append(Spacer(1, 6 * mm))
+
+        if issues:
+            story.append(Paragraph(f'REPORTED ISSUES ({len(issues)})', S['section']))
+            irows = [['Title', 'Category', 'Priority', 'Status']]
+            for it in issues:
+                pr = (it.get('priority') or 'normal').lower()
+                pc = '#C62828' if pr in ('urgent', 'high') else '#6E757E'
+                irows.append([
+                    Paragraph(_esc(it.get('title') or '—'), S['body_b']),
+                    Paragraph(_esc(it.get('category') or '—'), S['small']),
+                    Paragraph(f'<font color="{pc}"><b>{_esc(pr.upper())}</b></font>',
+                              ParagraphStyle('ip', fontName=bold_font, fontSize=9)),
+                    Paragraph(_esc((it.get('status') or 'open').upper()), S['small']),
+                ])
+            it_tbl = Table(irows, colWidths=[USABLE_W * 0.42, USABLE_W * 0.24,
+                           USABLE_W * 0.16, USABLE_W * 0.18], repeatRows=1)
+            it_tbl.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), NAVY), ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('FONTNAME', (0, 0), (-1, 0), bold_font), ('FONTSIZE', (0, 0), (-1, 0), 9),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'), ('GRID', (0, 0), (-1, -1), 0.3, SOFT),
+                ('TOPPADDING', (0, 0), (-1, -1), 7), ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
+                ('LEFTPADDING', (0, 0), (-1, -1), 8), ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#FAFBFD')]),
+            ]))
+            story.append(it_tbl)
+
     # Empty-state if nothing today
-    if not data['checklists'] and not data['temperatures']:
+    if (not data['checklists'] and not data['temperatures']
+            and not (equip and equip.get('recorded')) and not violations and not issues):
         story.append(PageBreak())
         story.append(Spacer(1, 60 * mm))
         story.append(Paragraph('No data recorded yet today.', S['section']))

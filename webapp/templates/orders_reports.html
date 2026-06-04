@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Order Reports{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-chart-line me-2" style="color:#7B1FA2"></i>Order Reports</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.card-soft { background:#fff; border:1px solid #e8eaed; border-radius:14px; box-shadow:0 1px 4px rgba(0,0,0,.04); }
+.stat { border-radius:14px; padding:18px; color:#fff; }
+.stat .lbl { font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; opacity:.9; }
+.stat .val { font-size:2rem; font-weight:900; line-height:1.1; margin-top:4px; }
+.rank-row { display:flex; align-items:center; gap:12px; padding:9px 0; border-bottom:1px solid #f0f0f0; }
+.rank-row .rk { width:26px; height:26px; border-radius:50%; background:#f0e6f7; color:#7B1FA2; font-weight:800; display:flex; align-items:center; justify-content:center; font-size:.85rem; }
+.rank-row .nm { flex:1; font-weight:600; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row g-3 mb-3">
+  <div class="col-6 col-lg-3"><div class="stat" style="background:linear-gradient(135deg,#2196F3,#1565C0)"><div class="lbl">Today's Orders</div><div class="val">{{ today_orders }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="stat" style="background:linear-gradient(135deg,#00897B,#00695C)"><div class="lbl">Today's Revenue</div><div class="val">${{ '%.0f'|format(today_rev) }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="stat" style="background:linear-gradient(135deg,#7B1FA2,#4A148C)"><div class="lbl">This Week Orders</div><div class="val">{{ week_orders }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="stat" style="background:linear-gradient(135deg,#FB8C00,#E65100)"><div class="lbl">This Week Revenue</div><div class="val">${{ '%.0f'|format(week_rev) }}</div></div></div>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-6 col-lg-3"><div class="card-soft p-3 text-center"><div class="text-muted small">All-Time Revenue</div><div class="fs-3 fw-bold text-success">${{ '%.2f'|format(total_rev) }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="card-soft p-3 text-center"><div class="text-muted small">Cancelled Orders</div><div class="fs-3 fw-bold text-danger">{{ cancelled }}</div></div></div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card-soft p-3 mb-3">
+      <h6 class="fw-bold mb-3"><i class="fas fa-chart-area me-1"></i>Revenue — Last 7 Days</h6>
+      <canvas id="trendChart" height="120"></canvas>
+    </div>
+    <div class="card-soft p-3">
+      <h6 class="fw-bold mb-3"><i class="fas fa-store me-1"></i>Store Performance</h6>
+      {% if by_store %}
+      <table class="table table-sm mb-0">
+        <thead><tr class="text-muted small"><th>Branch</th><th class="text-end">Orders</th><th class="text-end">Revenue</th></tr></thead>
+        <tbody>
+        {% for s in by_store %}
+        <tr><td class="fw-bold">{{ s.branch }}</td><td class="text-end">{{ s.orders }}</td><td class="text-end fw-bold">${{ '%.2f'|format(s.revenue) }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<div class="text-muted small">No data yet.</div>{% endif %}
+    </div>
+  </div>
+
+  <div class="col-lg-5">
+    <div class="card-soft p-3">
+      <h6 class="fw-bold mb-3"><i class="fas fa-fire me-1"></i>Top Selling Products</h6>
+      {% if popular %}
+      {% for p in popular %}
+      <div class="rank-row">
+        <span class="rk">{{ loop.index }}</span>
+        <span class="nm">{{ p.name }}</span>
+        <span class="text-muted small">{{ p.qty }} sold</span>
+        <span class="fw-bold text-success">${{ '%.0f'|format(p.revenue) }}</span>
+      </div>
+      {% endfor %}
+      {% else %}<div class="text-muted small">No data yet.</div>{% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const trend = {{ trend|tojson }};
+new Chart(document.getElementById('trendChart'), {
+  type:'line',
+  data:{
+    labels: trend.map(t => t.date.slice(5)),
+    datasets:[{ label:'Revenue ($)', data: trend.map(t => t.revenue),
+      borderColor:'#7B1FA2', backgroundColor:'rgba(123,31,162,.12)', fill:true, tension:.35, pointRadius:4 }]
+  },
+  options:{ plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}} }
+});
+</script>
+{% endblock %}

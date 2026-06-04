@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Menu Management{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-book-open me-2" style="color:#26A69A"></i>Menu Management</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.card-soft { background:#fff; border:1px solid #e8eaed; border-radius:14px; box-shadow:0 1px 4px rgba(0,0,0,.04); }
+.cat-block { margin-bottom:14px; }
+.cat-head { display:flex; align-items:center; gap:10px; padding:10px 14px; background:#f5f7f9; border-radius:10px 10px 0 0; border:1px solid #e8eaed; }
+.cat-head .cn { font-weight:800; flex:1; }
+.item-line { display:flex; align-items:center; gap:8px; padding:8px 14px; border:1px solid #e8eaed; border-top:none; }
+.item-line:last-child { border-radius:0 0 10px 10px; }
+.item-line .inm { flex:1; font-weight:600; }
+.item-line.inactive { opacity:.5; }
+.mini { font-size:.82rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row g-3">
+  <div class="col-lg-4">
+    <div class="card-soft p-3 mb-3">
+      <h6 class="fw-bold mb-3"><i class="fas fa-sliders me-1"></i>Settings</h6>
+      <form method="POST" action="/orders/menu/settings">
+        <label class="form-label small fw-bold mb-1">Large Catering Box price ($)</label>
+        <input name="catering_box_price" type="number" step="0.01" min="0" value="{{ '%.2f'|format(catering_price) }}" class="form-control form-control-sm mb-2">
+        <label class="form-label small fw-bold mb-1">Kitchen display grace (minutes after pickup before hiding)</label>
+        <input name="kitchen_grace_minutes" type="number" min="0" value="{{ grace }}" class="form-control form-control-sm mb-2">
+        <button class="btn btn-sm btn-primary w-100">Save Settings</button>
+      </form>
+    </div>
+
+    <div class="card-soft p-3 mb-3">
+      <h6 class="fw-bold mb-3"><i class="fas fa-folder-plus me-1"></i>Add Category</h6>
+      <form method="POST" action="/orders/menu/category/add" class="d-flex gap-2">
+        <input name="name" class="form-control form-control-sm" placeholder="Category name" required>
+        <button class="btn btn-sm btn-success">Add</button>
+      </form>
+    </div>
+
+    <div class="card-soft p-3">
+      <h6 class="fw-bold mb-3"><i class="fas fa-plus me-1"></i>Add Menu Item</h6>
+      <form method="POST" action="/orders/menu/item/add">
+        <input name="name" class="form-control form-control-sm mb-2" placeholder="Item name" required>
+        <div class="d-flex gap-2 mb-2">
+          <select name="category_id" class="form-select form-select-sm" required>
+            {% for c in cats %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+          </select>
+          <input name="price" type="number" step="0.01" min="0" class="form-control form-control-sm" placeholder="$" style="max-width:90px" required>
+        </div>
+        <button class="btn btn-sm btn-success w-100">Add Item</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="col-lg-8">
+    {% for c in cats %}
+    <div class="cat-block">
+      <div class="cat-head">
+        <span class="cn">{{ c.name }}{% if not c.active %} <span class="badge bg-secondary mini">hidden</span>{% endif %}</span>
+        <form method="POST" action="/orders/menu/category/{{ c.id }}/update" class="d-flex gap-1 align-items-center">
+          <input name="name" value="{{ c.name }}" class="form-control form-control-sm mini" style="max-width:160px">
+          <select name="active" class="form-select form-select-sm mini" style="max-width:100px">
+            <option value="1" {% if c.active %}selected{% endif %}>Visible</option>
+            <option value="0" {% if not c.active %}selected{% endif %}>Hidden</option>
+          </select>
+          <button class="btn btn-sm btn-outline-primary mini">Save</button>
+        </form>
+        <form method="POST" action="/orders/menu/category/{{ c.id }}/delete" onsubmit="return confirm('Delete category {{ c.name }} and hide its items?')">
+          <button class="btn btn-sm btn-outline-danger mini"><i class="fas fa-trash"></i></button>
+        </form>
+      </div>
+      {% for it in c['items'] %}
+      <div class="item-line {% if not it.active %}inactive{% endif %}">
+        <form method="POST" action="/orders/menu/item/{{ it.id }}/update" class="d-flex align-items-center gap-2 w-100">
+          <input name="name" value="{{ it.name }}" class="form-control form-control-sm inm">
+          {% if it.is_catering %}<span class="badge bg-warning text-dark mini">catering</span>{% endif %}
+          <span class="text-muted mini">$</span>
+          <input name="price" type="number" step="0.01" min="0" value="{{ '%.2f'|format(it.price) }}" class="form-control form-control-sm" style="max-width:90px">
+          <select name="category_id" class="form-select form-select-sm mini" style="max-width:150px">
+            {% for cc in cats %}<option value="{{ cc.id }}" {% if cc.id==it.category_id %}selected{% endif %}>{{ cc.name }}</option>{% endfor %}
+          </select>
+          <select name="active" class="form-select form-select-sm mini" style="max-width:90px">
+            <option value="1" {% if it.active %}selected{% endif %}>On</option>
+            <option value="0" {% if not it.active %}selected{% endif %}>Off</option>
+          </select>
+          <button class="btn btn-sm btn-outline-primary mini">Save</button>
+        </form>
+        <form method="POST" action="/orders/menu/item/{{ it.id }}/delete" onsubmit="return confirm('Delete {{ it.name }}?')">
+          <button class="btn btn-sm btn-outline-danger mini"><i class="fas fa-trash"></i></button>
+        </form>
+      </div>
+      {% endfor %}
+      {% if not c['items'] %}<div class="item-line text-muted mini">No items in this category.</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

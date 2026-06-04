@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Order {{ order.code }}{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-receipt me-2" style="color:#2196F3"></i>Order {{ order.code }}</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.card-soft { background:#fff; border:1px solid #e8eaed; border-radius:14px; box-shadow:0 1px 4px rgba(0,0,0,.04); }
+.status-pill { display:inline-block; padding:4px 16px; border-radius:999px; font-size:.8rem; font-weight:800; color:#fff; text-transform:uppercase; letter-spacing:.04em; }
+.kv { display:flex; gap:8px; padding:5px 0; font-size:.92rem; }
+.kv .k { color:#888; min-width:120px; }
+.kv .v { font-weight:600; color:#1A1A2E; }
+.li-row { display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid #f0f0f0; }
+.li-row .li-name { font-weight:700; color:#1A1A2E; }
+.li-row .li-note { color:#888; font-size:.82rem; }
+.totsum { display:flex; justify-content:space-between; padding:5px 0; }
+.totsum.grand { border-top:2px solid #eee; margin-top:6px; padding-top:10px; font-size:1.3rem; font-weight:800; color:#00897B; }
+.status-btn { border:2px solid; background:#fff; border-radius:10px; padding:8px 14px; font-weight:700; font-size:.85rem; cursor:pointer; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card-soft p-3 mb-3">
+      <div class="d-flex justify-content-between align-items-start mb-2">
+        <h4 class="fw-bold mb-0">{{ order.customer_name }}</h4>
+        <span class="status-pill" style="background:{{ status_colors[order.status] }}">{{ status_labels[order.status] }}</span>
+      </div>
+      <div class="kv"><span class="k">Pickup</span><span class="v">{{ order.pickup_date }} at {{ order.pickup_time or '—' }}</span></div>
+      <div class="kv"><span class="k">Branch / Type</span><span class="v">{{ order.branch }} · {{ order.order_type|capitalize }}</span></div>
+      <div class="kv"><span class="k">Payment</span><span class="v">
+        {% if order.payment_method %}
+          {% if order.payment_method=='bank' %}<i class="fas fa-building-columns me-1 text-primary"></i>{% else %}<i class="fas fa-hand-holding-dollar me-1 text-success"></i>{% endif %}{{ payment_methods.get(order.payment_method, order.payment_method) }}
+        {% else %}<span class="text-muted">Not specified</span>{% endif %}
+      </span></div>
+      {% if order.phone %}<div class="kv"><span class="k">Phone</span><span class="v">{{ order.phone }}</span></div>{% endif %}
+      {% if order.notes %}<div class="kv"><span class="k">Notes</span><span class="v">{{ order.notes }}</span></div>{% endif %}
+      <div class="kv"><span class="k">Taken by</span><span class="v">{{ order.created_by or '—' }} · {{ order.created_at }}</span></div>
+    </div>
+
+    <div class="card-soft p-3">
+      <h6 class="fw-bold mb-3"><i class="fas fa-utensils me-1"></i>Items</h6>
+      {% for li in lines %}
+      <div class="li-row">
+        <div>
+          <span class="li-name">{{ li.qty }}× {{ li.name }}</span>
+          {% if li.line_discount_pct %}<span class="badge bg-secondary ms-1">{{ li.line_discount_pct }}% off</span>{% endif %}
+          {% if li.notes %}<div class="li-note"><i class="fas fa-note-sticky me-1"></i>{{ li.notes }}</div>{% endif %}
+        </div>
+        <div class="text-end">
+          <div class="fw-bold">${{ '%.2f'|format(li.line_total) }}</div>
+          <div class="text-muted small">${{ '%.2f'|format(li.unit_price) }} ea</div>
+        </div>
+      </div>
+      {% endfor %}
+      <div class="mt-3">
+        <div class="totsum"><span class="text-muted">Subtotal</span><span>${{ '%.2f'|format(order.subtotal) }}</span></div>
+        {% if order.discount_amount %}
+        <div class="totsum"><span class="text-muted">Discount{% if order.discount_type=='percent' %} ({{ order.discount_value }}%){% endif %}</span><span style="color:#C62828">-${{ '%.2f'|format(order.discount_amount) }}</span></div>
+        {% endif %}
+        <div class="totsum grand"><span>Grand Total</span><span>${{ '%.2f'|format(order.total) }}</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-5">
+    <div class="card-soft p-3 mb-3">
+      <h6 class="fw-bold mb-3"><i class="fas fa-arrows-rotate me-1"></i>Update Status</h6>
+      <div class="d-flex flex-wrap gap-2">
+        {% for s in ['confirmed','preparing','ready','completed'] %}
+        <form method="POST" action="/orders/{{ order.id }}/status">
+          <input type="hidden" name="status" value="{{ s }}">
+          <button class="status-btn" style="border-color:{{ status_colors[s] }};color:{{ status_colors[s] }};{% if order.status==s %}background:{{ status_colors[s] }};color:#fff;{% endif %}">
+            {{ status_labels[s] }}
+          </button>
+        </form>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="card-soft p-3">
+      <h6 class="fw-bold mb-3"><i class="fas fa-gear me-1"></i>Actions</h6>
+      <div class="d-grid gap-2">
+        {% if order.status != 'cancelled' %}
+        <a href="/orders/{{ order.id }}/edit" class="btn btn-outline-primary"><i class="fas fa-pen me-1"></i>Edit Order</a>
+        <form method="POST" action="/orders/{{ order.id }}/cancel" onsubmit="return confirm('Cancel this order?')">
+          <button class="btn btn-outline-danger w-100"><i class="fas fa-ban me-1"></i>Cancel Order</button>
+        </form>
+        {% else %}
+        {% if is_admin %}
+        <form method="POST" action="/orders/{{ order.id }}/restore">
+          <button class="btn btn-outline-success w-100"><i class="fas fa-rotate-left me-1"></i>Restore Order</button>
+        </form>
+        {% endif %}
+        {% endif %}
+        {% if is_admin %}
+        <form method="POST" action="/orders/{{ order.id }}/delete" onsubmit="return confirm('Permanently DELETE this order? This cannot be undone.')">
+          <button class="btn btn-sm btn-link text-danger w-100"><i class="fas fa-trash me-1"></i>Delete permanently</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<a href="/orders/list" class="btn btn-link mt-2"><i class="fas fa-arrow-left me-1"></i>Back to orders</a>
+{% endblock %}

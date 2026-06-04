@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kitchen Display — MCQ</title>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0f1419; --card:#1b2430; --card2:#222d3b; --txt:#f1f5f9; --muted:#8da2b5;
+    --confirmed:#2196F3; --preparing:#FB8C00; --ready:#43A047;
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+        background:var(--bg); color:var(--txt); }
+  .kd-top{ display:flex; justify-content:space-between; align-items:center;
+           padding:14px 22px; background:#0b0f14; border-bottom:1px solid #1f2937; position:sticky; top:0; z-index:10; }
+  .kd-top .brand{ font-size:1.4rem; font-weight:900; letter-spacing:.04em; }
+  .kd-top .brand .fire{ color:var(--preparing); }
+  .kd-top .clock{ font-size:1.5rem; font-weight:800; font-variant-numeric:tabular-nums; }
+  .kd-top .meta{ color:var(--muted); font-size:.85rem; }
+  .kd-actions a{ color:var(--muted); text-decoration:none; margin-left:16px; font-size:.9rem; }
+  .kd-actions a:hover{ color:#fff; }
+
+  .kd-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:16px; padding:18px 22px; }
+  .kd-empty{ text-align:center; color:var(--muted); padding:80px 20px; font-size:1.3rem; }
+
+  .ocard{ background:var(--card); border-radius:16px; overflow:hidden; border:2px solid transparent;
+          box-shadow:0 4px 18px rgba(0,0,0,.35); display:flex; flex-direction:column; }
+  .ocard .ohead{ padding:14px 18px; display:flex; justify-content:space-between; align-items:flex-start; }
+  .ocard .ocust{ font-size:1.5rem; font-weight:800; line-height:1.1; }
+  .ocard .ocode{ color:var(--muted); font-size:.85rem; }
+  .ocard .otime{ text-align:right; }
+  .ocard .otime .clk{ font-size:1.7rem; font-weight:900; line-height:1; }
+  .ocard .countdown{ font-size:.95rem; font-weight:700; margin-top:3px; }
+  .ocard .obody{ padding:0 18px 12px; flex:1; }
+  .ocard .oitem{ font-size:1.25rem; padding:5px 0; border-bottom:1px solid rgba(255,255,255,.06); }
+  .ocard .oitem .q{ font-weight:900; color:#ffd54f; margin-right:8px; }
+  .ocard .oitem .inote{ display:block; font-size:.9rem; color:var(--muted); padding-left:6px; }
+  .ocard .onote{ margin:10px 18px; padding:8px 12px; background:rgba(251,140,0,.15); border-left:3px solid var(--preparing); border-radius:6px; font-size:1rem; }
+  .ocard .ofoot{ display:flex; gap:8px; padding:12px 18px; background:var(--card2); }
+  .ocard .sbtn{ flex:1; border:none; border-radius:10px; padding:12px 4px; font-weight:800; font-size:.95rem;
+                color:#fff; cursor:pointer; opacity:.55; transition:.12s; }
+  .ocard .sbtn.active{ opacity:1; transform:scale(1.02); box-shadow:0 3px 10px rgba(0,0,0,.4); }
+  .ocard .sbtn:hover{ opacity:1; }
+
+  .badge-status{ display:inline-block; padding:3px 12px; border-radius:999px; font-size:.72rem; font-weight:900;
+                 text-transform:uppercase; letter-spacing:.05em; }
+
+  /* NEXT order highlight */
+  .ocard.is-next{ border-color:var(--preparing); animation:pulse 1.6s infinite; }
+  @keyframes pulse{
+    0%{ box-shadow:0 0 0 0 rgba(251,140,0,.55); }
+    70%{ box-shadow:0 0 0 14px rgba(251,140,0,0); }
+    100%{ box-shadow:0 0 0 0 rgba(251,140,0,0); }
+  }
+  .next-banner{ display:inline-block; background:var(--preparing); color:#fff; font-weight:900;
+                font-size:.72rem; padding:2px 10px; border-radius:6px; letter-spacing:.06em; margin-bottom:4px; }
+  .overdue{ color:#ff5252 !important; }
+</style>
+</head>
+<body>
+<div class="kd-top">
+  <div>
+    <div class="brand"><i class="fas fa-fire-burner fire"></i> MCQ KITCHEN <span style="color:var(--muted);font-weight:600;font-size:.9rem;">· {{ branch or 'Mirrabooka' }}</span></div>
+    <div class="meta" id="lastUpdate">Connecting…</div>
+  </div>
+  <div style="text-align:right;">
+    <div class="clock" id="liveClock">--:--</div>
+    <div class="kd-actions">
+      {% if user_role != 'kitchen' %}<a href="/orders/list"><i class="fas fa-arrow-left"></i> Orders</a>{% endif %}
+      <a href="#" onclick="toggleFull();return false;"><i class="fas fa-expand"></i> Fullscreen</a>
+      <a href="/logout"><i class="fas fa-sign-out-alt"></i> Logout</a>
+    </div>
+  </div>
+</div>
+
+<div id="kdGrid" class="kd-grid"></div>
+<div id="kdEmpty" class="kd-empty" style="display:none;"><i class="fas fa-mug-hot fa-2x d-block mb-3"></i>No upcoming orders. All caught up! 🎉</div>
+
+<script>
+const COLORS = {{ status_colors|tojson }};
+const LABELS = {{ status_labels|tojson }};
+const grid = document.getElementById('kdGrid');
+const emptyEl = document.getElementById('kdEmpty');
+
+function pad(n){ return String(n).padStart(2,'0'); }
+function tickClock(){
+  const d = new Date();
+  document.getElementById('liveClock').textContent = pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+}
+setInterval(tickClock, 1000); tickClock();
+
+function fmtCountdown(ms){
+  const past = ms < 0;
+  let s = Math.abs(Math.floor(ms/1000));
+  const h = Math.floor(s/3600); s%=3600;
+  const m = Math.floor(s/60);
+  let txt = h>0 ? `${h}h ${m}m` : `${m}m`;
+  return past ? {txt:`${txt} overdue`, past:true} : {txt:`Ready in ${txt}`, past:false};
+}
+
+let lastData = [];
+function render(orders){
+  lastData = orders;
+  emptyEl.style.display = orders.length ? 'none' : '';
+  grid.innerHTML = '';
+  // The first (nearest upcoming, not yet overdue) order is the NEXT highlight.
+  const now = Date.now();
+  let nextId = null;
+  for (const o of orders){
+    if (o.pickup_dt && new Date(o.pickup_dt).getTime() >= now){ nextId = o.id; break; }
+  }
+  if (nextId === null && orders.length) nextId = orders[0].id;
+
+  for (const o of orders){
+    const card = document.createElement('div');
+    card.className = 'ocard' + (o.id===nextId ? ' is-next' : '');
+    const col = COLORS[o.status] || '#888';
+
+    let itemsHtml = '';
+    for (const it of o.items){
+      itemsHtml += `<div class="oitem"><span class="q">${it.qty}×</span>${escapeHtml(it.name)}`
+        + (it.notes ? `<span class="inote"><i class="fas fa-angle-right"></i> ${escapeHtml(it.notes)}</span>` : '')
+        + `</div>`;
+    }
+
+    let cd = '';
+    if (o.pickup_dt){
+      const c = fmtCountdown(new Date(o.pickup_dt).getTime() - now);
+      cd = `<div class="countdown ${c.past?'overdue':''}" data-pickup="${o.pickup_dt}">${c.txt}</div>`;
+    }
+
+    card.innerHTML = `
+      <div class="ohead">
+        <div>
+          ${o.id===nextId ? '<div class="next-banner">NEXT ORDER</div>' : ''}
+          <div class="ocust">${escapeHtml(o.customer_name)}</div>
+          <div class="ocode">${o.code} · ${escapeHtml(o.branch||'')}</div>
+        </div>
+        <div class="otime">
+          <div class="clk">${o.pickup_time||'—'}</div>
+          ${cd}
+          <div class="badge-status" style="background:${col}">${LABELS[o.status]}</div>
+        </div>
+      </div>
+      <div class="obody">${itemsHtml}</div>
+      ${o.notes ? `<div class="onote"><i class="fas fa-note-sticky"></i> ${escapeHtml(o.notes)}</div>` : ''}
+      <div class="ofoot">
+        ${['confirmed','preparing','ready','completed'].map(s =>
+          `<button class="sbtn ${o.status===s?'active':''}" style="background:${COLORS[s]}"
+             onclick="setStatus(${o.id},'${s}')">${LABELS[s]}</button>`).join('')}
+      </div>`;
+    grid.appendChild(card);
+  }
+}
+
+function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// Refresh countdown text every second without re-fetching
+setInterval(() => {
+  const now = Date.now();
+  document.querySelectorAll('.countdown[data-pickup]').forEach(el => {
+    const c = fmtCountdown(new Date(el.dataset.pickup).getTime() - now);
+    el.textContent = c.txt;
+    el.classList.toggle('overdue', c.past);
+  });
+}, 1000);
+
+async function load(){
+  try{
+    const r = await fetch('/orders/kitchen/data', {headers:{'X-Requested-With':'XMLHttpRequest'}});
+    if (r.status === 401 || r.redirected){ location.href='/login'; return; }
+    const data = await r.json();
+    render(data.orders);
+    const t = new Date();
+    document.getElementById('lastUpdate').textContent =
+      'Updated ' + pad(t.getHours())+':'+pad(t.getMinutes())+':'+pad(t.getSeconds()) + ' · auto-refresh 8s';
+  }catch(e){
+    document.getElementById('lastUpdate').textContent = 'Connection error — retrying…';
+  }
+}
+
+async function setStatus(id, status){
+  const fd = new FormData(); fd.append('status', status);
+  await fetch(`/orders/${id}/status`, {method:'POST', body:fd, headers:{'X-Requested-With':'XMLHttpRequest'}});
+  load();
+}
+
+function toggleFull(){
+  if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+  else document.exitFullscreen();
+}
+
+load();
+setInterval(load, 8000);
+</script>
+</body>
+</html>

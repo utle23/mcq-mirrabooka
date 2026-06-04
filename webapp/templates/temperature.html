@@ -26,6 +26,27 @@
   Cells highlighted <span class="badge bg-danger">red</span> indicate danger zone temps.
 </div>
 
+{# Kind-aware safe-range heading: chef/banh_mi have cold storage; pastry is hot holding. #}
+{% if temp_type in ('chef', 'banh_mi') %}
+<div class="alert alert-primary py-2 mb-3 d-flex align-items-center gap-2">
+  <i class="fas fa-snowflake fa-lg"></i>
+  <div>
+    <strong>Cold storage safe range:</strong> all <span class="badge" style="background:#1565C0">COLD</span> items must be held at
+    <strong>5°C or below (≤ 5°C)</strong>. Above 5°C is unsafe — record, act, and discard if needed.
+    {% if temp_type == 'banh_mi' %}<br><span class="small">Hot items (roast/stir-fry) must stay <strong>≥ 60°C</strong>.</span>{% endif %}
+  </div>
+</div>
+{% elif temp_type == 'pastry' %}
+<div class="alert alert-warning py-2 mb-3 d-flex align-items-center gap-2">
+  <i class="fas fa-fire fa-lg"></i>
+  <div>
+    <strong>Hot holding safe range:</strong> all <span class="badge bg-danger">HOT</span> pastry items must be held at
+    <strong>60°C or above (≥ 60°C)</strong>.
+    <span class="small d-block"><i class="fas fa-circle-info me-1"></i><strong>Check 3</strong> is informational only — <strong>no alert</strong> is raised for the 3rd reading.</span>
+  </div>
+</div>
+{% endif %}
+
 <div class="card shadow-sm">
   <div class="card-header py-2" style="background:{{ temp_data.color }}15; border-left:4px solid {{ temp_data.color }}">
     <h5 class="mb-0" style="color:{{ temp_data.color }}">
@@ -86,7 +107,7 @@
               <th style="min-width:170px" class="text-start">Food Item</th>
               <th colspan="2">Check 1</th>
               <th colspan="2">Check 2</th>
-              <th colspan="2">Check 3</th>
+              <th colspan="2">Check 3{% if temp_type == 'pastry' %} <span class="badge bg-light text-dark" style="font-size:.6rem">no alert</span>{% endif %}</th>
               <th colspan="2">Check 4</th>
               <th colspan="2">Check 5</th>
               <th style="width:80px">Discard?</th>
@@ -161,7 +182,7 @@
               </td>
               <td class="p-1">
                 <input type="number" name="c{{ c }}_temp_{{ i }}" step="0.1"
-                       data-kind="{{ food.kind }}"
+                       data-kind="{{ food.kind }}" data-check="{{ c }}"
                        class="form-control form-control-sm p-1 temp-input"
                        value="{{ er[vkey] if er and er[vkey] is not none else '' }}"
                        placeholder="—" oninput="colorTemp(this)"
@@ -283,6 +304,14 @@ function colorTemp(input){
     return;
   }
   const kind = input.dataset.kind || 'cold';
+  const check = parseInt(input.dataset.check || '0');
+  // Pastry hot display: the 3rd check is informational only — never flag it.
+  if (TEMP_TYPE === 'pastry' && check === 3) {
+    input.style.background = '#fff3cd';
+    input.style.color = '#664d03';
+    input.title = 'Check 3 · informational only (no alert)';
+    return;
+  }
   let safe;
   if (kind === 'hot') {
     safe = v >= 60;
