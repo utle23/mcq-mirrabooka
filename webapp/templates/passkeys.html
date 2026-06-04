@@ -14,6 +14,10 @@
       The device's biometric stays on the device; the server only stores a security key.
       Your password ({{ current_role }}) still works as a backup.
     </p>
+    <div class="alert alert-info py-2 small mb-3">
+      <i class="fas fa-circle-info me-1"></i>
+      Open this page directly on the iPhone / iPad that has Face ID. If the browser offers QR code or security key, it is trying to use another device instead of this device's Face ID.
+    </div>
     <div class="row g-2 align-items-end" style="max-width:560px">
       <div class="col-sm-7">
         <label class="form-label small fw-semibold">Name this device</label>
@@ -76,10 +80,17 @@ async function addPasskey() {
     pkStatus('<i class="fas fa-circle-exclamation me-1"></i>This browser does not support passkeys.', 'text-danger');
     return;
   }
+  if (SimpleWebAuthnBrowser.platformAuthenticatorIsAvailable) {
+    const platformAvailable = await SimpleWebAuthnBrowser.platformAuthenticatorIsAvailable();
+    if (!platformAvailable) {
+      pkStatus('<i class="fas fa-circle-exclamation me-1"></i>This browser is not offering Face ID / Touch ID on this device. Open the site directly on the iPhone or iPad with Face ID, using HTTPS.', 'text-danger');
+      return;
+    }
+  }
   const btn = document.getElementById('pk-add');
   const label = document.getElementById('pk-label').value.trim();
   btn.disabled = true;
-  pkStatus('<i class="fas fa-spinner fa-spin me-1"></i>Follow your device prompt (Face ID / fingerprint)…', 'text-info');
+  pkStatus('<i class="fas fa-spinner fa-spin me-1"></i>Follow this device prompt (Face ID / Touch ID / fingerprint)…', 'text-info');
   try {
     const optResp = await fetch('/webauthn/register/options', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -102,6 +113,8 @@ async function addPasskey() {
   } catch (e) {
     const msg = (e && e.name === 'InvalidStateError')
       ? 'This device already has a passkey here.'
+      : (e && e.name === 'NotAllowedError')
+      ? 'Face ID setup was cancelled, unavailable, or this browser offered a QR/security key flow instead of this device.'
       : (e && e.message) || 'Registration cancelled.';
     pkStatus('<i class="fas fa-circle-exclamation me-1"></i>' + msg, 'text-danger');
     btn.disabled = false;

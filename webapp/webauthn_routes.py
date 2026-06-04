@@ -35,7 +35,8 @@ try:
                           verify_authentication_response,
                           verify_registration_response)
     from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
-    from webauthn.helpers.structs import (AuthenticatorSelectionCriteria,
+    from webauthn.helpers.structs import (AuthenticatorAttachment,
+                                          AuthenticatorSelectionCriteria,
                                           PublicKeyCredentialDescriptor,
                                           ResidentKeyRequirement,
                                           UserVerificationRequirement)
@@ -144,6 +145,7 @@ def register_options():
         user_name=label,
         user_display_name=label,
         authenticator_selection=AuthenticatorSelectionCriteria(
+            authenticator_attachment=AuthenticatorAttachment.PLATFORM,
             resident_key=ResidentKeyRequirement.REQUIRED,
             user_verification=UserVerificationRequirement.REQUIRED,
         ),

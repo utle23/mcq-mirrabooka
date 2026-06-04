@@ -127,10 +127,19 @@ function togglePw(){
   else{pw.type='password';ic.className='fas fa-eye';}
 }
 
-// Reveal the Face ID button only where the browser supports passkeys.
-if (window.SimpleWebAuthnBrowser && SimpleWebAuthnBrowser.browserSupportsWebAuthn()) {
+// Reveal the Face ID button only where this device can use a local platform
+// authenticator. This avoids QR/security-key prompts on devices without Face ID.
+(async function revealFaceIdButton(){
+  if (!window.SimpleWebAuthnBrowser || !SimpleWebAuthnBrowser.browserSupportsWebAuthn()) return;
+  if (SimpleWebAuthnBrowser.platformAuthenticatorIsAvailable) {
+    try {
+      if (!await SimpleWebAuthnBrowser.platformAuthenticatorIsAvailable()) return;
+    } catch (e) {
+      return;
+    }
+  }
   document.getElementById('faceid-wrap').style.display = '';
-}
+})();
 
 function faceIdStatus(html, cls){
   const el = document.getElementById('faceid-status');
