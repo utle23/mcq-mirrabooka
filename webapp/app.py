@@ -26,6 +26,7 @@ from packaging_routes import packaging_bp,               init_packaging
 from orders_routes    import orders     as orders_bp,    init_order_tables
 from equipment_routes import equipment  as equipment_bp, init_equipment_tables
 from structure_routes import structure  as structure_bp, init_structure_tables
+from webauthn_routes  import webauthn_bp,                 init_webauthn
 import email_service
 app.register_blueprint(prep_bp)
 app.register_blueprint(pastry_bp)
@@ -38,6 +39,7 @@ app.register_blueprint(packaging_bp)
 app.register_blueprint(orders_bp)
 app.register_blueprint(equipment_bp)
 app.register_blueprint(structure_bp)
+app.register_blueprint(webauthn_bp)
 DB_PATH      = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mcq_restaurant.db')
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -4067,6 +4069,7 @@ init_packaging(DB_PATH)
 init_order_tables(DB_PATH)
 init_equipment_tables(DB_PATH)
 init_structure_tables(DB_PATH, UPLOAD_FOLDER)
+init_webauthn(DB_PATH)
 
 if __name__ == '__main__':
     print('\n' + '='*50)

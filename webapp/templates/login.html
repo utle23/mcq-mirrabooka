@@ -76,6 +76,15 @@
       </button>
     </form>
 
+    <!-- Passwordless sign-in (Face ID / Touch ID / fingerprint) -->
+    <div id="faceid-wrap" style="display:none">
+      <div class="text-center my-3 text-muted small">— or —</div>
+      <button type="button" id="faceid-btn" class="btn btn-outline-dark btn-lg w-100 fw-bold" onclick="faceIdLogin()">
+        <i class="fas fa-fingerprint me-2"></i>Sign in with Face ID
+      </button>
+      <div id="faceid-status" class="small text-center mt-2"></div>
+    </div>
+
     <div class="login-footer mt-4">
       <div class="row text-center g-2">
         <div class="col-6">
@@ -103,6 +112,7 @@
     </div>
   </div>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/@simplewebauthn/browser@10.0.0/dist/bundle/index.umd.min.js"></script>
 <script>
 function setMode(mode){
   document.getElementById('btn-user').classList.toggle('active', mode==='user');
@@ -115,6 +125,46 @@ function togglePw(){
   const ic = document.getElementById('pw-icon');
   if(pw.type==='password'){pw.type='text';ic.className='fas fa-eye-slash';}
   else{pw.type='password';ic.className='fas fa-eye';}
+}
+
+// Reveal the Face ID button only where the browser supports passkeys.
+if (window.SimpleWebAuthnBrowser && SimpleWebAuthnBrowser.browserSupportsWebAuthn()) {
+  document.getElementById('faceid-wrap').style.display = '';
+}
+
+function faceIdStatus(html, cls){
+  const el = document.getElementById('faceid-status');
+  el.className = 'small text-center mt-2 ' + (cls || '');
+  el.innerHTML = html;
+}
+
+async function faceIdLogin(){
+  const btn = document.getElementById('faceid-btn');
+  btn.disabled = true;
+  faceIdStatus('<i class="fas fa-spinner fa-spin me-1"></i>Follow your device prompt…', 'text-info');
+  try {
+    const optResp = await fetch('/webauthn/login/options', { method: 'POST' });
+    const options = await optResp.json();
+    const asseResp = await SimpleWebAuthnBrowser.startAuthentication(options);
+    const verifyResp = await fetch('/webauthn/login/verify', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(asseResp)
+    });
+    const result = await verifyResp.json();
+    if (result.ok) {
+      faceIdStatus('<i class="fas fa-check-circle me-1"></i>Welcome back!', 'text-success');
+      window.location = result.redirect || '/';
+    } else {
+      faceIdStatus('<i class="fas fa-circle-exclamation me-1"></i>' + (result.error || 'Sign-in failed.'), 'text-danger');
+      btn.disabled = false;
+    }
+  } catch (e) {
+    const msg = (e && e.name === 'NotAllowedError')
+      ? 'Sign-in cancelled or no passkey on this device.'
+      : (e && e.message) || 'Sign-in failed.';
+    faceIdStatus('<i class="fas fa-circle-exclamation me-1"></i>' + msg, 'text-danger');
+    btn.disabled = false;
+  }
 }
 </script>
 </body>
