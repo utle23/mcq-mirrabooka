@@ -162,7 +162,7 @@
 <!-- Today's data summary (informational — not images to share) -->
 <div class="section-heading"><i class="fas fa-clipboard-list"></i>What's in the PDF</div>
 
-{% if not data.checklists and not data.temperatures %}
+{% if not data.checklists and not data.temperatures and not (data.equipment and data.equipment.total) %}
 <div class="empty-section">
   <i class="fas fa-inbox fa-2x mb-2 d-block opacity-25"></i>
   No checklists or temperature records submitted yet today.
@@ -220,6 +220,37 @@
   </div>
 </div>
 {% endfor %}
+
+{% if data.equipment and data.equipment.total %}
+{% set eq_total_checks = data.equipment.total_checks or (data.equipment.total * 2) %}
+{% set eq_missing_due = data.equipment.missing_due if data.equipment.missing_due is defined else data.equipment.missing %}
+<div class="summary-card">
+  <div class="stripe" style="background:#00838F"></div>
+  <div class="body">
+    <div class="title">
+      <span class="pill" style="background:#00838F">Equipment Temperature</span>
+      <span class="pill" style="background:#1A1A2E">Morning + Closing</span>
+      <span class="pill" style="background:{% if data.equipment.missing %}#E65100{% else %}#43A047{% endif %}">
+        {{ data.equipment.recorded }}/{{ eq_total_checks }} checks
+      </span>
+      {% if data.equipment.alerts %}
+      <span class="pill" style="background:#C62828">{{ data.equipment.alerts }} out of range</span>
+      {% endif %}
+      {% if eq_missing_due %}
+      <span class="pill" style="background:#C62828">{{ eq_missing_due }} due missing</span>
+      {% elif data.equipment.missing %}
+      <span class="pill" style="background:#78909C">{{ data.equipment.missing }} pending</span>
+      {% else %}
+      <span class="pill" style="background:#1B5E20">all complete</span>
+      {% endif %}
+    </div>
+    <div class="meta">
+      <strong>Required:</strong> {{ data.equipment.total }} equipment × 2 checks ·
+      <strong>Times:</strong> Morning before 10:00 AM, Closing before 6:00 PM
+    </div>
+  </div>
+</div>
+{% endif %}
 
 {% endblock %}
 

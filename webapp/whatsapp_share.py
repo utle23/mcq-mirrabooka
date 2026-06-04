@@ -143,6 +143,37 @@ def _collect_today(date_str: str) -> dict:
     return out
 
 
+def _equipment_stats(equip: dict | None) -> dict:
+    """Normalize equipment counts for share previews and exported reports."""
+    equip = equip or {}
+    total_units = int(equip.get('total') or 0)
+    total_checks = equip.get('total_checks')
+    if total_checks is None:
+        check_count = len(equip.get('check_types') or []) or 2
+        total_checks = total_units * check_count
+    recorded = int(equip.get('recorded') or 0)
+    alerts = int(equip.get('alerts') or 0)
+    missing = equip.get('missing')
+    if missing is None:
+        missing = max(int(total_checks or 0) - recorded, 0)
+    missing_due = equip.get('missing_due')
+    if missing_due is None:
+        missing_due = missing
+    total_due_checks = equip.get('total_due_checks')
+    if total_due_checks is None:
+        total_due_checks = int(total_checks or 0)
+    return {
+        'total_units': total_units,
+        'total_checks': int(total_checks or 0),
+        'recorded': recorded,
+        'alerts': alerts,
+        'missing': int(missing or 0),
+        'missing_due': int(missing_due or 0),
+        'total_due_checks': int(total_due_checks or 0),
+        'attention': alerts + int(missing_due or 0),
+    }
+
+
 # ── PNG composition (Pillow) ────────────────────────────────────────────────
 
 def _font(size: int, bold: bool = False):
@@ -286,14 +317,15 @@ def build_daily_png(date_str: str) -> bytes:
     chk_late = sum(1 for c in data['checklists'] if c.get('is_late'))
     temp_done = len(data['temperatures'])
     temp_alerts = sum(c.get('out_of_zone', 0) for c in data['temperatures'])
-    _equip = data.get('equipment') or {}
-    equip_alerts = _equip.get('alerts', 0)
+    equip_stats = _equipment_stats(data.get('equipment'))
+    total_attention = (temp_alerts + chk_late + equip_stats['attention']
+                       + len(data.get("violations", [])))
 
     kpi_cards = [
         ('CHECKLISTS', f'{len(data["checklists"])}', (46, 125, 50)),
         ('FOOD TEMP', f'{temp_done}', (216, 67, 21)),
-        ('EQUIPMENT', f'{_equip.get("recorded", 0)}', (0, 131, 143)),
-        ('ALERTS', f'{temp_alerts + chk_late + equip_alerts + len(data.get("violations", []))}', (198, 40, 40)),
+        ('EQUIPMENT', f'{equip_stats["recorded"]}/{equip_stats["total_checks"]}', (0, 131, 143)),
+        ('ALERTS', f'{total_attention}', (198, 40, 40)),
     ]
     card_w = (W - PAD * 2 - 36) // 4
     for i, (label, val, col) in enumerate(kpi_cards):
@@ -1240,10 +1272,10 @@ def build_daily_pdf(date_str: str) -> bytes:
                    if c['done_tasks'] == c['total_tasks'] and c['total_tasks'] > 0)
     chk_late = sum(1 for c in data['checklists'] if c.get('is_late'))
     temp_alerts = sum(c.get('out_of_zone', 0) for c in data['temperatures'])
-    _equip = data.get('equipment') or {}
-    equip_recorded = _equip.get('recorded', 0)
-    equip_alerts   = _equip.get('alerts', 0)
-    total_alerts   = temp_alerts + chk_late + equip_alerts + len(data.get('violations', []))
+    equip_stats = _equipment_stats(data.get('equipment'))
+    equip_recorded = f'{equip_stats["recorded"]}/{equip_stats["total_checks"]}'
+    total_alerts = (temp_alerts + chk_late + equip_stats['attention']
+                    + len(data.get('violations', [])))
 
     def _kpi(label, value, accent):
         return Table([
@@ -1264,7 +1296,7 @@ def build_daily_pdf(date_str: str) -> bytes:
     kpis = Table([[
         _kpi('CHECKLISTS', str(len(data['checklists'])), colors.HexColor('#A5D6A7')),
         _kpi('FOOD TEMP', str(len(data['temperatures'])), colors.HexColor('#FFAB91')),
-        _kpi('EQUIPMENT', str(equip_recorded),           colors.HexColor('#80DEEA')),
+        _kpi('EQUIPMENT', equip_recorded,                colors.HexColor('#80DEEA')),
         _kpi('ALERTS',    str(total_alerts),             colors.HexColor('#FFCDD2')),
     ]], colWidths=[40 * mm] * 4)
     kpis.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE')]))
@@ -1614,12 +1646,15 @@ def build_daily_pdf(date_str: str) -> bytes:
 
     # ── Equipment temperature page ─────────────────────────────────────────
     equip = data.get('equipment')
-    if equip and equip.get('recorded'):
+    if equip and equip.get('total'):
         story.append(PageBreak())
         eq_col = colors.HexColor('#00838F')
+        WARN = colors.HexColor('#E65100')
+        equip_stats = _equipment_stats(equip)
+        due_keys = set(equip.get('due_check_keys') or [])
         hdr = Table([[Paragraph(
             '<font color="white" size="20"><b>EQUIPMENT TEMPERATURE</b></font><br/>'
-            f'<font color="#D7F2F5" size="11">FRIDGES · FREEZERS · HOT UNITS · {date_str}</font>',
+            f'<font color="#D7F2F5" size="11">MORNING + CLOSING CHECKS · FRIDGES · FREEZERS · HOT UNITS · {date_str}</font>',
             ParagraphStyle('eqh', fontName=bold_font, leading=24))]], colWidths=[USABLE_W])
         hdr.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, -1), eq_col),
@@ -1630,8 +1665,14 @@ def build_daily_pdf(date_str: str) -> bytes:
         story.append(Spacer(1, 4 * mm))
 
         # Pills
-        e_pills = [(f'{equip["recorded"]}/{equip["total"]} RECORDED', OK),
-                   (f'{equip["alerts"]} OUT OF RANGE', BAD if equip['alerts'] else OK)]
+        e_pills = [
+            (f'{equip_stats["recorded"]}/{equip_stats["total_checks"]} CHECKS RECORDED',
+             OK if equip_stats['missing'] == 0 else WARN),
+            (f'{equip_stats["alerts"]} OUT OF RANGE',
+             BAD if equip_stats['alerts'] else OK),
+            (f'{equip_stats["missing_due"]} DUE MISSING',
+             BAD if equip_stats['missing_due'] else OK),
+        ]
         e_cells = []
         for txt, c_ in e_pills:
             cell = Table([[Paragraph(f'<font color="white"><b>{_esc(txt)}</b></font>',
@@ -1647,33 +1688,59 @@ def build_daily_pdf(date_str: str) -> bytes:
         story.append(epr)
         story.append(Spacer(1, 4 * mm))
         story.append(Paragraph(
-            'Safe ranges — Fridge <b>0 to 5°C</b> · Freezer <b>-20 to -15°C</b> · Hot unit <b>≥ 60°C</b>.',
+            'Required checks — <b>Morning before 10:00 AM</b> and <b>Closing before 6:00 PM</b>. '
+            'Safe ranges — Fridge <b>0 to 5°C</b> · Freezer <b>-20 to -15°C</b> · Hot unit <b>&ge; 60°C</b>.',
             S['body']))
         story.append(Spacer(1, 3 * mm))
 
         kind_label = {'cold': 'FRIDGE', 'freezer': 'FREEZER', 'hot': 'HOT'}
-        rows_data = [['Equipment', 'Type', 'Safe range', 'Temp', 'Status']]
+        def _eq_temp_cell(reading, key):
+            reading = reading or {}
+            temp = reading.get('temp')
+            if temp is None:
+                label = 'MISSING' if key in due_keys else 'PENDING'
+                col_hex = '#C62828' if key in due_keys else '#999999'
+                return Paragraph(f'<font color="{col_hex}"><b>{label}</b></font>',
+                    ParagraphStyle('en', fontName=bold_font, fontSize=8.5, alignment=TA_CENTER))
+            unsafe = bool(reading.get('unsafe'))
+            col_hex = '#C62828' if unsafe else '#2E7D32'
+            tag = 'OUT' if unsafe else 'OK'
+            return Paragraph(f'<font color="{col_hex}"><b>{temp:g}°C</b></font><br/>'
+                             f'<font color="{col_hex}" size="7"><b>{tag}</b></font>',
+                ParagraphStyle('et', fontName=bold_font, fontSize=10, leading=11, alignment=TA_CENTER))
+
+        rows_data = [['Equipment', 'Type', 'Safe range', 'Morning', 'Closing', 'Status']]
         for u in equip['units']:
-            if u['temp'] is None:
-                temp_p = Paragraph('<font color="#999">— not recorded —</font>',
-                    ParagraphStyle('en', fontName=font_name, fontSize=10, alignment=TA_CENTER))
-                status_p = Paragraph('<font color="#999">—</font>',
-                    ParagraphStyle('es', fontName=font_name, fontSize=9, alignment=TA_CENTER))
+            checks = u.get('checks') or {}
+            morning = checks.get('morning') or {}
+            closing = checks.get('closing') or {}
+            unsafe = bool(morning.get('unsafe') or closing.get('unsafe'))
+            due_missing = ((morning.get('temp') is None and 'morning' in due_keys)
+                           or (closing.get('temp') is None and 'closing' in due_keys))
+            pending = (morning.get('temp') is None or closing.get('temp') is None)
+            if unsafe:
+                status_p = Paragraph('<font color="#C62828"><b>OUT OF RANGE</b></font>',
+                    ParagraphStyle('es', fontName=bold_font, fontSize=8.5, alignment=TA_CENTER))
+            elif due_missing:
+                status_p = Paragraph('<font color="#C62828"><b>MISSING</b></font>',
+                    ParagraphStyle('es', fontName=bold_font, fontSize=8.5, alignment=TA_CENTER))
+            elif pending:
+                status_p = Paragraph('<font color="#777777"><b>PENDING</b></font>',
+                    ParagraphStyle('es', fontName=bold_font, fontSize=8.5, alignment=TA_CENTER))
             else:
-                col_hex = '#C62828' if u['unsafe'] else '#2E7D32'
-                temp_p = Paragraph(f'<font color="{col_hex}"><b>{u["temp"]:g}°C</b></font>',
-                    ParagraphStyle('et', fontName=bold_font, fontSize=11, alignment=TA_CENTER))
-                status_p = Paragraph(
-                    f'<font color="{col_hex}"><b>{"OUT OF RANGE" if u["unsafe"] else "OK"}</b></font>',
-                    ParagraphStyle('es', fontName=bold_font, fontSize=9, alignment=TA_CENTER))
+                status_p = Paragraph('<font color="#2E7D32"><b>OK</b></font>',
+                    ParagraphStyle('es', fontName=bold_font, fontSize=8.5, alignment=TA_CENTER))
             rows_data.append([
                 Paragraph(_esc(u['name']), S['food']),
                 Paragraph(kind_label.get(u['kind'], u['kind'].upper()), S['small_b']),
                 Paragraph(_esc(u.get('range', '')), S['small']),
-                temp_p, status_p,
+                _eq_temp_cell(morning, 'morning'),
+                _eq_temp_cell(closing, 'closing'),
+                status_p,
             ])
-        et = Table(rows_data, colWidths=[USABLE_W * 0.40, USABLE_W * 0.13,
-                   USABLE_W * 0.20, USABLE_W * 0.13, USABLE_W * 0.14], repeatRows=1)
+        et = Table(rows_data, colWidths=[USABLE_W * 0.29, USABLE_W * 0.11,
+                   USABLE_W * 0.17, USABLE_W * 0.14, USABLE_W * 0.14,
+                   USABLE_W * 0.15], repeatRows=1)
         et.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), NAVY),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -1757,7 +1824,7 @@ def build_daily_pdf(date_str: str) -> bytes:
 
     # Empty-state if nothing today
     if (not data['checklists'] and not data['temperatures']
-            and not (equip and equip.get('recorded')) and not violations and not issues):
+            and not (equip and equip.get('total')) and not violations and not issues):
         story.append(PageBreak())
         story.append(Spacer(1, 60 * mm))
         story.append(Paragraph('No data recorded yet today.', S['section']))

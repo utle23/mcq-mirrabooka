@@ -1,7 +1,8 @@
 """Equipment Temperature Record — weekly grid (Mon–Sun).
 
 Tracks fridge / freezer / hot-unit temperatures for each piece of equipment,
-one reading per day. Safe ranges (built into the headings + colour alerts):
+with a morning and closing reading per day. Safe ranges (built into the
+headings + colour alerts):
 
     cold    fridges      0°C  to  5°C        (safe ≤ 5°C, ≥ 0°C)
     freezer freezers    -20°C to -15°C       (safe between -20 and -15)
@@ -97,6 +98,61 @@ def is_unsafe(kind, temp):
         return temp < m['lo']
     return temp < m['lo'] or temp > m['hi']
 
+CHECK_TYPES = [
+    {'key': 'morning', 'label': 'Morning', 'short': 'AM',
+     'deadline': 'Before 10:00 AM', 'due_hour': 10, 'due_minute': 0},
+    {'key': 'closing', 'label': 'Closing', 'short': 'Close',
+     'deadline': 'Before 6:00 PM', 'due_hour': 18, 'due_minute': 0},
+]
+CHECK_META = {c['key']: c for c in CHECK_TYPES}
+
+
+def _check_columns(check_type):
+    if check_type not in CHECK_META:
+        check_type = 'morning'
+    return (f'{check_type}_temp', f'{check_type}_recorded_by',
+            f'{check_type}_recorded_at')
+
+
+def _reading(temp, kind, recorded_by='', recorded_at=''):
+    return {
+        'temp': temp,
+        'unsafe': is_unsafe(kind, temp),
+        'recorded_by': recorded_by or '',
+        'recorded_at': recorded_at or '',
+    }
+
+
+def _due_check_keys(date_str, now=None):
+    """Checks due for a report date. Future closing checks are not alerts yet."""
+    now = now or datetime.now()
+    try:
+        target = datetime.strptime(date_str, '%Y-%m-%d').date()
+    except ValueError:
+        return {c['key'] for c in CHECK_TYPES}
+    if target < now.date():
+        return {c['key'] for c in CHECK_TYPES}
+    if target > now.date():
+        return set()
+    due = set()
+    for check in CHECK_TYPES:
+        deadline = datetime(target.year, target.month, target.day,
+                            check.get('due_hour', 0), check.get('due_minute', 0))
+        if now >= deadline:
+            due.add(check['key'])
+    return due
+
+
+def _combined_status(unit):
+    checks = unit.get('checks') or {}
+    missing = sum(1 for c in CHECK_TYPES if checks.get(c['key'], {}).get('temp') is None)
+    unsafe = sum(1 for c in CHECK_TYPES if checks.get(c['key'], {}).get('unsafe'))
+    if unsafe:
+        return 'alert'
+    if missing:
+        return 'missing'
+    return 'ok'
+
 # ── DB init ──────────────────────────────────────────────────────────────────
 
 def init_equipment_tables(db_path):
@@ -123,6 +179,26 @@ def init_equipment_tables(db_path):
             );
             CREATE INDEX IF NOT EXISTS idx_eqtemp_date ON equipment_temp_readings(date);
         ''')
+        for _col, ddl in [
+            ('morning_temp', "ALTER TABLE equipment_temp_readings ADD COLUMN morning_temp REAL"),
+            ('morning_recorded_by', "ALTER TABLE equipment_temp_readings ADD COLUMN morning_recorded_by TEXT"),
+            ('morning_recorded_at', "ALTER TABLE equipment_temp_readings ADD COLUMN morning_recorded_at TEXT"),
+            ('closing_temp', "ALTER TABLE equipment_temp_readings ADD COLUMN closing_temp REAL"),
+            ('closing_recorded_by', "ALTER TABLE equipment_temp_readings ADD COLUMN closing_recorded_by TEXT"),
+            ('closing_recorded_at', "ALTER TABLE equipment_temp_readings ADD COLUMN closing_recorded_at TEXT"),
+        ]:
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError:
+                pass
+        # Legacy rows used one temp per day. Keep them as the morning check.
+        conn.execute('''
+            UPDATE equipment_temp_readings
+            SET morning_temp=COALESCE(morning_temp, temp),
+                morning_recorded_by=COALESCE(morning_recorded_by, recorded_by),
+                morning_recorded_at=COALESCE(morning_recorded_at, recorded_at)
+            WHERE temp IS NOT NULL
+        ''')
         if conn.execute('SELECT COUNT(*) c FROM equipment_units').fetchone()['c'] == 0:
             for i, (name, kind) in enumerate(UNITS_SEED):
                 conn.execute('INSERT INTO equipment_units(name, kind, sort_order) VALUES(?,?,?)',
@@ -132,27 +208,56 @@ def init_equipment_tables(db_path):
 
 def collect_equipment_for_date(conn, date_str):
     """Return equipment readings for one date, with safety flags.
-    Shape: {'units':[{name,kind,temp,unsafe}], 'recorded':n, 'alerts':n, 'recorded_by':..}"""
+    Shape: {'units':[{name,kind,checks:{morning,closing},status}],
+            'recorded':n, 'total_checks':n, 'alerts':n, 'missing':n}"""
     units = conn.execute(
         'SELECT * FROM equipment_units WHERE active=1 ORDER BY sort_order, id').fetchall()
     rows = conn.execute(
         'SELECT * FROM equipment_temp_readings WHERE date=?', (date_str,)).fetchall()
     by_unit = {r['unit_id']: r for r in rows}
-    out, recorded, alerts, recorded_by = [], 0, 0, ''
+    due_keys = _due_check_keys(date_str)
+    out, recorded, alerts, missing, missing_due, recorded_by = [], 0, 0, 0, 0, ''
     for u in units:
         r = by_unit.get(u['id'])
-        temp = r['temp'] if r else None
-        unsafe = is_unsafe(u['kind'], temp)
-        if temp is not None:
-            recorded += 1
-            if r['recorded_by']:
-                recorded_by = r['recorded_by']
-        if unsafe:
-            alerts += 1
-        out.append({'name': u['name'], 'kind': u['kind'], 'temp': temp,
-                    'unsafe': unsafe, 'range': KIND_META.get(u['kind'], {}).get('range', '')})
+        checks = {}
+        for check in CHECK_TYPES:
+            temp_col, by_col, at_col = _check_columns(check['key'])
+            legacy_temp = r['temp'] if r and check['key'] == 'morning' else None
+            temp = r[temp_col] if r and temp_col in r.keys() else None
+            by = r[by_col] if r and by_col in r.keys() else ''
+            at = r[at_col] if r and at_col in r.keys() else ''
+            if check['key'] == 'morning':
+                if temp is None:
+                    temp = legacy_temp
+                if not by and r:
+                    by = r['recorded_by'] if 'recorded_by' in r.keys() else ''
+                if not at and r:
+                    at = r['recorded_at'] if 'recorded_at' in r.keys() else ''
+            checks[check['key']] = _reading(temp, u['kind'], by, at)
+            if temp is None:
+                missing += 1
+                if check['key'] in due_keys:
+                    missing_due += 1
+            else:
+                recorded += 1
+                if by:
+                    recorded_by = by
+                if checks[check['key']]['unsafe']:
+                    alerts += 1
+        unit = {'name': u['name'], 'kind': u['kind'], 'checks': checks,
+                'range': KIND_META.get(u['kind'], {}).get('range', '')}
+        unit['status'] = _combined_status(unit)
+        # Legacy convenience fields for callers that have not been updated yet.
+        unit['temp'] = checks['morning']['temp']
+        unit['unsafe'] = checks['morning']['unsafe']
+        out.append(unit)
     return {'units': out, 'recorded': recorded, 'alerts': alerts,
-            'total': len(units), 'recorded_by': recorded_by}
+            'missing': missing, 'total': len(units),
+            'missing_due': missing_due,
+            'total_due_checks': len(units) * len(due_keys),
+            'due_check_keys': sorted(due_keys),
+            'total_checks': len(units) * len(CHECK_TYPES),
+            'recorded_by': recorded_by, 'check_types': CHECK_TYPES}
 
 # ── Routes ───────────────────────────────────────────────────────────────────
 
@@ -178,21 +283,36 @@ def week_view(week_start):
         units = [dict(r) for r in conn.execute(
             'SELECT * FROM equipment_units WHERE active=1 ORDER BY sort_order, id').fetchall()]
         readings = conn.execute(
-            'SELECT unit_id, date, temp, recorded_by FROM equipment_temp_readings '
+            'SELECT * FROM equipment_temp_readings '
             'WHERE date >= ? AND date <= ?', (week_iso[0], week_iso[6])).fetchall()
 
-    # map[unit_id][date] = temp
+    # map[unit_id][date] = sqlite row with morning/closing readings
     rmap = {}
     for r in readings:
-        rmap.setdefault(r['unit_id'], {})[r['date']] = r['temp']
+        rmap.setdefault(r['unit_id'], {})[r['date']] = r
 
     grid = []
     for u in units:
         cells = []
         for diso in week_iso:
-            temp = rmap.get(u['id'], {}).get(diso)
-            cells.append({'date': diso, 'temp': temp,
-                          'unsafe': is_unsafe(u['kind'], temp)})
+            r = rmap.get(u['id'], {}).get(diso)
+            checks = {}
+            for check in CHECK_TYPES:
+                temp_col, by_col, at_col = _check_columns(check['key'])
+                legacy_temp = r['temp'] if r and check['key'] == 'morning' else None
+                temp = r[temp_col] if r and temp_col in r.keys() else None
+                by = r[by_col] if r and by_col in r.keys() else ''
+                at = r[at_col] if r and at_col in r.keys() else ''
+                if check['key'] == 'morning':
+                    if temp is None:
+                        temp = legacy_temp
+                    if not by and r:
+                        by = r['recorded_by'] if 'recorded_by' in r.keys() else ''
+                    if not at and r:
+                        at = r['recorded_at'] if 'recorded_at' in r.keys() else ''
+                checks[check['key']] = _reading(temp, u['kind'], by, at)
+            cells.append({'date': diso, 'checks': checks,
+                          'status': _combined_status({'checks': checks})})
         grid.append({'unit': u, 'cells': cells,
                      'meta': KIND_META.get(u['kind'], KIND_META['cold'])})
 
@@ -203,7 +323,8 @@ def week_view(week_start):
         grid=grid, units=units, kind_meta=KIND_META,
         week_dates=week_dates, week_iso=week_iso, days_short=DAYS_SHORT,
         week_start=ws.isoformat(), prev_ws=prev_ws, next_ws=next_ws,
-        today_iso=today_iso, staff=_get_staff(), is_admin=_is_admin())
+        today_iso=today_iso, staff=_get_staff(), is_admin=_is_admin(),
+        check_types=CHECK_TYPES)
 
 @equipment.route('/save', methods=['POST'])
 @_login_required
@@ -223,24 +344,41 @@ def save_week():
             'SELECT * FROM equipment_units WHERE active=1').fetchall()}
         for uid in units:
             for diso in week_iso:
-                raw = request.form.get(f'temp_{uid}_{diso}', '').strip()
-                if raw == '':
-                    # blank → delete any existing reading for that cell
-                    conn.execute('DELETE FROM equipment_temp_readings WHERE unit_id=? AND date=?',
-                                 (uid, diso))
-                    continue
-                try:
-                    temp = float(raw)
-                except ValueError:
-                    continue
-                conn.execute('''INSERT INTO equipment_temp_readings
-                    (unit_id, date, temp, recorded_by, recorded_at) VALUES (?,?,?,?,?)
-                    ON CONFLICT(unit_id, date) DO UPDATE SET
-                      temp=excluded.temp, recorded_by=excluded.recorded_by,
-                      recorded_at=excluded.recorded_at''',
-                    (uid, diso, temp, recorded_by, now))
-                if is_unsafe(units[uid]['kind'], temp):
-                    alerts.append(f"{units[uid]['name']} {diso}: {temp}°C")
+                conn.execute('''INSERT OR IGNORE INTO equipment_temp_readings
+                    (unit_id, date) VALUES (?,?)''', (uid, diso))
+                for check in CHECK_TYPES:
+                    raw = request.form.get(
+                        f'{check["key"]}_temp_{uid}_{diso}', '').strip()
+                    temp_col, by_col, at_col = _check_columns(check['key'])
+                    if raw == '':
+                        conn.execute(f'''UPDATE equipment_temp_readings
+                            SET {temp_col}=NULL, {by_col}=NULL, {at_col}=NULL
+                            WHERE unit_id=? AND date=?''', (uid, diso))
+                        if check['key'] == 'morning':
+                            conn.execute('''UPDATE equipment_temp_readings
+                                SET temp=NULL, recorded_by=NULL, recorded_at=NULL
+                                WHERE unit_id=? AND date=?''', (uid, diso))
+                        continue
+                    try:
+                        temp = float(raw)
+                    except ValueError:
+                        continue
+                    conn.execute(f'''UPDATE equipment_temp_readings
+                        SET {temp_col}=?, {by_col}=?, {at_col}=?
+                        WHERE unit_id=? AND date=?''',
+                        (temp, recorded_by, now, uid, diso))
+                    if check['key'] == 'morning':
+                        conn.execute('''UPDATE equipment_temp_readings
+                            SET temp=?, recorded_by=?, recorded_at=?
+                            WHERE unit_id=? AND date=?''',
+                            (temp, recorded_by, now, uid, diso))
+                    if is_unsafe(units[uid]['kind'], temp):
+                        alerts.append(
+                            f"{units[uid]['name']} {diso} {check['label']}: {temp:g}°C")
+                conn.execute('''DELETE FROM equipment_temp_readings
+                    WHERE unit_id=? AND date=?
+                      AND morning_temp IS NULL AND closing_temp IS NULL''',
+                    (uid, diso))
 
     if email_service:
         try:
@@ -250,6 +388,7 @@ def save_week():
                 lines=[
                     f'Week: {week_iso[0]} → {week_iso[6]}',
                     f'Recorded by: {recorded_by or "-"}',
+                    'Checks: Morning + Closing',
                     f'Out-of-range readings: {len(alerts)}'
                     + (' — ' + '; '.join(alerts[:6]) if alerts else ''),
                 ],

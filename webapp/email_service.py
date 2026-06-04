@@ -1136,10 +1136,11 @@ def collect_daily_digest(target_date: str, checklists_meta: dict | None = None,
     }
 
 
-def _digest_kpi_card(label: str, value: str, color: str, sublabel: str = '') -> str:
+def _digest_kpi_card(label: str, value: str, color: str, sublabel: str = '',
+                     width: str = '25%') -> str:
     sub = f'<div style="font-size:10px;color:#999;margin-top:2px">{escape(sublabel)}</div>' if sublabel else ''
     return (
-        f'<td style="padding:6px;width:25%;vertical-align:top">'
+        f'<td style="padding:6px;width:{width};vertical-align:top">'
         f'<div style="background:#fff;border:1px solid #eef0f3;border-radius:8px;'
         f'padding:14px;text-align:center;border-top:3px solid {color}">'
         f'<div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.1em;font-weight:600">{escape(label)}</div>'
@@ -1169,15 +1170,25 @@ def build_digest_html(data: dict, base_url: str = '') -> str:
 
     # Top KPIs
     chk_pct = round(data['chk_total_done'] / data['chk_expected'] * 100) if data['chk_expected'] else 0
+    equip = data.get('equipment') or {}
+    equip_total_checks = equip.get('total_checks')
+    if equip_total_checks is None:
+        equip_total_checks = (equip.get('total') or 0) * 2
+    equip_missing_due = equip.get('missing_due')
+    if equip_missing_due is None:
+        equip_missing_due = equip.get('missing') or 0
+    equip_alerts = equip.get('alerts') or 0
     kpi_cards = (
         _digest_kpi_card('Checklists', f"{data['chk_total_done']} / {data['chk_expected']}",
-                         '#2E7D32', f'{chk_pct}% complete') +
+                         '#2E7D32', f'{chk_pct}% complete', '20%') +
         _digest_kpi_card('Temperature Records', f"{data['temp_count']} / {data['temp_expected']}",
-                         '#D84315', f'{len(data["oos_flagged"])} out-of-zone') +
+                         '#D84315', f'{len(data["oos_flagged"])} out-of-zone', '20%') +
+        _digest_kpi_card('Equipment', f"{equip.get('recorded', 0)} / {equip_total_checks}",
+                         '#00838F', f'{equip_alerts} out · {equip_missing_due} due missing', '20%') +
         _digest_kpi_card('Issues Reported', str(len(data['issues'])),
-                         '#E65100', f'{sum(1 for i in data["issues"] if i.get("status")=="open")} still open') +
+                         '#E65100', f'{sum(1 for i in data["issues"] if i.get("status")=="open")} still open', '20%') +
         _digest_kpi_card('Violations', str(len(data['violations'])),
-                         '#C62828', f'{len(data["training"])} training sessions')
+                         '#C62828', f'{len(data["training"])} training sessions', '20%')
     )
 
     # Checklist matrix
@@ -1372,29 +1383,62 @@ def build_digest_html(data: dict, base_url: str = '') -> str:
     equip = data.get('equipment')
     if equip and equip.get('total'):
         kind_lbl = {'cold': 'Fridge 0–5°C', 'freezer': 'Freezer -20 to -15°C', 'hot': 'Hot ≥60°C'}
+        due_keys = set(equip.get('due_check_keys') or [])
+        equip_total_checks = equip.get('total_checks') or (equip.get('total', 0) * 2)
+        equip_missing_due = equip.get('missing_due')
+        if equip_missing_due is None:
+            equip_missing_due = equip.get('missing') or 0
+
+        def _eq_cell(reading, key):
+            reading = reading or {}
+            temp = reading.get('temp')
+            if temp is None:
+                if key in due_keys:
+                    return ('<td style="padding:7px;text-align:center;background:#FFEBEE;'
+                            'border:1px solid #F0A9A0;color:#C62828;font-size:11px;font-weight:800">MISSING</td>')
+                return ('<td style="padding:7px;text-align:center;background:#fff;'
+                        'border:1px solid #eef0f3;color:#999;font-size:11px;font-weight:700">PENDING</td>')
+            unsafe = bool(reading.get('unsafe'))
+            col = '#C62828' if unsafe else '#1B5E20'
+            bg = '#FFEBEE' if unsafe else '#F1F8E9'
+            bd = '#F0A9A0' if unsafe else '#C5E1A5'
+            tag = 'OUT' if unsafe else 'OK'
+            return (f'<td style="padding:7px;background:{bg};border:1px solid {bd};font-size:12px;text-align:center">'
+                    f'<b style="color:{col};font-size:14px">{reading["temp"]:g}°C</b>'
+                    f'<div style="color:{col};font-weight:800;font-size:10px;margin-top:1px">{tag}</div></td>')
+
         eq_rows = []
         for u in equip['units']:
-            if u['temp'] is None:
-                temp_cell = '<td style="padding:7px;text-align:center;background:#fff;border:1px solid #eef0f3;color:#bbb;font-size:12px">— not recorded</td>'
+            checks = u.get('checks') or {}
+            morning = checks.get('morning') or {}
+            closing = checks.get('closing') or {}
+            unsafe = bool(morning.get('unsafe') or closing.get('unsafe'))
+            due_missing = ((morning.get('temp') is None and 'morning' in due_keys)
+                           or (closing.get('temp') is None and 'closing' in due_keys))
+            pending = morning.get('temp') is None or closing.get('temp') is None
+            if unsafe:
+                status = '<span style="color:#C62828;font-weight:800">OUT OF RANGE</span>'
+            elif due_missing:
+                status = '<span style="color:#C62828;font-weight:800">MISSING</span>'
+            elif pending:
+                status = '<span style="color:#777;font-weight:800">PENDING</span>'
             else:
-                col = '#C62828' if u['unsafe'] else '#1B5E20'
-                bg  = '#FFEBEE' if u['unsafe'] else '#F1F8E9'
-                bd  = '#F0A9A0' if u['unsafe'] else '#C5E1A5'
-                tag = 'OUT OF RANGE' if u['unsafe'] else 'OK'
-                temp_cell = (f'<td style="padding:7px;background:{bg};border:1px solid {bd};font-size:12px;text-align:center">'
-                             f'<b style="color:{col};font-size:14px">{u["temp"]:g}°C</b> '
-                             f'<span style="color:{col};font-weight:700;font-size:10px">{tag}</span></td>')
+                status = '<span style="color:#1B5E20;font-weight:800">OK</span>'
             eq_rows.append(
                 f'<tr><td style="padding:7px;background:#fafafa;border:1px solid #eef0f3;font-weight:700;color:#1A1A2E;font-size:12px">'
                 f'{escape(u["name"])}<div style="color:#888;font-weight:400;font-size:10px">{escape(kind_lbl.get(u["kind"], u["kind"]))}</div></td>'
-                f'{temp_cell}</tr>')
+                f'{_eq_cell(morning, "morning")}{_eq_cell(closing, "closing")}'
+                f'<td style="padding:7px;text-align:center;background:#fff;border:1px solid #eef0f3;font-size:11px">{status}</td></tr>')
         equipment_html = (
             f'<div style="font-size:12px;color:#555;margin-bottom:6px">'
-            f'{equip["recorded"]}/{equip["total"]} recorded · '
-            f'<b style="color:{"#C62828" if equip["alerts"] else "#1B5E20"}">{equip["alerts"]} out of range</b></div>'
+            f'Morning + Closing required · {equip["recorded"]}/{equip_total_checks} checks recorded · '
+            f'<b style="color:{"#C62828" if equip["alerts"] else "#1B5E20"}">{equip["alerts"]} out of range</b> · '
+            f'<b style="color:{"#C62828" if equip_missing_due else "#1B5E20"}">{equip_missing_due} due missing</b></div>'
             '<table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse">'
             '<tr><th style="padding:8px;background:#00838F;color:#fff;font-size:11px;text-align:left;border:1px solid #00838F">Equipment</th>'
-            '<th style="padding:8px;background:#00838F;color:#fff;font-size:11px;text-align:center;border:1px solid #00838F">Temperature</th></tr>'
+            '<th style="padding:8px;background:#00838F;color:#fff;font-size:11px;text-align:center;border:1px solid #00838F">Morning</th>'
+            '<th style="padding:8px;background:#00838F;color:#fff;font-size:11px;text-align:center;border:1px solid #00838F">Closing</th>'
+            '<th style="padding:8px;background:#00838F;color:#fff;font-size:11px;text-align:center;border:1px solid #00838F">Status</th></tr>'
             + ''.join(eq_rows) + '</table>'
         )
 
@@ -1483,6 +1527,14 @@ def send_daily_digest(target_date: str, checklists_meta: dict,
                                  temperatures_meta=temperatures_meta,
                                  issue_categories=issue_categories)
     html = build_digest_html(data, base_url=settings.get('base_url') or '')
+    equip = data.get('equipment') or {}
+    equip_total_checks = equip.get('total_checks')
+    if equip_total_checks is None:
+        equip_total_checks = (equip.get('total') or 0) * 2
+    equip_missing_due = equip.get('missing_due')
+    if equip_missing_due is None:
+        equip_missing_due = equip.get('missing') or 0
+    equip_alerts = equip.get('alerts') or 0
 
     try:
         date_pretty = datetime.strptime(target_date, '%Y-%m-%d').strftime('%a %d %b %Y')
@@ -1495,6 +1547,8 @@ def send_daily_digest(target_date: str, checklists_meta: dict,
             f'(late: {data["chk_total_late"]}, verified: {data["chk_verified"]})\n'
             f'Temperatures done: {data["temp_count"]} / {data["temp_expected"]} '
             f'(out-of-zone readings: {len(data["oos_flagged"])})\n'
+            f'Equipment checks: {equip.get("recorded", 0)} / {equip_total_checks} '
+            f'(out of range: {equip_alerts}, due missing: {equip_missing_due})\n'
             f'Issues reported: {len(data["issues"])}\n'
             f'Violations logged: {len(data["violations"])}\n'
             f'Weekly prep: {data.get("prep_week", {}).get("total_done", 0)} / '
