@@ -20,6 +20,25 @@ UPLOAD_DIR: str | None = None
 CHECKLISTS_META: dict = {}
 TEMPERATURES_META: dict = {}
 
+SHARE_CUTOFF_HOUR = 16
+SHARE_PERIODS = {
+    'opening': {
+        'label': 'Opening',
+        'cover': 'OPENING OPERATIONS REPORT',
+        'equipment_check': 'morning',
+        'equipment_label': 'Morning Equipment Check',
+        'includes_food_temps': True,
+    },
+    'closing': {
+        'label': 'Closing',
+        'cover': 'CLOSING OPERATIONS REPORT',
+        'equipment_check': 'closing',
+        'equipment_label': 'Closing Equipment Check',
+        'includes_food_temps': False,
+    },
+}
+OPENING_TEMPERATURE_TYPES = {'chef', 'pastry', 'banh_mi'}
+
 
 def init_whatsapp(db_path: str, static_dir: str, upload_dir: str,
                   checklists: dict, temperatures: dict) -> None:
@@ -48,11 +67,80 @@ def _conn() -> sqlite3.Connection:
 
 # ── Data collection ──────────────────────────────────────────────────────────
 
-def _collect_today(date_str: str) -> dict:
+def _resolve_share_period(raw: str | None = None) -> str:
+    value = (raw or '').strip().lower()
+    if value in ('closing', 'close', 'pm', 'night', 'evening'):
+        return 'closing'
+    if value in ('opening', 'open', 'morning', 'am'):
+        return 'opening'
+    return 'closing' if datetime.now().hour >= SHARE_CUTOFF_HOUR else 'opening'
+
+
+def _filter_equipment_for_period(equip: dict | None, period: str) -> dict | None:
+    if not equip:
+        return None
+    selected_key = SHARE_PERIODS.get(period, SHARE_PERIODS['opening'])['equipment_check']
+    selected_meta = None
+    for check in equip.get('check_types') or []:
+        if check.get('key') == selected_key:
+            selected_meta = dict(check)
+            break
+    if not selected_meta:
+        selected_meta = {'key': selected_key, 'label': selected_key.title(), 'short': selected_key.title()}
+
+    due_keys = set(equip.get('due_check_keys') or [])
+    units, recorded, alerts, missing, missing_due, recorded_by = [], 0, 0, 0, 0, ''
+    for unit in equip.get('units') or []:
+        reading = (unit.get('checks') or {}).get(selected_key) or {}
+        temp = reading.get('temp')
+        unsafe = bool(reading.get('unsafe'))
+        if temp is None:
+            missing += 1
+            if selected_key in due_keys:
+                missing_due += 1
+        else:
+            recorded += 1
+            if unsafe:
+                alerts += 1
+            if reading.get('recorded_by'):
+                recorded_by = reading.get('recorded_by')
+        filtered_unit = dict(unit)
+        filtered_unit['checks'] = {selected_key: reading}
+        filtered_unit['temp'] = temp
+        filtered_unit['unsafe'] = unsafe
+        filtered_unit['status'] = 'alert' if unsafe else (
+            'missing' if temp is None and selected_key in due_keys else
+            'pending' if temp is None else 'ok'
+        )
+        units.append(filtered_unit)
+
+    total = int(equip.get('total') or len(units))
+    return {
+        **equip,
+        'units': units,
+        'recorded': recorded,
+        'alerts': alerts,
+        'missing': missing,
+        'missing_due': missing_due,
+        'total': total,
+        'total_checks': total,
+        'total_due_checks': total if selected_key in due_keys else 0,
+        'due_check_keys': [selected_key] if selected_key in due_keys else [],
+        'check_types': [selected_meta],
+        'period_check_key': selected_key,
+        'period_check_label': selected_meta.get('label') or selected_key.title(),
+        'recorded_by': recorded_by,
+    }
+
+
+def _collect_today(date_str: str, period: str | None = None) -> dict:
     """Pull today's checklist + temperature submissions with photo paths,
     plus equipment temperatures and any logged violations / reported issues."""
+    period = _resolve_share_period(period)
+    period_meta = SHARE_PERIODS[period]
     out = {'date': date_str, 'checklists': [], 'temperatures': [],
-           'equipment': None, 'violations': [], 'issues': []}
+           'equipment': None, 'violations': [], 'issues': [],
+           'period': period, 'period_meta': period_meta}
     with _conn() as conn:
         # Checklists — one entry per (type, section) combination submitted today
         chk_rows = conn.execute('''
@@ -60,9 +148,9 @@ def _collect_today(date_str: str) -> dict:
                    (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id) AS total_tasks,
                    (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id AND done=1) AS done_tasks
             FROM checklist_sessions cs
-            WHERE cs.date=?
+            WHERE cs.date=? AND cs.section=?
             ORDER BY cs.type, cs.section
-        ''', (date_str,)).fetchall()
+        ''', (date_str, period)).fetchall()
 
         for r in chk_rows:
             r = dict(r)
@@ -76,13 +164,17 @@ def _collect_today(date_str: str) -> dict:
             out['checklists'].append(r)
 
         # Temperature
-        temp_rows = conn.execute('''
-            SELECT ts.*,
-                   (SELECT COUNT(*) FROM temp_readings WHERE session_id=ts.id) AS reading_count,
-                   (SELECT COUNT(*) FROM temp_readings WHERE session_id=ts.id AND discarded='Y') AS discarded
-            FROM temp_sessions ts WHERE ts.date=?
-            ORDER BY ts.type
-        ''', (date_str,)).fetchall()
+        temp_rows = []
+        if period_meta['includes_food_temps']:
+            placeholders = ','.join('?' for _ in OPENING_TEMPERATURE_TYPES)
+            temp_rows = conn.execute(f'''
+                SELECT ts.*,
+                       (SELECT COUNT(*) FROM temp_readings WHERE session_id=ts.id) AS reading_count,
+                       (SELECT COUNT(*) FROM temp_readings WHERE session_id=ts.id AND discarded='Y') AS discarded
+                FROM temp_sessions ts
+                WHERE ts.date=? AND ts.type IN ({placeholders})
+                ORDER BY ts.type
+            ''', (date_str, *sorted(OPENING_TEMPERATURE_TYPES))).fetchall()
         for r in temp_rows:
             r = dict(r)
             meta = TEMPERATURES_META.get(r['type'], {})
@@ -114,32 +206,11 @@ def _collect_today(date_str: str) -> dict:
         try:
             import equipment_routes
             equipment_routes.DB_PATH = DB_PATH
-            out['equipment'] = equipment_routes.collect_equipment_for_date(conn, date_str)
+            equip = equipment_routes.collect_equipment_for_date(conn, date_str)
+            out['equipment'] = _filter_equipment_for_period(equip, period)
         except Exception:
             out['equipment'] = None
 
-        # Logged staff violations for the date
-        try:
-            out['violations'] = [dict(v) for v in conn.execute('''
-                SELECT sv.staff_name, sv.severity, sv.description, sv.action_taken,
-                       sv.status, COALESCE(vr.title, '') AS rule_title,
-                       COALESCE(vr.code, '') AS rule_code
-                FROM staff_violations sv
-                LEFT JOIN violation_rules vr ON vr.id = sv.rule_id
-                WHERE sv.incident_date = ?
-                ORDER BY sv.severity DESC, sv.id''', (date_str,)).fetchall()]
-        except Exception:
-            out['violations'] = []
-
-        # Issues reported for the date
-        try:
-            out['issues'] = [dict(i) for i in conn.execute('''
-                SELECT title, category, description, priority, status, reported_by
-                FROM issue_reports WHERE date = ?
-                ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 ELSE 2 END, id
-            ''', (date_str,)).fetchall()]
-        except Exception:
-            out['issues'] = []
     return out
 
 
@@ -228,10 +299,11 @@ def _wrap_text(draw, text: str, font, max_width: int) -> list[str]:
     return lines or [text]
 
 
-def build_daily_png(date_str: str) -> bytes:
+def build_daily_png(date_str: str, period: str | None = None) -> bytes:
     from PIL import Image, ImageDraw
 
-    data = _collect_today(date_str)
+    data = _collect_today(date_str, period)
+    period_meta = data.get('period_meta') or SHARE_PERIODS['opening']
 
     # Canvas — 1080 width is the WhatsApp share sweet spot
     W = 1080
@@ -306,7 +378,7 @@ def build_daily_png(date_str: str) -> bytes:
     except Exception:
         date_pretty = date_str
     draw.text((text_x, 36), 'MCQ MIRRABOOKA CAFE', fill=(255, 255, 255), font=f_title)
-    draw.text((text_x, 96), 'DAILY OPERATIONS SUMMARY',
+    draw.text((text_x, 96), period_meta['cover'],
               fill=(255, 255, 255, 200), font=f_sub)
     draw.text((text_x, 134), date_pretty, fill=(255, 200, 200), font=f_body_b)
 
@@ -321,12 +393,20 @@ def build_daily_png(date_str: str) -> bytes:
     total_attention = (temp_alerts + chk_late + equip_stats['attention']
                        + len(data.get("violations", [])))
 
-    kpi_cards = [
-        ('CHECKLISTS', f'{len(data["checklists"])}', (46, 125, 50)),
-        ('FOOD TEMP', f'{temp_done}', (216, 67, 21)),
-        ('EQUIPMENT', f'{equip_stats["recorded"]}/{equip_stats["total_checks"]}', (0, 131, 143)),
-        ('ALERTS', f'{total_attention}', (198, 40, 40)),
-    ]
+    if data.get('period') == 'closing':
+        kpi_cards = [
+            ('CHECKLISTS', f'{len(data["checklists"])}', (46, 125, 50)),
+            ('EQUIPMENT', f'{equip_stats["recorded"]}/{equip_stats["total_checks"]}', (0, 131, 143)),
+            ('ALERTS', f'{total_attention}', (198, 40, 40)),
+            ('REPORT', 'CLOSE', (26, 26, 46)),
+        ]
+    else:
+        kpi_cards = [
+            ('CHECKLISTS', f'{len(data["checklists"])}', (46, 125, 50)),
+            ('FOOD TEMP', f'{temp_done}', (216, 67, 21)),
+            ('EQUIPMENT', f'{equip_stats["recorded"]}/{equip_stats["total_checks"]}', (0, 131, 143)),
+            ('ALERTS', f'{total_attention}', (198, 40, 40)),
+        ]
     card_w = (W - PAD * 2 - 36) // 4
     for i, (label, val, col) in enumerate(kpi_cards):
         cx = PAD + i * (card_w + 12)
@@ -1068,7 +1148,7 @@ def build_temperature_png(session_id: int) -> bytes:
 
 # ── Daily PDF report (one polished A4 doc, designed for WhatsApp share) ─────
 
-def build_daily_pdf(date_str: str) -> bytes:
+def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
     """Compose a magazine-style A4 PDF combining cover, every checklist
     (with all photos at large size), and every temperature record into one
     document that's pleasant to scroll on a phone and lands well as a
@@ -1086,7 +1166,8 @@ def build_daily_pdf(date_str: str) -> bytes:
 
     # Reuse the live data collector + the per-session helpers already in
     # this module — keeps the PDF in sync with what the page shows.
-    data = _collect_today(date_str)
+    data = _collect_today(date_str, period)
+    period_meta = data.get('period_meta') or SHARE_PERIODS['opening']
 
     # Try the app's font registration helper so we get a TTF that supports
     # Vietnamese diacritics; ReportLab Helvetica doesn't.
@@ -1236,7 +1317,8 @@ def build_daily_pdf(date_str: str) -> bytes:
 
         canvas.setFont(bold_font, 9)
         canvas.setFillColor(colors.white)
-        canvas.drawString(MARGIN, PAGE_H - 8 * mm, 'MCQ MIRRABOOKA · DAILY REPORT')
+        canvas.drawString(MARGIN, PAGE_H - 8 * mm,
+                          f'MCQ MIRRABOOKA · {period_meta["label"].upper()} REPORT')
         try:
             d_str = datetime.strptime(date_str, '%Y-%m-%d').strftime('%a %d %b %Y')
         except Exception:
@@ -1259,7 +1341,7 @@ def build_daily_pdf(date_str: str) -> bytes:
     # ── Cover content (positioned via Spacers because background is canvas) ──
     story.append(Spacer(1, 110 * mm))     # leave room for logo painted by _draw_cover
     story.append(Paragraph('MCQ MIRRABOOKA CAFE', S['cover_brand']))
-    story.append(Paragraph('VIETNAMESE STREET FOOD · DAILY REPORT', S['cover_sub']))
+    story.append(Paragraph(f'VIETNAMESE STREET FOOD · {period_meta["cover"]}', S['cover_sub']))
     try:
         date_pretty = datetime.strptime(date_str, '%Y-%m-%d').strftime('%A · %d %B %Y').upper()
     except Exception:
@@ -1293,12 +1375,21 @@ def build_daily_pdf(date_str: str) -> bytes:
                 ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
             ]))
 
-    kpis = Table([[
-        _kpi('CHECKLISTS', str(len(data['checklists'])), colors.HexColor('#A5D6A7')),
-        _kpi('FOOD TEMP', str(len(data['temperatures'])), colors.HexColor('#FFAB91')),
-        _kpi('EQUIPMENT', equip_recorded,                colors.HexColor('#80DEEA')),
-        _kpi('ALERTS',    str(total_alerts),             colors.HexColor('#FFCDD2')),
-    ]], colWidths=[40 * mm] * 4)
+    if data.get('period') == 'closing':
+        kpi_items = [
+            _kpi('CHECKLISTS', str(len(data['checklists'])), colors.HexColor('#A5D6A7')),
+            _kpi('EQUIPMENT', equip_recorded,                colors.HexColor('#80DEEA')),
+            _kpi('ALERTS',    str(total_alerts),             colors.HexColor('#FFCDD2')),
+            _kpi('REPORT',    'CLOSE',                       colors.HexColor('#D7CCC8')),
+        ]
+    else:
+        kpi_items = [
+            _kpi('CHECKLISTS', str(len(data['checklists'])), colors.HexColor('#A5D6A7')),
+            _kpi('FOOD TEMP', str(len(data['temperatures'])), colors.HexColor('#FFAB91')),
+            _kpi('EQUIPMENT', equip_recorded,                colors.HexColor('#80DEEA')),
+            _kpi('ALERTS',    str(total_alerts),             colors.HexColor('#FFCDD2')),
+        ]
+    kpis = Table([kpi_items], colWidths=[40 * mm] * 4)
     kpis.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE')]))
     story.append(kpis)
     story.append(Spacer(1, 6 * mm))
@@ -1322,9 +1413,9 @@ def build_daily_pdf(date_str: str) -> bytes:
     # ── Per-checklist pages ────────────────────────────────────────────────
     if data['checklists']:
         story.append(PageBreak())
-        story.append(Paragraph('DAILY CHECKLISTS', S['section']))
+        story.append(Paragraph(f'{period_meta["label"].upper()} CHECKLISTS', S['section']))
         story.append(Paragraph(
-            f"{len(data['checklists'])} checklist(s) submitted today. "
+            f"{len(data['checklists'])} checklist(s) included in this {period_meta['label'].lower()} report. "
             "Each station follows on its own page below.", S['body']))
 
     for c in data['checklists']:
@@ -1511,9 +1602,9 @@ def build_daily_pdf(date_str: str) -> bytes:
     # ── Per-temperature pages ──────────────────────────────────────────────
     if data['temperatures']:
         story.append(PageBreak())
-        story.append(Paragraph('TEMPERATURE RECORDS', S['section']))
+        story.append(Paragraph('OPENING TEMPERATURE RECORDS', S['section']))
         story.append(Paragraph(
-            f"{len(data['temperatures'])} record(s) submitted today. "
+            f"{len(data['temperatures'])} food temperature record(s) included in this opening report. "
             "Each station's readings follow on its own page.", S['body']))
 
     for t in data['temperatures']:
@@ -1652,9 +1743,14 @@ def build_daily_pdf(date_str: str) -> bytes:
         WARN = colors.HexColor('#E65100')
         equip_stats = _equipment_stats(equip)
         due_keys = set(equip.get('due_check_keys') or [])
+        check_types = equip.get('check_types') or []
+        if not check_types:
+            check_types = [{'key': 'morning', 'label': 'Morning', 'short': 'AM'}]
+        check_keys = [c.get('key') for c in check_types]
         hdr = Table([[Paragraph(
             '<font color="white" size="20"><b>EQUIPMENT TEMPERATURE</b></font><br/>'
-            f'<font color="#D7F2F5" size="11">MORNING + CLOSING CHECKS · FRIDGES · FREEZERS · HOT UNITS · {date_str}</font>',
+            f'<font color="#D7F2F5" size="11">{_esc(equip.get("period_check_label") or "Equipment Check").upper()} · '
+            f'FRIDGES · FREEZERS · HOT UNITS · {date_str}</font>',
             ParagraphStyle('eqh', fontName=bold_font, leading=24))]], colWidths=[USABLE_W])
         hdr.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, -1), eq_col),
@@ -1687,8 +1783,9 @@ def build_daily_pdf(date_str: str) -> bytes:
             ('LEFTPADDING', (0, 0), (-1, -1), 2), ('RIGHTPADDING', (0, 0), (-1, -1), 2)]))
         story.append(epr)
         story.append(Spacer(1, 4 * mm))
+        eq_check_names = ' and '.join(_esc(c.get('label') or c.get('key', '').title()) for c in check_types)
         story.append(Paragraph(
-            'Required checks — <b>Morning before 10:00 AM</b> and <b>Closing before 6:00 PM</b>. '
+            f'Report scope — <b>{eq_check_names}</b>. '
             'Safe ranges — Fridge <b>0 to 5°C</b> · Freezer <b>-20 to -15°C</b> · Hot unit <b>&ge; 60°C</b>.',
             S['body']))
         story.append(Spacer(1, 3 * mm))
@@ -1709,15 +1806,15 @@ def build_daily_pdf(date_str: str) -> bytes:
                              f'<font color="{col_hex}" size="7"><b>{tag}</b></font>',
                 ParagraphStyle('et', fontName=bold_font, fontSize=10, leading=11, alignment=TA_CENTER))
 
-        rows_data = [['Equipment', 'Type', 'Safe range', 'Morning', 'Closing', 'Status']]
+        rows_data = [['Equipment', 'Type', 'Safe range']
+                     + [c.get('label') or c.get('key', '').title() for c in check_types]
+                     + ['Status']]
         for u in equip['units']:
             checks = u.get('checks') or {}
-            morning = checks.get('morning') or {}
-            closing = checks.get('closing') or {}
-            unsafe = bool(morning.get('unsafe') or closing.get('unsafe'))
-            due_missing = ((morning.get('temp') is None and 'morning' in due_keys)
-                           or (closing.get('temp') is None and 'closing' in due_keys))
-            pending = (morning.get('temp') is None or closing.get('temp') is None)
+            unsafe = any(bool((checks.get(k) or {}).get('unsafe')) for k in check_keys)
+            due_missing = any((checks.get(k) or {}).get('temp') is None and k in due_keys
+                              for k in check_keys)
+            pending = any((checks.get(k) or {}).get('temp') is None for k in check_keys)
             if unsafe:
                 status_p = Paragraph('<font color="#C62828"><b>OUT OF RANGE</b></font>',
                     ParagraphStyle('es', fontName=bold_font, fontSize=8.5, alignment=TA_CENTER))
@@ -1734,13 +1831,19 @@ def build_daily_pdf(date_str: str) -> bytes:
                 Paragraph(_esc(u['name']), S['food']),
                 Paragraph(kind_label.get(u['kind'], u['kind'].upper()), S['small_b']),
                 Paragraph(_esc(u.get('range', '')), S['small']),
-                _eq_temp_cell(morning, 'morning'),
-                _eq_temp_cell(closing, 'closing'),
+                *[_eq_temp_cell(checks.get(k) or {}, k) for k in check_keys],
                 status_p,
             ])
-        et = Table(rows_data, colWidths=[USABLE_W * 0.29, USABLE_W * 0.11,
-                   USABLE_W * 0.17, USABLE_W * 0.14, USABLE_W * 0.14,
-                   USABLE_W * 0.15], repeatRows=1)
+        if len(check_types) == 1:
+            col_widths = [USABLE_W * 0.36, USABLE_W * 0.13,
+                          USABLE_W * 0.21, USABLE_W * 0.15,
+                          USABLE_W * 0.15]
+        else:
+            remaining = USABLE_W * 0.28
+            col_widths = [USABLE_W * 0.29, USABLE_W * 0.11, USABLE_W * 0.17]
+            col_widths += [remaining / len(check_types)] * len(check_types)
+            col_widths.append(USABLE_W * 0.15)
+        et = Table(rows_data, colWidths=col_widths, repeatRows=1)
         et.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), NAVY),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -1850,9 +1953,12 @@ def build_daily_pdf(date_str: str) -> bytes:
 def whatsapp_today():
     from datetime import date
     today_str = date.today().isoformat()
-    data = _collect_today(today_str)
+    period = _resolve_share_period(request.args.get('period'))
+    data = _collect_today(today_str, period)
     return render_template('whatsapp_share.html',
-        date=today_str, data=data,
+        date=today_str, data=data, period=period,
+        period_meta=SHARE_PERIODS[period], share_periods=SHARE_PERIODS,
+        cutoff_hour=SHARE_CUTOFF_HOUR,
         checklists_meta=CHECKLISTS_META,
         temperatures_meta=TEMPERATURES_META)
 
@@ -1863,14 +1969,15 @@ def whatsapp_pdf():
     """One polished A4 PDF report for the day — designed to share to WhatsApp."""
     from datetime import date
     date_str = request.args.get('date') or date.today().isoformat()
+    period = _resolve_share_period(request.args.get('period'))
     try:
-        pdf_bytes = build_daily_pdf(date_str)
+        pdf_bytes = build_daily_pdf(date_str, period)
     except Exception as e:
         return f'PDF generation failed: {type(e).__name__}: {e}', 500
     buf = BytesIO(pdf_bytes); buf.seek(0)
     return send_file(buf, mimetype='application/pdf',
                      as_attachment=False,
-                     download_name=f'MCQ_Daily_Report_{date_str}.pdf')
+                     download_name=f'MCQ_{period.title()}_Report_{date_str}.pdf')
 
 
 @whatsapp_bp.route('/png')
@@ -1878,15 +1985,16 @@ def whatsapp_pdf():
 def whatsapp_png():
     from datetime import date
     date_str = request.args.get('date') or date.today().isoformat()
+    period = _resolve_share_period(request.args.get('period'))
     try:
-        png_bytes = build_daily_png(date_str)
+        png_bytes = build_daily_png(date_str, period)
     except Exception as e:
         return f'PNG generation failed: {type(e).__name__}: {e}', 500
     buf = BytesIO(png_bytes)
     buf.seek(0)
     return send_file(buf, mimetype='image/png',
                      as_attachment=False,
-                     download_name=f'MCQ_Daily_{date_str}.png')
+                     download_name=f'MCQ_{period.title()}_{date_str}.png')
 
 
 @whatsapp_bp.route('/checklist/<int:session_id>.png')

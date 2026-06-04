@@ -238,15 +238,24 @@
       </div>
 
       {% if is_admin %}
-      <!-- SUPPLIERS & SHARING -->
+      <!-- SUPPLIERS -->
       <div class="nav-group" data-group="suppliers">
         <button type="button" class="nav-group-head" onclick="toggleNavGroup(this)">
-          <i class="fas fa-truck-fast fa-fw"></i><span>Suppliers &amp; Sharing</span><i class="fas fa-chevron-down chev"></i>
+          <i class="fas fa-truck-fast fa-fw"></i><span>Suppliers</span><i class="fas fa-chevron-down chev"></i>
         </button>
         <div class="nav-group-body">
           <a href="/packaging/" class="nav-link-item {% if 'packaging' in current_ep %}active{% endif %}" style="border-left-color:#6D4C41">
             <i class="fas fa-boxes-packing fa-fw"></i><span>Packaging Order</span>
           </a>
+        </div>
+      </div>
+
+      <!-- DAILY SHARE -->
+      <div class="nav-group" data-group="daily-share">
+        <button type="button" class="nav-group-head" onclick="toggleNavGroup(this)">
+          <i class="fab fa-whatsapp fa-fw"></i><span>Daily Share</span><i class="fas fa-chevron-down chev"></i>
+        </button>
+        <div class="nav-group-body">
           <a href="/whatsapp/" class="nav-link-item {% if 'whatsapp' in current_ep %}active{% endif %}" style="border-left-color:#25D366">
             <i class="fab fa-whatsapp fa-fw"></i><span>WhatsApp Daily Share</span>
           </a>

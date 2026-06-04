@@ -34,6 +34,16 @@
 .hero-actions {
   display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; align-items: center;
 }
+.period-toggle {
+  display: inline-flex; gap: 6px; padding: 5px;
+  background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.25);
+  border-radius: 999px; margin-top: 16px; flex-wrap: wrap;
+}
+.period-toggle a {
+  color: #fff; text-decoration: none; font-size: .82rem; font-weight: 800;
+  padding: 7px 13px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px;
+}
+.period-toggle a.active { background:#fff; color:#075E54; }
 .btn-pdf-share {
   background: #fff; color: #075E54; font-weight: 800;
   padding: 14px 26px; border-radius: 999px; border: none;
@@ -124,23 +134,36 @@
 
 <!-- HERO with PDF share -->
 <div class="hero">
-  <div class="badge-date">📅 {{ date }}</div>
-  <h2><i class="fab fa-whatsapp me-2"></i>Daily Report — ready to share</h2>
+  <div class="badge-date">📅 {{ date }} · {{ period_meta.label }} report</div>
+  <h2><i class="fab fa-whatsapp me-2"></i>{{ period_meta.label }} Report — ready to share</h2>
   <p>
-    One polished PDF combines the day's checklists (with all photos large
-    and clear), temperature records and KPI cover. Tap <strong>Share to
-    WhatsApp</strong> and your phone's share sheet will let you pick a group.
+    {% if period == 'closing' %}
+    After 4:00 PM this page defaults to the closing PDF: closing checklists
+    plus the closing equipment temperature check when available.
+    {% else %}
+    Before 4:00 PM this page defaults to the opening PDF: opening checklists,
+    Chef, Pastry and Banh Mi temperature records, plus the morning equipment check.
+    {% endif %}
+    Tap <strong>Share to WhatsApp</strong> and your phone's share sheet will let you pick a group.
   </p>
+  <div class="period-toggle" aria-label="Report period">
+    <a href="/whatsapp/?period=opening" class="{% if period=='opening' %}active{% endif %}">
+      <i class="fas fa-sun"></i> Opening
+    </a>
+    <a href="/whatsapp/?period=closing" class="{% if period=='closing' %}active{% endif %}">
+      <i class="fas fa-moon"></i> Closing
+    </a>
+  </div>
   <div class="hero-actions">
     <button id="shareBtn" class="btn-pdf-share" onclick="sharePdf()">
       <i class="fab fa-whatsapp"></i> Share PDF to WhatsApp
     </button>
-    <a href="/whatsapp/pdf?date={{ date }}"
+    <a href="/whatsapp/pdf?date={{ date }}&period={{ period }}"
        class="btn-pdf-download"
-       download="MCQ_Daily_Report_{{ date }}.pdf">
+       download="MCQ_{{ period_meta.label }}_Report_{{ date }}.pdf">
       <i class="fas fa-file-pdf"></i> Download PDF
     </a>
-    <a href="/whatsapp/pdf?date={{ date }}" target="_blank" class="btn-pdf-download">
+    <a href="/whatsapp/pdf?date={{ date }}&period={{ period }}" target="_blank" class="btn-pdf-download">
       <i class="fas fa-up-right-from-square"></i> Open in new tab
     </a>
   </div>
@@ -160,12 +183,12 @@
 </div>
 
 <!-- Today's data summary (informational — not images to share) -->
-<div class="section-heading"><i class="fas fa-clipboard-list"></i>What's in the PDF</div>
+<div class="section-heading"><i class="fas fa-clipboard-list"></i>What's in the {{ period_meta.label }} PDF</div>
 
 {% if not data.checklists and not data.temperatures and not (data.equipment and data.equipment.total) %}
 <div class="empty-section">
   <i class="fas fa-inbox fa-2x mb-2 d-block opacity-25"></i>
-  No checklists or temperature records submitted yet today.
+  No records are available for this {{ period_meta.label|lower }} report yet.
   The PDF will show an empty-state placeholder until data is entered.
 </div>
 {% endif %}
@@ -222,14 +245,14 @@
 {% endfor %}
 
 {% if data.equipment and data.equipment.total %}
-{% set eq_total_checks = data.equipment.total_checks or (data.equipment.total * 2) %}
+{% set eq_total_checks = data.equipment.total_checks or data.equipment.total %}
 {% set eq_missing_due = data.equipment.missing_due if data.equipment.missing_due is defined else data.equipment.missing %}
 <div class="summary-card">
   <div class="stripe" style="background:#00838F"></div>
   <div class="body">
     <div class="title">
       <span class="pill" style="background:#00838F">Equipment Temperature</span>
-      <span class="pill" style="background:#1A1A2E">Morning + Closing</span>
+      <span class="pill" style="background:#1A1A2E">{{ data.equipment.period_check_label or period_meta.equipment_label }}</span>
       <span class="pill" style="background:{% if data.equipment.missing %}#E65100{% else %}#43A047{% endif %}">
         {{ data.equipment.recorded }}/{{ eq_total_checks }} checks
       </span>
@@ -245,8 +268,8 @@
       {% endif %}
     </div>
     <div class="meta">
-      <strong>Required:</strong> {{ data.equipment.total }} equipment × 2 checks ·
-      <strong>Times:</strong> Morning before 10:00 AM, Closing before 6:00 PM
+      <strong>Required:</strong> {{ data.equipment.total }} equipment × {{ data.equipment.period_check_label or period_meta.label }} check ·
+      <strong>Report:</strong> {{ period_meta.label }}
     </div>
   </div>
 </div>
@@ -256,8 +279,8 @@
 
 {% block scripts %}
 <script>
-const PDF_URL = '/whatsapp/pdf?date={{ date }}';
-const PDF_FNAME = 'MCQ_Daily_Report_{{ date }}.pdf';
+const PDF_URL = '/whatsapp/pdf?date={{ date }}&period={{ period }}';
+const PDF_FNAME = 'MCQ_{{ period_meta.label }}_Report_{{ date }}.pdf';
 let preparedPdf = null;
 let preparePdfPromise = null;
 let preparePdfTimer = null;
@@ -285,7 +308,7 @@ let preparePdfTimer = null;
 })();
 
 function pdfText() {
-  return 'MCQ Mirrabooka Cafe - daily operations report ({{ date }})';
+  return 'MCQ Mirrabooka Cafe - {{ period_meta.label|lower }} operations report ({{ date }})';
 }
 
 function downloadPdf(blob) {
@@ -377,7 +400,7 @@ async function sharePdf() {
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       await navigator.share({
         files: [file],
-        title: 'MCQ Daily Report — {{ date }}',
+        title: 'MCQ {{ period_meta.label }} Report — {{ date }}',
         text:  pdfText(),
       });
       status.innerHTML = '<i class="fas fa-check-circle"></i> Pick a WhatsApp group from the share sheet.';
