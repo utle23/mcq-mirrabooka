@@ -1442,14 +1442,14 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
             sess = temp_by_type.get(ttype)
             if sess:
                 ooz = sess.get('out_of_zone') or 0
-                sub = (f'<font color="#FF9A9A">{ooz} ngoài ngưỡng</font>' if ooz
-                       else '<font color="#9AE6A0">An toàn</font>')
+                sub = (f'<font color="#FF9A9A">{ooz} out of zone</font>' if ooz
+                       else '<font color="#9AE6A0">All safe</font>')
                 food_cards.append(_stat_card(short, str(sess.get('reading_count') or 0),
                                              '#FFFFFF', sub, accent_rule=accent))
             else:
-                food_cards.append(_stat_card(short, 'Không', '#FFFFFF',
-                                             '<font color="#9AA3B2">Chưa làm</font>',
-                                             accent_rule=accent, value_size=21,
+                food_cards.append(_stat_card(short, 'Missing', '#FFFFFF',
+                                             '<font color="#9AA3B2">not recorded</font>',
+                                             accent_rule=accent, value_size=19,
                                              value_hex='#8A8FA3'))
         story.append(_stat_row(food_cards))
     else:
@@ -1466,10 +1466,10 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
             _stat_card('UNITS', str(equip_stats['total_units']), '#80DEEA',
                        '<font color="#C7CBD6">closing check</font>', accent_rule='#00ACC1'),
             _stat_card('IN RANGE', str(in_range), '#A5D6A7',
-                       '<font color="#9AE6A0">an toàn</font>', accent_rule='#43A047'),
+                       '<font color="#9AE6A0">in range</font>', accent_rule='#43A047'),
             _stat_card('ATTENTION', str(attn), '#FFCDD2',
-                       ('<font color="#FF9A9A">cần xem</font>' if attn
-                        else '<font color="#9AE6A0">ổn</font>'),
+                       ('<font color="#FF9A9A">review</font>' if attn
+                        else '<font color="#9AE6A0">all clear</font>'),
                        accent_rule='#C62828' if attn else '#43A047'),
         ]))
 
