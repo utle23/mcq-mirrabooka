@@ -292,36 +292,36 @@
 {% block scripts %}
 <script>
 const PHOTOS_REQ = {{ photos_required }};
+const PHOTO_MAX_DIM = 1280;
+const PHOTO_JPEG_QUALITY = 0.82;
 let photoCount = 0;
+let preparingPhotos = false;
+
+function showPhotoPreview(input, n, isExtra=false) {
+  if (!input.files || !input.files[0]) return;
+  const file = input.files[0];
+  const preview = document.getElementById(isExtra ? 'preview-extra' : 'preview-' + n);
+  const empty = document.getElementById(isExtra ? 'empty-extra' : 'empty-' + n);
+  const slot = document.getElementById(isExtra ? 'slot-extra' : 'slot-' + n);
+  const url = URL.createObjectURL(file);
+
+  preview.onload = () => URL.revokeObjectURL(url);
+  preview.src = url;
+  preview.style.display = 'block';
+  empty.style.display = 'none';
+  slot.classList.add('has-photo');
+  if (!isExtra) {
+    document.getElementById('check-ph-' + n).style.display = 'flex';
+  }
+}
 
 function previewPhoto(input, n) {
-  if (input.files && input.files[0]) {
-    const reader = new FileReader();
-    reader.onload = e => {
-      const preview = document.getElementById('preview-' + n);
-      preview.src = e.target.result;
-      preview.style.display = 'block';
-      document.getElementById('empty-' + n).style.display = 'none';
-      document.getElementById('check-ph-' + n).style.display = 'flex';
-      document.getElementById('slot-' + n).classList.add('has-photo');
-    };
-    reader.readAsDataURL(input.files[0]);
-  }
+  showPhotoPreview(input, n, false);
   updatePhotoCount();
 }
 
 function previewExtra(input) {
-  if (input.files && input.files[0]) {
-    const reader = new FileReader();
-    reader.onload = e => {
-      const preview = document.getElementById('preview-extra');
-      preview.src = e.target.result;
-      preview.style.display = 'block';
-      document.getElementById('empty-extra').style.display = 'none';
-      document.getElementById('slot-extra').classList.add('has-photo');
-    };
-    reader.readAsDataURL(input.files[0]);
-  }
+  showPhotoPreview(input, 'extra', true);
   updatePhotoCount();
 }
 
@@ -356,6 +356,124 @@ document.getElementById('submit-btn').disabled = false;
 document.getElementById('photo-status-msg').innerHTML =
   '<i class="fas fa-info-circle me-1 text-info"></i><span class="text-info">Existing photos kept. Upload new ones to replace.</span>';
 {% endif %}
+
+function loadPhoto(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Could not load image'));
+    };
+    img.src = url;
+  });
+}
+
+async function compressPhotoFile(file) {
+  if (!file || !file.type || !file.type.startsWith('image/')) return file;
+  const img = await loadPhoto(file);
+  const largest = Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height);
+  const scale = largest > PHOTO_MAX_DIM ? PHOTO_MAX_DIM / largest : 1;
+
+  if (scale === 1 && file.type === 'image/jpeg' && file.size < 450 * 1024) {
+    return file;
+  }
+
+  const width = Math.max(1, Math.round((img.naturalWidth || img.width) * scale));
+  const height = Math.max(1, Math.round((img.naturalHeight || img.height) * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d', { alpha: false });
+  ctx.drawImage(img, 0, 0, width, height);
+
+  const blob = await new Promise(resolve => {
+    canvas.toBlob(resolve, 'image/jpeg', PHOTO_JPEG_QUALITY);
+  });
+  if (!blob || blob.size >= file.size) return file;
+
+  const baseName = (file.name || 'checklist-photo').replace(/\.[^.]+$/, '');
+  return new File([blob], baseName + '.jpg', {
+    type: 'image/jpeg',
+    lastModified: Date.now()
+  });
+}
+
+function replaceInputFile(input, file) {
+  if (!file || !window.DataTransfer) return false;
+  try {
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    input.dataset.compressed = '1';
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function preparePhotosForSubmit() {
+  if (!window.DataTransfer) return;
+  const inputs = Array.from(document.querySelectorAll('.photo-file-input'))
+    .filter(input => input.files && input.files[0] && input.dataset.compressed !== '1');
+  if (!inputs.length) return;
+
+  const submitBtn = document.getElementById('submit-btn');
+  const existingBtn = document.getElementById('submit-btn-existing');
+  const status = document.getElementById('photo-status-msg');
+  const originalSubmitHtml = submitBtn ? submitBtn.innerHTML : '';
+  const originalExistingHtml = existingBtn ? existingBtn.innerHTML : '';
+
+  preparingPhotos = true;
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Preparing photos...';
+  }
+  if (existingBtn) {
+    existingBtn.disabled = true;
+    existingBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Preparing photos...';
+  }
+  if (status) {
+    status.className = 'small mt-1 text-info fw-semibold';
+    status.innerHTML = '<i class="fas fa-compress-arrows-alt me-1"></i>Compressing photos for faster upload...';
+  }
+
+  try {
+    for (const input of inputs) {
+      const original = input.files[0];
+      try {
+        const compressed = await compressPhotoFile(original);
+        replaceInputFile(input, compressed);
+      } catch (e) {
+        input.dataset.compressed = 'fallback';
+      }
+    }
+    if (status) {
+      status.className = 'small mt-1 text-success fw-semibold';
+      status.innerHTML = '<i class="fas fa-check-circle me-1"></i>Photos ready. Submitting...';
+    }
+  } finally {
+    if (submitBtn) submitBtn.innerHTML = originalSubmitHtml;
+    if (existingBtn) existingBtn.innerHTML = originalExistingHtml;
+    preparingPhotos = false;
+  }
+}
+
+document.getElementById('chk-form').addEventListener('submit', async function(e) {
+  if (this.dataset.photosPrepared === '1' || preparingPhotos) return;
+  const inputs = Array.from(document.querySelectorAll('.photo-file-input'))
+    .filter(input => input.files && input.files[0] && input.dataset.compressed !== '1');
+  if (!inputs.length) return;
+
+  e.preventDefault();
+  await preparePhotosForSubmit();
+  this.dataset.photosPrepared = '1';
+  HTMLFormElement.prototype.submit.call(this);
+});
 
 function updateRow(i) {
   const cb  = document.getElementById('check-' + i);

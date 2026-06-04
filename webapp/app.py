@@ -787,6 +787,20 @@ def save_uploaded_photo(file_storage, dest_path, max_dim=1280, quality=82):
 
     try:
         img = Image.open(file_storage.stream)
+        if img.format == 'JPEG' and max(img.size) <= max_dim:
+            base, _ = os.path.splitext(dest_path)
+            final_path = base + '.jpg'
+            try:
+                file_storage.stream.seek(0)
+            except Exception:
+                pass
+            file_storage.save(final_path)
+            return os.path.basename(final_path)
+        if img.format == 'JPEG':
+            try:
+                img.draft('RGB', (max_dim, max_dim))
+            except Exception:
+                pass
         img = ImageOps.exif_transpose(img)   # respect phone rotation metadata
         if img.mode in ('RGBA', 'LA', 'P'):
             img = img.convert('RGB')
@@ -794,10 +808,12 @@ def save_uploaded_photo(file_storage, dest_path, max_dim=1280, quality=82):
         if max(w, h) > max_dim:
             ratio = max_dim / float(max(w, h))
             img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
-        # Always save resized photos as JPEG — smaller and universally supported.
+        # Always save resized photos as JPEG. Avoid optimize/progressive here:
+        # those save a little space but make checklist submit noticeably slower
+        # when staff upload several phone photos at once.
         base, _ = os.path.splitext(dest_path)
         final_path = base + '.jpg'
-        img.save(final_path, 'JPEG', quality=quality, optimize=True, progressive=True)
+        img.save(final_path, 'JPEG', quality=quality)
         return os.path.basename(final_path)
     except Exception:
         # If decoding failed (corrupt / unsupported), fall back to original bytes.
@@ -812,10 +828,16 @@ def save_uploaded_photo(file_storage, dest_path, max_dim=1280, quality=82):
 def log_action(action, record_type, record_id, user_name, details=''):
     try:
         with get_db() as conn:
-            conn.execute(
-                'INSERT INTO audit_log (action,record_type,record_id,user_name,details) VALUES (?,?,?,?,?)',
-                (action, record_type, record_id, user_name, details)
-            )
+            log_action_conn(conn, action, record_type, record_id, user_name, details)
+    except Exception:
+        pass
+
+def log_action_conn(conn, action, record_type, record_id, user_name, details=''):
+    try:
+        conn.execute(
+            'INSERT INTO audit_log (action,record_type,record_id,user_name,details) VALUES (?,?,?,?,?)',
+            (action, record_type, record_id, user_name, details)
+        )
     except Exception:
         pass
 
@@ -1604,8 +1626,8 @@ def checklist_save(chk_type):
                     (sid, fname, secure_filename(f.filename), i, fsize, submitted_by))
         # ─────────────────────────────────────────────────────────────────────
 
-        log_action('SAVE_CHECKLIST', 'checklist', sid, submitted_by,
-                   f'{CHECKLISTS[chk_type]["title"]} / {section} / {chk_date}')
+        log_action_conn(conn, 'SAVE_CHECKLIST', 'checklist', sid, submitted_by,
+                        f'{CHECKLISTS[chk_type]["title"]} / {section} / {chk_date}')
 
     done_count = sum(1 for t in task_rows if t[2])
     completion_pct = round(done_count / len(task_rows) * 100) if task_rows else 0
@@ -1660,8 +1682,8 @@ def checklist_verify(session_id):
         conn.execute(
             "UPDATE checklist_sessions SET verified=1,verified_by=?,verified_at=datetime('now','localtime'),overall_result=?,issues_found=?,action_responsible=?,manager_notes=? WHERE id=?",
             (verified_by, overall_result, issues_found, action_resp, manager_notes, session_id))
-        log_action('VERIFY', 'checklist', session_id, verified_by,
-                   f'Result: {overall_result}')
+        log_action_conn(conn, 'VERIFY', 'checklist', session_id, verified_by,
+                        f'Result: {overall_result}')
         sess = conn.execute('SELECT * FROM checklist_sessions WHERE id=?', (session_id,)).fetchone()
 
     if sess:
@@ -1825,8 +1847,8 @@ def temperature_save(temp_type):
                  r['c1_time'],r['c1_temp'],r['c2_time'],r['c2_temp'],
                  r['c3_time'],r['c3_temp'],r['c4_time'],r['c4_temp'],
                  r['c5_time'],r['c5_temp'],r['discarded'],r['notes']))
-        log_action('SAVE_TEMP', 'temperature', sid, recorded_by,
-                   f'{TEMPERATURES[temp_type]["title"]} / {temp_date}')
+        log_action_conn(conn, 'SAVE_TEMP', 'temperature', sid, recorded_by,
+                        f'{TEMPERATURES[temp_type]["title"]} / {temp_date}')
 
     # Out-of-zone check uses food_kind:
     #   cold food → unsafe if temp > 5°C   (must stay at or below 5)
