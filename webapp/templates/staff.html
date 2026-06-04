@@ -71,6 +71,12 @@
                     {% if s.active %}Deactivate{% else %}Activate{% endif %}
                   </button>
                 </form>
+                <form method="POST" action="/staff/delete/{{ s.id }}" class="d-inline"
+                      onsubmit="return confirm('Delete {{ s.name }} permanently? They will disappear from every staff picker. Past records keep their name.');">
+                  <button type="submit" class="btn btn-sm btn-danger ms-1" title="Delete permanently">
+                    <i class="fas fa-trash"></i>
+                  </button>
+                </form>
               </td>
             </tr>
             {% endfor %}

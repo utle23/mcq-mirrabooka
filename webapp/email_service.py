@@ -553,52 +553,59 @@ def _send_html_sync(event_type: str, subject: str, html_body: str, text_body: st
 
 def send_notification(event_type: str, subject: str, lines: list[str],
                        link_path: str = '', actor: str = '') -> None:
-    """Fire-and-forget notification. Never raises."""
-    try:
-        if event_type not in VALID_EVENTS:
-            return
-        settings = get_settings()
-        if not settings.get('enabled') or not _is_configured(settings):
-            return
-        recipients = _recipients_for_event(event_type)
-        if not recipients:
-            return
-        t = threading.Thread(
-            target=_send_sync,
-            args=(event_type, subject, lines, link_path, actor, recipients, settings),
-            daemon=True,
-        )
-        t.start()
-    except Exception as e:
+    """Fire-and-forget notification. Never raises. Every DB read (settings,
+    recipients) happens inside the worker thread so the calling request — e.g.
+    a checklist submit — returns immediately instead of waiting on the DB."""
+    if event_type not in VALID_EVENTS:
+        return
+
+    def _worker():
         try:
-            _log(event_type, subject, [], 'queue_failed', f'{type(e).__name__}: {e}')
-        except Exception:
-            pass
+            settings = get_settings()
+            if not settings.get('enabled') or not _is_configured(settings):
+                return
+            recipients = _recipients_for_event(event_type)
+            if not recipients:
+                return
+            _send_sync(event_type, subject, lines, link_path, actor, recipients, settings)
+        except Exception as e:
+            try:
+                _log(event_type, subject, [], 'queue_failed', f'{type(e).__name__}: {e}')
+            except Exception:
+                pass
+
+    try:
+        threading.Thread(target=_worker, daemon=True).start()
+    except Exception:
+        pass
 
 
 def send_html_notification(event_type: str, subject: str, html_body: str,
                            text_body: str = '') -> None:
-    """Fire-and-forget notification using already-rendered HTML. Never raises."""
-    try:
-        if event_type not in VALID_EVENTS:
-            return
-        settings = get_settings()
-        if not settings.get('enabled') or not _is_configured(settings):
-            return
-        recipients = _recipients_for_event(event_type)
-        if not recipients:
-            return
-        t = threading.Thread(
-            target=_send_html_sync,
-            args=(event_type, subject, html_body, text_body, recipients, settings),
-            daemon=True,
-        )
-        t.start()
-    except Exception as e:
+    """Fire-and-forget notification using already-rendered HTML. Never raises.
+    DB reads run inside the worker thread so the caller returns immediately."""
+    if event_type not in VALID_EVENTS:
+        return
+
+    def _worker():
         try:
-            _log(event_type, subject, [], 'queue_failed', f'{type(e).__name__}: {e}')
-        except Exception:
-            pass
+            settings = get_settings()
+            if not settings.get('enabled') or not _is_configured(settings):
+                return
+            recipients = _recipients_for_event(event_type)
+            if not recipients:
+                return
+            _send_html_sync(event_type, subject, html_body, text_body, recipients, settings)
+        except Exception as e:
+            try:
+                _log(event_type, subject, [], 'queue_failed', f'{type(e).__name__}: {e}')
+            except Exception:
+                pass
+
+    try:
+        threading.Thread(target=_worker, daemon=True).start()
+    except Exception:
+        pass
 
 
 # ── Weekly prep email rendering ───────────────────────────────────────────────

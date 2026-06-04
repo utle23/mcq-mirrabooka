@@ -61,28 +61,6 @@
 }
 .btn-pdf-download:hover { background: rgba(255,255,255,.28); color: #fff; }
 
-/* ── Preview frame ─────────────────────────────────────────────────── */
-.pdf-preview {
-  background: #2C3E50; border-radius: 14px; padding: 14px;
-  margin-bottom: 22px;
-  box-shadow: 0 4px 24px rgba(0,0,0,.15);
-}
-.pdf-preview .pdf-frame {
-  width: 100%; height: 80vh; max-height: 900px;
-  border: none; border-radius: 8px; background: #fff;
-  display: block;
-}
-.pdf-preview .meta {
-  display: flex; justify-content: space-between; align-items: center;
-  color: rgba(255,255,255,.85); font-size: 0.82rem;
-  padding: 0 6px 10px;
-}
-.pdf-preview .meta i { margin-right: 4px; }
-.preview-loading {
-  color: rgba(255,255,255,.55); text-align: center; padding: 80px 20px;
-  font-size: 0.95rem;
-}
-
 /* ── Today's data summary cards ────────────────────────────────────── */
 .section-heading {
   font-size: 0.78rem; font-weight: 700; letter-spacing: .08em;
@@ -168,18 +146,6 @@
     </a>
   </div>
   <div class="share-status" id="shareStatus"></div>
-</div>
-
-<!-- PDF preview (live, embedded) -->
-<div class="pdf-preview">
-  <div class="meta">
-    <span><i class="fas fa-eye"></i>Live preview · scroll inside to flip pages</span>
-    <span><i class="fas fa-file-pdf"></i>A4 portrait</span>
-  </div>
-  <div class="preview-loading" id="previewLoading">
-    <i class="fas fa-spinner fa-spin me-2"></i>Rendering today's PDF…
-  </div>
-  <iframe id="pdfFrame" class="pdf-frame" style="display:none"></iframe>
 </div>
 
 <!-- Today's data summary (informational — not images to share) -->
@@ -283,29 +249,6 @@ const PDF_URL = '/whatsapp/pdf?date={{ date }}&period={{ period }}';
 const PDF_FNAME = 'MCQ_{{ period_meta.label }}_Report_{{ date }}.pdf';
 let preparedPdf = null;
 let preparePdfPromise = null;
-let preparePdfTimer = null;
-
-// Load PDF preview inside iframe
-(function loadPreview() {
-  const frame = document.getElementById('pdfFrame');
-  const loading = document.getElementById('previewLoading');
-  // Cache-bust so the preview reflects fresh data after any save elsewhere
-  const url = PDF_URL + '&_t=' + Date.now();
-  // Use #toolbar=0 to keep the embedded viewer chrome minimal where supported
-  frame.src = url + '#toolbar=1&view=FitH';
-  frame.addEventListener('load', () => {
-    loading.style.display = 'none';
-    frame.style.display = 'block';
-  });
-  // Fallback timeout — show frame even if onload doesn't fire (some browsers
-  // don't fire onload for cross-origin / PDF embeds)
-  setTimeout(() => {
-    if (loading.style.display !== 'none') {
-      loading.style.display = 'none';
-      frame.style.display = 'block';
-    }
-  }, 4000);
-})();
 
 function pdfText() {
   return 'MCQ Mirrabooka Cafe - {{ period_meta.label|lower }} operations report ({{ date }})';
@@ -353,7 +296,7 @@ async function preparePdf({ silent = false } = {}) {
     status.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing PDF...';
   }
 
-  preparePdfPromise = fetch(PDF_URL + '&_t=' + Date.now())
+  preparePdfPromise = fetch(PDF_URL)
     .then(async resp => {
       if (!resp.ok) throw new Error('PDF generation failed (HTTP ' + resp.status + ')');
       const blob = await resp.blob();
@@ -373,13 +316,6 @@ async function preparePdf({ silent = false } = {}) {
     });
 
   return preparePdfPromise;
-}
-
-function queuePreparePdf() {
-  clearTimeout(preparePdfTimer);
-  preparePdfTimer = setTimeout(() => {
-    preparePdf({ silent: true }).catch(() => {});
-  }, 700);
 }
 
 async function sharePdf() {
@@ -419,7 +355,5 @@ async function sharePdf() {
     btn.disabled = false;
   }
 }
-
-queuePreparePdf();
 </script>
 {% endblock %}

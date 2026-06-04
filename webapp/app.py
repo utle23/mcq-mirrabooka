@@ -313,6 +313,21 @@ STAFF = [
 BRANCHES = ['Mirrabooka', 'Subiaco', 'Morley']
 MANAGERS = ['MA, THANH PHUNG', 'Khoi']
 
+
+def get_active_staff():
+    """Single source of truth for staff dropdowns: the live staff_members table
+    (active members only). Adding a member on the Staff page makes them show up
+    in every checklist / temperature / report picker; deleting or deactivating
+    them removes the name everywhere. Falls back to the seed STAFF list only if
+    the table is unavailable or empty (e.g. very first boot before seeding)."""
+    try:
+        with get_db() as conn:
+            names = [r['name'] for r in conn.execute(
+                'SELECT name FROM staff_members WHERE active=1 ORDER BY name').fetchall()]
+        return names or list(STAFF)
+    except Exception:
+        return list(STAFF)
+
 ISSUE_CATEGORIES = {
     'low_stock':          {'label': 'Low Stock',                    'icon': 'fa-box-open',             'color': '#E65100'},
     'missing_ingredients':{'label': 'Missing Ingredients',          'icon': 'fa-bowl-food',            'color': '#8D6E63'},
@@ -1456,7 +1471,7 @@ def checklist_form(chk_type):
         chk_type=chk_type, chk_data=chk_data, section=section,
         chk_date=chk_date, day_name=day_name, tasks=tasks,
         existing=dict(existing) if existing else None,
-        existing_tasks=existing_tasks, staff=STAFF, managers=MANAGERS,
+        existing_tasks=existing_tasks, staff=get_active_staff(), managers=MANAGERS,
     )
 
 
@@ -1556,20 +1571,19 @@ def checklist_save(chk_type):
     deadline_dt = now.replace(hour=deadline_h, minute=deadline_m, second=0, microsecond=0)
     is_late = 1 if now > deadline_dt else 0
 
-    with get_db() as _c:
-        db_tasks = _c.execute(
+    with get_db() as conn:
+        db_tasks = conn.execute(
             'SELECT task_name FROM checklist_task_templates WHERE chk_type=? AND section=? ORDER BY task_order',
             (chk_type, section)).fetchall()
-    tasks = [r['task_name'] for r in db_tasks] if db_tasks else CHECKLISTS[chk_type][section]
-    task_rows = []
-    for i, task_name in enumerate(tasks):
-        task_rows.append((
-            i, task_name,
-            1 if request.form.get(f'done_{i}') else 0,
-            request.form.get(f'note_{i}', ''),
-        ))
+        tasks = [r['task_name'] for r in db_tasks] if db_tasks else CHECKLISTS[chk_type][section]
+        task_rows = []
+        for i, task_name in enumerate(tasks):
+            task_rows.append((
+                i, task_name,
+                1 if request.form.get(f'done_{i}') else 0,
+                request.form.get(f'note_{i}', ''),
+            ))
 
-    with get_db() as conn:
         # UPSERT — avoids UNIQUE constraint race condition
         conn.execute('''
             INSERT INTO checklist_sessions
@@ -1592,10 +1606,9 @@ def checklist_save(chk_type):
         sid = row['id']
 
         conn.execute('DELETE FROM checklist_tasks WHERE session_id=?', (sid,))
-        for i, task_name, done, note in task_rows:
-            conn.execute(
-                'INSERT INTO checklist_tasks (session_id,task_order,task_name,done,note) VALUES (?,?,?,?,?)',
-                (sid, i, task_name, done, note))
+        conn.executemany(
+            'INSERT INTO checklist_tasks (session_id,task_order,task_name,done,note) VALUES (?,?,?,?,?)',
+            [(sid, i, task_name, done, note) for i, task_name, done, note in task_rows])
 
         # ── Handle photo uploads ──────────────────────────────────────────────
         new_photos = []
@@ -1667,7 +1680,7 @@ def checklist_view(session_id):
             (session_id,)).fetchall()]
     return render_template('checklist_view.html',
         sess=dict(sess), tasks=tasks, photos=photos,
-        chk_data=CHECKLISTS.get(sess['type'], {}), staff=STAFF,
+        chk_data=CHECKLISTS.get(sess['type'], {}), staff=get_active_staff(),
     )
 
 @app.route('/checklist/verify/<int:session_id>', methods=['POST'])
@@ -1731,7 +1744,7 @@ def temperature_form(temp_type):
     return render_template('temperature.html',
         temp_type=temp_type, temp_data=temp_data, temp_date=temp_date,
         existing=dict(existing) if existing else None,
-        existing_readings=existing_readings, staff=STAFF,
+        existing_readings=existing_readings, staff=get_active_staff(),
     )
 
 @app.route('/admin/temperature-food/update', methods=['POST'])
@@ -1938,7 +1951,7 @@ def history():
     return render_template('history.html',
         chk_records=chk_records, temp_records=temp_records,
         date_from=date_from, date_to=date_to,
-        rec_type=rec_type, staff_filter=staff_filter, staff=STAFF,
+        rec_type=rec_type, staff_filter=staff_filter, staff=get_active_staff(),
     )
 
 # ─── Manager Panel ─────────────────────────────────────────────────────────────
@@ -1966,7 +1979,7 @@ def manager():
             'SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 20').fetchall()]
     return render_template('manager.html',
         pending=pending, issues=issues,
-        verified_today=verified_today, recent_log=recent_log, staff=STAFF,
+        verified_today=verified_today, recent_log=recent_log, staff=get_active_staff(),
     )
 
 # ─── Analytics ─────────────────────────────────────────────────────────────────
@@ -3080,6 +3093,18 @@ def staff_toggle(staff_id):
             conn.execute('UPDATE staff_members SET active=? WHERE id=?', (0 if current['active'] else 1, staff_id))
     return redirect(url_for('staff_page'))
 
+@app.route('/staff/delete/<int:staff_id>', methods=['POST'])
+@admin_required
+def staff_delete(staff_id):
+    """Permanently remove a staff member. Past records keep the name as plain
+    text, so history is preserved, but the name disappears from every live staff
+    picker (all of which read staff_members)."""
+    with get_db() as conn:
+        row = conn.execute('SELECT name FROM staff_members WHERE id=?', (staff_id,)).fetchone()
+        conn.execute('DELETE FROM staff_members WHERE id=?', (staff_id,))
+    flash(f"Removed {row['name'] if row else 'staff member'} from the team.", 'success')
+    return redirect(url_for('staff_page'))
+
 @app.route('/staff/<int:staff_id>/profile')
 @admin_required
 def staff_profile(staff_id):
@@ -3479,7 +3504,7 @@ def violation_rules():
 
     return render_template('violation_rules.html',
         rules=rules, violations=violations, counts=counts,
-        severity_counts=severity_counts, staff=STAFF, managers=MANAGERS,
+        severity_counts=severity_counts, staff=get_active_staff(), managers=MANAGERS,
         status_filter=status_filter, staff_filter=staff_filter,
         severity_filter=severity_filter, date_from=date_from, date_to=date_to,
         violation_stats=violation_stats,
@@ -3641,7 +3666,7 @@ def report_issue():
             )
             return redirect(url_for('report_issue', submitted=1))
     submitted = request.args.get('submitted')
-    return render_template('report_issue.html', staff=STAFF, submitted=submitted)
+    return render_template('report_issue.html', staff=get_active_staff(), submitted=submitted)
 
 @app.route('/admin/reports')
 @admin_required

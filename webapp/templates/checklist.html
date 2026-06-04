@@ -443,7 +443,9 @@ async function preparePhotosForSubmit() {
   }
 
   try {
-    for (const input of inputs) {
+    // Compress every photo in parallel — image decode + JPEG encode overlap
+    // instead of running one-by-one, so 3-4 phone photos prepare much faster.
+    await Promise.all(inputs.map(async (input) => {
       const original = input.files[0];
       try {
         const compressed = await compressPhotoFile(original);
@@ -451,7 +453,7 @@ async function preparePhotosForSubmit() {
       } catch (e) {
         input.dataset.compressed = 'fallback';
       }
-    }
+    }));
     if (status) {
       status.className = 'small mt-1 text-success fw-semibold';
       status.innerHTML = '<i class="fas fa-check-circle me-1"></i>Photos ready. Submitting...';

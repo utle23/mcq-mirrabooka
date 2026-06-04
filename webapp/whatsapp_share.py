@@ -1161,7 +1161,7 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
     from reportlab.lib.units import mm
     from reportlab.platypus import (
         Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
-        Image as RLImage, PageBreak, KeepTogether,
+        Image as RLImage, PageBreak, KeepTogether, HRFlowable,
     )
 
     # Reuse the live data collector + the per-session helpers already in
@@ -1339,7 +1339,7 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
     story = []
 
     # ── Cover content (positioned via Spacers because background is canvas) ──
-    story.append(Spacer(1, 110 * mm))     # leave room for logo painted by _draw_cover
+    story.append(Spacer(1, 100 * mm))     # leave room for logo painted by _draw_cover
     story.append(Paragraph('MCQ MIRRABOOKA CAFE', S['cover_brand']))
     story.append(Paragraph(f'VIETNAMESE STREET FOOD · {period_meta["cover"]}', S['cover_sub']))
     try:
@@ -1347,9 +1347,16 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
     except Exception:
         date_pretty = date_str
     story.append(Paragraph(date_pretty, S['cover_date']))
-    story.append(Spacer(1, 22 * mm))
+    story.append(Spacer(1, 12 * mm))
 
-    # KPI strip on cover
+    # ── Elegant eyebrow + gold hairline ────────────────────────────────────
+    story.append(HRFlowable(width=58 * mm, thickness=1, color=GOLD,
+                            spaceBefore=0, spaceAfter=6, hAlign='CENTER'))
+    story.append(Paragraph(' '.join('OPERATIONS · SUMMARY'),
+        ParagraphStyle('eyebrow', fontName=bold_font, fontSize=11, leading=13,
+                       textColor=GOLD, alignment=TA_CENTER, spaceAfter=6)))
+
+    # ── Headline stats ─────────────────────────────────────────────────────
     chk_done = sum(1 for c in data['checklists']
                    if c['done_tasks'] == c['total_tasks'] and c['total_tasks'] > 0)
     chk_late = sum(1 for c in data['checklists'] if c.get('is_late'))
@@ -1359,42 +1366,116 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
     total_alerts = (temp_alerts + chk_late + equip_stats['attention']
                     + len(data.get('violations', [])))
 
-    def _kpi(label, value, accent):
-        return Table([
-            [Paragraph(f'<font color="{accent.hexval()}" size="11"><b>{label}</b></font>',
-                       ParagraphStyle('k1', fontName=bold_font, alignment=TA_CENTER))],
-            [Paragraph(f'<font color="white" size="36"><b>{value}</b></font>',
-                       ParagraphStyle('k2', fontName=bold_font, alignment=TA_CENTER))],
-        ], colWidths=[40 * mm], rowHeights=[8 * mm, 18 * mm],
-            style=TableStyle([
-                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#252544')),
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#32324F')),
-                ('LINEABOVE', (0, 0), (-1, 0), 1.2, GOLD),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ('TOPPADDING', (0, 0), (-1, -1), 4),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-            ]))
+    # One reusable stat tile: bold gold/colour hairline, big value, status sub
+    def _stat_card(label, value, label_hex, sub_markup=None, accent_rule='#D4AF37',
+                   value_size=32, value_hex='#FFFFFF'):
+        rows = [
+            [Paragraph(f'<font color="{label_hex}" size="10"><b>{label}</b></font>',
+                       ParagraphStyle('sc_l', fontName=bold_font, alignment=TA_CENTER))],
+            [Paragraph(f'<font color="{value_hex}" size="{value_size}"><b>{value}</b></font>',
+                       ParagraphStyle('sc_v', fontName=bold_font, alignment=TA_CENTER,
+                                      leading=value_size + 2))],
+        ]
+        rh = [6.5 * mm, 13.5 * mm]
+        if sub_markup is not None:
+            rows.append([Paragraph(sub_markup, ParagraphStyle('sc_s', fontName=font_name,
+                         fontSize=8, leading=10, alignment=TA_CENTER))])
+            rh.append(5 * mm)
+        t = Table(rows, colWidths=[54 * mm], rowHeights=rh)
+        t.hAlign = 'CENTER'
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#1E1E38')),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2A2A49')),
+            ('LINEABOVE', (0, 0), (-1, 0), 1.8, colors.HexColor(accent_rule)),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING', (0, 0), (-1, -1), 2),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+            ('LEFTPADDING', (0, 0), (-1, -1), 3),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 3),
+        ]))
+        return t
 
-    if data.get('period') == 'closing':
-        kpi_items = [
-            _kpi('CHECKLISTS', str(len(data['checklists'])), colors.HexColor('#A5D6A7')),
-            _kpi('EQUIPMENT', equip_recorded,                colors.HexColor('#80DEEA')),
-            _kpi('ALERTS',    str(total_alerts),             colors.HexColor('#FFCDD2')),
-            _kpi('REPORT',    'CLOSE',                       colors.HexColor('#D7CCC8')),
-        ]
+    def _stat_row(cards):
+        n = max(len(cards), 1)
+        row = Table([cards], colWidths=[USABLE_W / n] * n)
+        row.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('TOPPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        return row
+
+    chk_sub = (f'<font color="#FF9A9A">{chk_late} late</font>' if chk_late
+               else f'<font color="#9AE6A0">{chk_done}/{len(data["checklists"])} done</font>')
+    if equip_stats['alerts']:
+        eq_sub = f'<font color="#FF9A9A">{equip_stats["alerts"]} out of range</font>'
+    elif equip_stats['missing_due']:
+        eq_sub = f'<font color="#FFD39B">{equip_stats["missing_due"]} due missing</font>'
     else:
-        kpi_items = [
-            _kpi('CHECKLISTS', str(len(data['checklists'])), colors.HexColor('#A5D6A7')),
-            _kpi('FOOD TEMP', str(len(data['temperatures'])), colors.HexColor('#FFAB91')),
-            _kpi('EQUIPMENT', equip_recorded,                colors.HexColor('#80DEEA')),
-            _kpi('ALERTS',    str(total_alerts),             colors.HexColor('#FFCDD2')),
-        ]
-    kpis = Table([kpi_items], colWidths=[40 * mm] * 4)
-    kpis.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE')]))
-    story.append(kpis)
+        eq_sub = '<font color="#9AE6A0">all in range</font>'
+    al_sub = ('<font color="#9AE6A0">all clear</font>' if total_alerts == 0
+              else '<font color="#FF9A9A">needs review</font>')
+
+    story.append(_stat_row([
+        _stat_card('CHECKLISTS', str(len(data['checklists'])), '#A5D6A7', chk_sub,
+                   accent_rule='#43A047'),
+        _stat_card('EQUIPMENT', equip_recorded, '#80DEEA', eq_sub,
+                   accent_rule='#00ACC1', value_size=27),
+        _stat_card('ALERTS', str(total_alerts), '#FFCDD2', al_sub,
+                   accent_rule='#C62828' if total_alerts else '#43A047'),
+    ]))
+
+    # ── Food temperature by station — opening reports include food temps ────
+    if period_meta.get('includes_food_temps'):
+        story.append(Spacer(1, 5 * mm))
+        story.append(Paragraph(' '.join('FOOD · TEMPERATURE'),
+            ParagraphStyle('food_eyebrow', fontName=bold_font, fontSize=9.5, leading=12,
+                           textColor=colors.HexColor('#FFE082'), alignment=TA_CENTER,
+                           spaceAfter=5)))
+        temp_by_type = {t['type']: t for t in data['temperatures']}
+        food_cards = []
+        for ttype in ('chef', 'banh_mi', 'pastry'):
+            meta = TEMPERATURES_META.get(ttype, {})
+            short = (meta.get('short') or ttype.replace('_', ' ').title()).upper()
+            accent = meta.get('color') or '#888888'
+            sess = temp_by_type.get(ttype)
+            if sess:
+                ooz = sess.get('out_of_zone') or 0
+                sub = (f'<font color="#FF9A9A">{ooz} ngoài ngưỡng</font>' if ooz
+                       else '<font color="#9AE6A0">An toàn</font>')
+                food_cards.append(_stat_card(short, str(sess.get('reading_count') or 0),
+                                             '#FFFFFF', sub, accent_rule=accent))
+            else:
+                food_cards.append(_stat_card(short, 'Không', '#FFFFFF',
+                                             '<font color="#9AA3B2">Chưa làm</font>',
+                                             accent_rule=accent, value_size=21,
+                                             value_hex='#8A8FA3'))
+        story.append(_stat_row(food_cards))
+    else:
+        # Closing reports carry no food temps — surface the equipment closing
+        # check breakdown instead so the cover stays balanced and informative.
+        story.append(Spacer(1, 5 * mm))
+        story.append(Paragraph(' '.join('EQUIPMENT · CHECK'),
+            ParagraphStyle('eq_eyebrow', fontName=bold_font, fontSize=9.5, leading=12,
+                           textColor=colors.HexColor('#FFE082'), alignment=TA_CENTER,
+                           spaceAfter=5)))
+        in_range = max(equip_stats['recorded'] - equip_stats['alerts'], 0)
+        attn = equip_stats['attention']
+        story.append(_stat_row([
+            _stat_card('UNITS', str(equip_stats['total_units']), '#80DEEA',
+                       '<font color="#C7CBD6">closing check</font>', accent_rule='#00ACC1'),
+            _stat_card('IN RANGE', str(in_range), '#A5D6A7',
+                       '<font color="#9AE6A0">an toàn</font>', accent_rule='#43A047'),
+            _stat_card('ATTENTION', str(attn), '#FFCDD2',
+                       ('<font color="#FF9A9A">cần xem</font>' if attn
+                        else '<font color="#9AE6A0">ổn</font>'),
+                       accent_rule='#C62828' if attn else '#43A047'),
+        ]))
+
     story.append(Spacer(1, 6 * mm))
 
-    # Status banner: green = all clear, red = attention needed
+    # ── Status banner: green = all clear, red = attention needed ────────────
     if total_alerts == 0:
         _bn_txt, _bn_col = 'ALL CLEAR · NO ALERTS TODAY', OK
     else:
@@ -1402,11 +1483,12 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
     banner = Table([[Paragraph(
         f'<font color="white" size="13"><b>{_bn_txt}</b></font>',
         ParagraphStyle('bn', fontName=bold_font, alignment=TA_CENTER))]],
-        colWidths=[160 * mm], rowHeights=[11 * mm])
+        colWidths=[USABLE_W], rowHeights=[11 * mm])
     banner.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, -1), _bn_col),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('LINEABOVE', (0, 0), (-1, 0), 1.2, GOLD),
     ]))
     story.append(banner)
 
@@ -1946,6 +2028,78 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
     return buf.getvalue()
 
 
+# ── PDF cache ────────────────────────────────────────────────────────────────
+# Rendering the A4 PDF (ReportLab + embedded photos) is the expensive part of the
+# daily share. Keep the last few rendered PDFs in memory keyed by (date, period)
+# and reuse them until the day's data actually changes — detected by a cheap
+# signature query — so opening the page, downloading and sharing don't each
+# re-render the report from scratch.
+_PDF_CACHE: dict = {}
+_PDF_CACHE_MAX = 8
+
+
+def _pdf_signature(date_str: str, period: str) -> str:
+    """Cheap fingerprint of every record the PDF renders for (date, period).
+    Changes on any save / edit / verify / new photo so a stale PDF is never
+    served from cache."""
+    period = _resolve_share_period(period)
+    meta = SHARE_PERIODS[period]
+    parts: list = []
+    try:
+        with _conn() as conn:
+            parts.append(tuple(conn.execute(
+                "SELECT COUNT(*), COALESCE(MAX(submitted_at),''), "
+                "COALESCE(MAX(verified_at),''), COALESCE(SUM(verified),0) "
+                "FROM checklist_sessions WHERE date=? AND section=?",
+                (date_str, period)).fetchone()))
+            parts.append(tuple(conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(t.done),0), COALESCE(MAX(t.id),0) "
+                "FROM checklist_tasks t JOIN checklist_sessions s ON s.id=t.session_id "
+                "WHERE s.date=? AND s.section=?", (date_str, period)).fetchone()))
+            parts.append(tuple(conn.execute(
+                "SELECT COUNT(*), COALESCE(MAX(p.id),0) "
+                "FROM checklist_photos p JOIN checklist_sessions s ON s.id=p.session_id "
+                "WHERE s.date=? AND s.section=?", (date_str, period)).fetchone()))
+            if meta.get('includes_food_temps'):
+                parts.append(tuple(conn.execute(
+                    "SELECT COUNT(*), COALESCE(MAX(submitted_at),'') "
+                    "FROM temp_sessions WHERE date=?", (date_str,)).fetchone()))
+                parts.append(tuple(conn.execute(
+                    "SELECT COUNT(*), COALESCE(MAX(r.id),0), "
+                    "COALESCE(SUM(COALESCE(r.c1_temp,0)+COALESCE(r.c2_temp,0)+COALESCE(r.c3_temp,0)"
+                    "+COALESCE(r.c4_temp,0)+COALESCE(r.c5_temp,0)),0) "
+                    "FROM temp_readings r JOIN temp_sessions ts ON ts.id=r.session_id "
+                    "WHERE ts.date=?", (date_str,)).fetchone()))
+            parts.append(tuple(conn.execute(
+                "SELECT COUNT(*), COALESCE(MAX(morning_recorded_at),''), "
+                "COALESCE(MAX(closing_recorded_at),''), "
+                "COALESCE(SUM(COALESCE(morning_temp,0)+COALESCE(closing_temp,0)),0) "
+                "FROM equipment_temp_readings WHERE date=?", (date_str,)).fetchone()))
+            parts.append(tuple(conn.execute(
+                "SELECT COUNT(*), COALESCE(MAX(id),0) "
+                "FROM equipment_units WHERE active=1").fetchone()))
+    except Exception:
+        # On any probe failure, force a rebuild rather than risk a stale PDF.
+        return f'err-{datetime.now().timestamp()}'
+    return repr(parts)
+
+
+def get_daily_pdf(date_str: str, period: str | None = None) -> bytes:
+    """Return the daily PDF, re-rendering only when the day's data changed."""
+    period = _resolve_share_period(period)
+    key = (date_str, period)
+    sig = _pdf_signature(date_str, period)
+    hit = _PDF_CACHE.get(key)
+    if hit and hit[0] == sig:
+        return hit[1]
+    pdf = build_daily_pdf(date_str, period)
+    _PDF_CACHE[key] = (sig, pdf)
+    if len(_PDF_CACHE) > _PDF_CACHE_MAX:
+        for old_key in list(_PDF_CACHE.keys())[:-_PDF_CACHE_MAX]:
+            _PDF_CACHE.pop(old_key, None)
+    return pdf
+
+
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 @whatsapp_bp.route('/')
@@ -1971,7 +2125,7 @@ def whatsapp_pdf():
     date_str = request.args.get('date') or date.today().isoformat()
     period = _resolve_share_period(request.args.get('period'))
     try:
-        pdf_bytes = build_daily_pdf(date_str, period)
+        pdf_bytes = get_daily_pdf(date_str, period)
     except Exception as e:
         return f'PDF generation failed: {type(e).__name__}: {e}', 500
     buf = BytesIO(pdf_bytes); buf.seek(0)
