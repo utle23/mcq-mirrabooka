@@ -51,7 +51,7 @@
   </div>
 </div>
 
-<form method="POST" action="/equipment/save-today">
+<form method="POST" action="/equipment/save-today" id="eqForm">
 <input type="hidden" name="date" value="{{ today_iso }}">
 <div class="card-soft p-3 mb-3">
   <div class="d-flex flex-wrap gap-2 align-items-end mb-3">
@@ -60,7 +60,8 @@
       <input name="recorded_by" class="form-control form-control-sm" list="eq-staff" style="width:220px" placeholder="Staff name">
       <datalist id="eq-staff">{% for s in staff %}<option value="{{ s }}">{% endfor %}</datalist>
     </div>
-    <button type="submit" class="btn text-white ms-auto" style="background:#00838F"><i class="fas fa-save me-1"></i>Save Today</button>
+    <button type="submit" id="eqSaveBtn" class="btn text-white ms-auto" style="background:#00838F"><i class="fas fa-save me-1"></i>Save Today</button>
+    <span id="eqSavedNote" class="fw-bold small" style="display:none"></span>
   </div>
   <div class="unit-grid">
     {% for row in grid %}
@@ -120,6 +121,18 @@
 {% endblock %}
 
 {% block scripts %}
+<style>
+#eqToast{position:fixed;top:18px;left:50%;transform:translateX(-50%) translateY(-20px);
+  z-index:2000;min-width:280px;max-width:92vw;padding:13px 20px;border-radius:12px;color:#fff;
+  font-weight:700;box-shadow:0 8px 30px rgba(0,0,0,.25);opacity:0;pointer-events:none;
+  transition:opacity .25s, transform .25s;display:flex;align-items:center;gap:10px;}
+#eqToast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+#eqToast.ok{background:#2e7d32;}
+#eqToast.warn{background:#e65100;}
+#eqToast.err{background:#c62828;}
+@keyframes eqpulse{0%{box-shadow:0 0 0 0 rgba(46,125,50,.5)}70%{box-shadow:0 0 0 12px rgba(46,125,50,0)}100%{box-shadow:0 0 0 0 rgba(46,125,50,0)}}
+</style>
+<div id="eqToast"><i class="fas fa-circle-check"></i><span id="eqToastMsg"></span></div>
 <script>
 function colorEq(input){
   const box = input.closest('.check-box');
@@ -131,5 +144,55 @@ function colorEq(input){
   let unsafe = (hi === null) ? v < lo : (v < lo || v > hi);
   if (box) box.classList.add(unsafe ? 'bad' : 'good');
 }
+
+let eqToastTimer = null;
+function eqShowToast(msg, kind){
+  const t = document.getElementById('eqToast');
+  const icon = t.querySelector('i');
+  t.className = ''; t.classList.add(kind, 'show');
+  icon.className = kind === 'ok' ? 'fas fa-circle-check'
+                 : kind === 'warn' ? 'fas fa-triangle-exclamation'
+                 : 'fas fa-circle-xmark';
+  document.getElementById('eqToastMsg').textContent = msg;
+  clearTimeout(eqToastTimer);
+  eqToastTimer = setTimeout(() => t.classList.remove('show'), 4200);
+}
+
+document.getElementById('eqForm').addEventListener('submit', async function(e){
+  e.preventDefault();
+  const btn = document.getElementById('eqSaveBtn');
+  const note = document.getElementById('eqSavedNote');
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Saving…';
+  note.style.display = 'none';
+  try {
+    const resp = await fetch(this.action, {
+      method: 'POST', body: new FormData(this),
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const d = await resp.json();
+    const time = (d.saved_at || '').slice(11) || new Date().toTimeString().slice(0,5);
+    if (d.alerts > 0) {
+      eqShowToast(`Saved · ${d.alerts} reading(s) OUT OF RANGE`, 'warn');
+      note.style.color = '#e65100';
+      note.innerHTML = '<i class="fas fa-triangle-exclamation me-1"></i>Saved ' + time + ' · ' + d.alerts + ' out of range';
+    } else {
+      eqShowToast(`Saved ${d.saved} reading(s) at ${time}`, 'ok');
+      note.style.color = '#2e7d32';
+      note.innerHTML = '<i class="fas fa-circle-check me-1"></i>Saved at ' + time;
+    }
+    note.style.display = '';
+    btn.innerHTML = '<i class="fas fa-check me-1"></i>Saved!';
+    btn.style.background = '#2e7d32';
+    btn.style.animation = 'eqpulse 1.2s';
+    setTimeout(() => { btn.innerHTML = original; btn.style.background = '#00838F';
+                       btn.style.animation = ''; btn.disabled = false; }, 1800);
+  } catch (err) {
+    eqShowToast('Save failed — please try again', 'err');
+    btn.innerHTML = original; btn.disabled = false;
+  }
+});
 </script>
 {% endblock %}

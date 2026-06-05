@@ -312,6 +312,7 @@ def save_today():
     recorded_by = request.form.get('recorded_by', '').strip()
     now = datetime.now().strftime('%Y-%m-%d %H:%M')
     alerts = []
+    saved_count = 0
     with _get_db() as conn:
         units = {r['id']: r for r in conn.execute(
             'SELECT * FROM equipment_units WHERE active=1').fetchall()}
@@ -337,6 +338,7 @@ def save_today():
                 conn.execute(f'''UPDATE equipment_temp_readings
                     SET {temp_col}=?, {by_col}=?, {at_col}=? WHERE unit_id=? AND date=?''',
                     (temp, recorded_by, now, uid, today_iso))
+                saved_count += 1
                 if check['key'] == 'morning':
                     conn.execute('''UPDATE equipment_temp_readings
                         SET temp=?, recorded_by=?, recorded_at=? WHERE unit_id=? AND date=?''',
@@ -358,9 +360,12 @@ def save_today():
         except Exception:
             pass
 
-    flash(f'Equipment temperatures saved for {today_iso}.'
-          + (f' ⚠️ {len(alerts)} reading(s) out of range.' if alerts else ''),
-          'warning' if alerts else 'success')
+    msg = (f'Saved {saved_count} reading(s) for {today_iso}.'
+           + (f' ⚠️ {len(alerts)} out of range.' if alerts else ''))
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return jsonify({'ok': True, 'saved': saved_count, 'alerts': len(alerts),
+                        'alert_list': alerts[:10], 'saved_at': now, 'message': msg})
+    flash(msg, 'warning' if alerts else 'success')
     return redirect(url_for('equipment.today_view'))
 
 
