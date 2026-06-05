@@ -3351,9 +3351,9 @@ def compliance_report():
 # ─── Violation Rules ───────────────────────────────────────────────────────────
 
 # ── Violation strike tracking ────────────────────────────────────────────────
-# Active strikes count violations in a rolling window (resets after 3 months);
+# Active strikes count violations in a rolling window (resets after 6 months);
 # full history is always kept. 3+ active strikes flags a staff member for review.
-STRIKE_WINDOW_DAYS = 90
+STRIKE_WINDOW_DAYS = 180
 STRIKE_THRESHOLD   = 3
 SEVERITY_ORDER = {'critical': 0, 'serious': 1, 'moderate': 2, 'minor': 3}
 SEVERITY_META = {
