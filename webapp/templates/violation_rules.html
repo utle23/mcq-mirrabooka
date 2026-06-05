@@ -72,6 +72,79 @@
 {% block content %}
 {% set summary = violation_stats.summary %}
 
+{# ── Strike standings: 3+ active violations = review for termination ──────── #}
+{% if strike_standings %}
+<div class="card shadow-sm mb-4" style="border-top:4px solid #B71C1C">
+  <div class="card-header py-2 d-flex flex-wrap gap-2 align-items-center">
+    <h6 class="mb-0 me-auto"><i class="fas fa-user-shield me-2 text-danger"></i>Staff Strike Standings</h6>
+    <span class="text-muted small">Active = last {{ strike_window_days }} days · <strong>{{ strike_threshold }}+ = review for termination</strong></span>
+  </div>
+  <div class="card-body">
+    {% if strike_watch %}
+    <div class="row g-2 mb-3">
+      {% for s in strike_watch %}
+      {% set crit = s.tier == 'critical' %}
+      <div class="col-md-6 col-xl-4">
+        <div class="p-3 rounded h-100" style="border:2px solid {{ '#B71C1C' if crit else '#F9A825' }}; background:{{ '#fdecea' if crit else '#fff8e1' }}">
+          <div class="d-flex justify-content-between align-items-start gap-2">
+            <div class="fw-bold fs-6">{{ s.staff_name }}</div>
+            <span class="badge" style="background:{{ '#B71C1C' if crit else '#F9A825' }}">{{ 'REVIEW FOR TERMINATION' if crit else 'WARNING' }}</span>
+          </div>
+          <div class="d-flex align-items-center gap-1 my-2">
+            {% for i in range(strike_threshold) %}
+            <span style="width:24px;height:24px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-size:.8rem;color:#fff;background:{{ '#B71C1C' if i < s.active_count else '#cdd2d8' }}">{{ i+1 }}</span>
+            {% endfor %}
+            <span class="ms-2 fw-bold">{{ s.active_count }} active</span>
+          </div>
+          <div class="small mb-1">
+            {% for sev in ['critical','serious','moderate','minor'] %}{% if s.active_severity[sev] %}<span class="badge me-1" style="background:{{ severity_meta[sev].color }}">{{ s.active_severity[sev] }} {{ severity_meta[sev].label }}</span>{% endif %}{% endfor %}
+          </div>
+          <div class="text-muted small">Last incident {{ s.last_incident or '—' }} · {{ s.total_count }} total all-time</div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="alert alert-success py-2 mb-3"><i class="fas fa-check-circle me-1"></i>No staff at {{ strike_threshold - 1 }}+ active violations. All clear.</div>
+    {% endif %}
+
+    {# Full history per staff, each staff's violations sorted most-severe → least #}
+    <div class="small fw-bold text-muted text-uppercase mb-2" style="letter-spacing:.05em"><i class="fas fa-clock-rotate-left me-1"></i>Full history by staff (all time)</div>
+    <div class="accordion" id="strikeAcc">
+      {% for s in strike_standings %}
+      <div class="accordion-item">
+        <h2 class="accordion-header">
+          <button class="accordion-button collapsed py-2" type="button" data-bs-toggle="collapse" data-bs-target="#stk{{ loop.index }}">
+            <span class="fw-bold me-2">{{ s.staff_name }}</span>
+            <span class="badge me-2" style="background:{{ '#B71C1C' if s.tier=='critical' else '#F9A825' if s.tier=='warning' else '#43A047' }}">{{ s.active_count }} active</span>
+            <span class="text-muted small">{{ s.total_count }} total ·
+              {% for sev in ['critical','serious','moderate','minor'] %}{% if s.total_severity[sev] %}<span style="color:{{ severity_meta[sev].color }}">{{ s.total_severity[sev] }} {{ severity_meta[sev].label }}</span>{{ ' · ' if not loop.last }}{% endif %}{% endfor %}
+            </span>
+          </button>
+        </h2>
+        <div id="stk{{ loop.index }}" class="accordion-collapse collapse" data-bs-parent="#strikeAcc">
+          <div class="accordion-body p-2">
+            <table class="table table-sm align-middle mb-0">
+              <tbody>
+              {% for v in s.violations %}
+              <tr {% if not v.is_active %}class="opacity-50"{% endif %}>
+                <td style="width:90px"><span class="badge" style="background:{{ severity_meta[v.severity].color }}">{{ severity_meta[v.severity].label }}</span></td>
+                <td>{{ v.rule_title }}<div class="text-muted small">{{ v.description }}</div></td>
+                <td class="small" style="width:100px">{{ v.incident_date }}</td>
+                <td class="small text-capitalize" style="width:120px">{{ v.status }}{% if not v.is_active %}<span class="badge bg-light text-muted ms-1">expired</span>{% endif %}</td>
+              </tr>
+              {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <div class="row g-3 mb-4">
   <div class="col-6 col-md-3"><div class="vr-stat" style="--vr-color:#263238"><div class="vr-stat-value">{{ summary.total }}</div><div class="vr-stat-label">Selected Period</div></div></div>
   <div class="col-6 col-md-3"><div class="vr-stat" style="--vr-color:#C62828"><div class="vr-stat-value">{{ summary.open_count }}</div><div class="vr-stat-label">Open</div></div></div>
@@ -331,7 +404,7 @@
     <form method="GET" class="row g-2 align-items-end">
       <div class="col-auto"><label class="form-label small fw-semibold mb-1">From</label><input type="date" name="date_from" class="form-control form-control-sm" value="{{ date_from }}"></div>
       <div class="col-auto"><label class="form-label small fw-semibold mb-1">To</label><input type="date" name="date_to" class="form-control form-control-sm" value="{{ date_to }}"></div>
-      <div class="col-auto"><label class="form-label small fw-semibold mb-1">Status</label><select name="status" class="form-select form-select-sm"><option value="all" {% if status_filter=='all' %}selected{% endif %}>All</option><option value="open" {% if status_filter=='open' %}selected{% endif %}>Open</option><option value="in_progress" {% if status_filter=='in_progress' %}selected{% endif %}>In Progress</option><option value="resolved" {% if status_filter=='resolved' %}selected{% endif %}>Resolved</option><option value="void" {% if status_filter=='void' %}selected{% endif %}>Void</option></select></div>
+      <div class="col-auto"><label class="form-label small fw-semibold mb-1">Status</label><select name="status" class="form-select form-select-sm"><option value="all" {% if status_filter=='all' %}selected{% endif %}>All</option><option value="open" {% if status_filter=='open' %}selected{% endif %}>Open</option><option value="in_progress" {% if status_filter=='in_progress' %}selected{% endif %}>In Progress</option><option value="counseled" {% if status_filter=='counseled' %}selected{% endif %}>Counseled</option><option value="resolved" {% if status_filter=='resolved' %}selected{% endif %}>Resolved</option><option value="void" {% if status_filter=='void' %}selected{% endif %}>Void</option></select></div>
       <div class="col-auto"><label class="form-label small fw-semibold mb-1">Severity</label><select name="severity" class="form-select form-select-sm"><option value="">All</option><option value="minor" {% if severity_filter=='minor' %}selected{% endif %}>Minor</option><option value="moderate" {% if severity_filter=='moderate' %}selected{% endif %}>Moderate</option><option value="serious" {% if severity_filter=='serious' %}selected{% endif %}>Serious</option><option value="critical" {% if severity_filter=='critical' %}selected{% endif %}>Critical</option></select></div>
       <div class="col-auto"><label class="form-label small fw-semibold mb-1">Staff</label><select name="staff" class="form-select form-select-sm"><option value="">All Staff</option>{% for s in staff %}<option value="{{ s }}" {% if staff_filter==s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select></div>
       <div class="col-auto"><button class="btn btn-sm btn-success"><i class="fas fa-search me-1"></i>Filter</button><a href="/admin/violations" class="btn btn-sm btn-outline-secondary ms-1">Reset</a></div>
@@ -384,7 +457,7 @@
       <div class="col-md-2"><label class="form-label small fw-semibold mb-1">Time</label><input type="time" name="incident_time" class="form-control form-control-sm" value="{{ v.incident_time }}"></div>
       <div class="col-md-1"><button class="btn btn-sm btn-success w-100"><i class="fas fa-save"></i></button></div>
       <div class="col-md-2"><label class="form-label small fw-semibold mb-1">Severity</label><select name="severity" class="form-select form-select-sm">{% for sev in ['minor','moderate','serious','critical'] %}<option value="{{ sev }}" {% if v.severity==sev %}selected{% endif %}>{{ sev|title }}</option>{% endfor %}</select></div>
-      <div class="col-md-2"><label class="form-label small fw-semibold mb-1">Status</label><select name="status" class="form-select form-select-sm"><option value="open" {% if v.status=='open' %}selected{% endif %}>Open</option><option value="in_progress" {% if v.status=='in_progress' %}selected{% endif %}>In Progress</option><option value="resolved" {% if v.status=='resolved' %}selected{% endif %}>Resolved</option><option value="void" {% if v.status=='void' %}selected{% endif %}>Void</option></select></div>
+      <div class="col-md-2"><label class="form-label small fw-semibold mb-1">Status</label><select name="status" class="form-select form-select-sm"><option value="open" {% if v.status=='open' %}selected{% endif %}>Open</option><option value="in_progress" {% if v.status=='in_progress' %}selected{% endif %}>In Progress</option><option value="counseled" {% if v.status=='counseled' %}selected{% endif %}>Counseled</option><option value="resolved" {% if v.status=='resolved' %}selected{% endif %}>Resolved</option><option value="void" {% if v.status=='void' %}selected{% endif %}>Void</option></select></div>
       <div class="col-md-3"><label class="form-label small fw-semibold mb-1">Submitted by</label><select name="submitted_by" class="form-select form-select-sm"><option value="">— Admin / Manager —</option>{% for m in managers %}<option value="{{ m }}" {% if v.submitted_by==m %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div>
       <div class="col-md-3"><label class="form-label small fw-semibold mb-1">Resolved by</label><select name="resolved_by" class="form-select form-select-sm"><option value="">— Manager —</option>{% for m in managers %}<option value="{{ m }}" {% if v.resolved_by==m %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div>
       <div class="col-md-2"><label class="form-label small fw-semibold mb-1">Follow-up</label><input type="date" name="follow_up_date" class="form-control form-control-sm" value="{{ v.follow_up_date or '' }}"></div>

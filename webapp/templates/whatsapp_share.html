@@ -318,6 +318,16 @@ async function preparePdf({ silent = false } = {}) {
   return preparePdfPromise;
 }
 
+// Pre-warm the PDF in the background as soon as the page opens, so tapping
+// "Share PDF to WhatsApp" is instant instead of waiting on a cold render.
+document.addEventListener('DOMContentLoaded', function () {
+  if ('requestIdleCallback' in window) {
+    requestIdleCallback(() => { try { preparePdf({ silent: true }); } catch (e) {} });
+  } else {
+    setTimeout(() => { try { preparePdf({ silent: true }); } catch (e) {} }, 400);
+  }
+});
+
 async function sharePdf() {
   const status = document.getElementById('shareStatus');
   const btn = document.getElementById('shareBtn');

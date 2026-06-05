@@ -2100,10 +2100,13 @@ def monthly_rewards():
         data = calculate_monthly_reward_scores(conn, reward_month)
         staff = [dict(r) for r in conn.execute(
             'SELECT * FROM staff_members WHERE active=1 ORDER BY name').fetchall()]
+        strike_map = {s['staff_name']: s for s in staff_strike_standings(conn)}
     decision_map = {d['award_type']: d for d in data['decisions']}
     return render_template('monthly_rewards.html',
         reward=data, staff=staff, decision_map=decision_map,
-        reward_month=data['month'])
+        reward_month=data['month'],
+        strike_map=strike_map, strike_threshold=STRIKE_THRESHOLD,
+        strike_window_days=STRIKE_WINDOW_DAYS)
 
 @app.route('/admin/monthly-rewards/decision', methods=['POST'])
 @admin_required
@@ -2229,10 +2232,13 @@ def raise_reviews():
             ORDER BY created_at DESC, id DESC
             LIMIT 40
         ''').fetchall()]
+        strike_map = {s['staff_name']: s for s in staff_strike_standings(conn)}
     selected_month, _, _, month_label = month_bounds(selected_month)
     return render_template('raise_reviews.html',
         staff=staff, selected_staff=selected_staff, selected_month=selected_month,
-        month_label=month_label, snapshot=snapshot, reviews=reviews)
+        month_label=month_label, snapshot=snapshot, reviews=reviews,
+        strike_map=strike_map, strike_threshold=STRIKE_THRESHOLD,
+        strike_window_days=STRIKE_WINDOW_DAYS)
 
 @app.route('/admin/raise-reviews/<int:review_id>/update', methods=['POST'])
 @admin_required
@@ -3344,6 +3350,79 @@ def compliance_report():
 
 # ─── Violation Rules ───────────────────────────────────────────────────────────
 
+# ── Violation strike tracking ────────────────────────────────────────────────
+# Active strikes count violations in a rolling window (resets after 3 months);
+# full history is always kept. 3+ active strikes flags a staff member for review.
+STRIKE_WINDOW_DAYS = 90
+STRIKE_THRESHOLD   = 3
+SEVERITY_ORDER = {'critical': 0, 'serious': 1, 'moderate': 2, 'minor': 3}
+SEVERITY_META = {
+    'critical': {'label': 'Critical', 'color': '#B71C1C'},
+    'serious':  {'label': 'Serious',  'color': '#E65100'},
+    'moderate': {'label': 'Moderate', 'color': '#F9A825'},
+    'minor':    {'label': 'Minor',    'color': '#1565C0'},
+}
+
+
+def staff_active_strikes(conn, staff_name, window_days=STRIKE_WINDOW_DAYS):
+    """Number of violations for one staff member within the rolling window."""
+    cutoff = (date.today() - timedelta(days=window_days)).isoformat()
+    row = conn.execute(
+        'SELECT COUNT(*) FROM staff_violations WHERE staff_name=? AND incident_date>=?',
+        (staff_name, cutoff)).fetchone()
+    return int(row[0] if row else 0)
+
+
+def staff_strike_standings(conn, window_days=STRIKE_WINDOW_DAYS):
+    """Per-staff strike standings: active count (rolling window) + full history,
+    grouped by staff, each staff's violations sorted most-severe → least."""
+    cutoff = (date.today() - timedelta(days=window_days)).isoformat()
+    rows = [dict(r) for r in conn.execute('''
+        SELECT sv.*, COALESCE(vr.title, '(rule removed)') AS rule_title,
+               COALESCE(vr.color, '#607D8B') AS rule_color
+        FROM staff_violations sv
+        LEFT JOIN violation_rules vr ON vr.id = sv.rule_id
+        ORDER BY sv.incident_date DESC, sv.id DESC''').fetchall()]
+    by_staff = {}
+    for r in rows:
+        name = (r.get('staff_name') or '').strip()
+        if not name:
+            continue
+        sev = r.get('severity') or 'minor'
+        if sev not in SEVERITY_ORDER:
+            sev = 'minor'
+        r['severity'] = sev
+        r['is_active'] = (r.get('incident_date') or '') >= cutoff
+        st = by_staff.setdefault(name, {
+            'staff_name': name, 'active_count': 0, 'total_count': 0,
+            'active_severity': {k: 0 for k in SEVERITY_ORDER},
+            'total_severity':  {k: 0 for k in SEVERITY_ORDER},
+            'last_incident': '', 'violations': []})
+        st['violations'].append(r)
+        st['total_count'] += 1
+        st['total_severity'][sev] += 1
+        if r['is_active']:
+            st['active_count'] += 1
+            st['active_severity'][sev] += 1
+        if (r.get('incident_date') or '') > st['last_incident']:
+            st['last_incident'] = r.get('incident_date') or ''
+    standings = []
+    for st in by_staff.values():
+        # severity desc, then (stable) date desc as appended
+        st['violations'].sort(key=lambda v: SEVERITY_ORDER.get(v.get('severity'), 3))
+        a = st['active_count']
+        st['tier'] = ('critical' if a >= STRIKE_THRESHOLD
+                      else 'warning' if a == STRIKE_THRESHOLD - 1 else 'ok')
+        st['worst_active'] = next(
+            (s for s in ('critical', 'serious', 'moderate', 'minor')
+             if st['active_severity'][s] > 0), None)
+        standings.append(st)
+    tier_rank = {'critical': 0, 'warning': 1, 'ok': 2}
+    standings.sort(key=lambda s: (tier_rank[s['tier']], -s['active_count'],
+                                  -s['total_count'], s['staff_name'].lower()))
+    return standings
+
+
 @app.route('/admin/violations', methods=['GET', 'POST'])
 @admin_required
 def violation_rules():
@@ -3397,6 +3476,27 @@ def violation_rules():
                         link_path='/admin/violations',
                         actor=submitted_by,
                     )
+                    # 3-strike escalation: alert when this pushes the staff to the
+                    # review threshold within the rolling window.
+                    active = staff_active_strikes(conn, staff_name)
+                    if active >= STRIKE_THRESHOLD:
+                        email_service.send_notification(
+                            'violation',
+                            subject=f'REVIEW REQUIRED: {staff_name} has {active} violations in {STRIKE_WINDOW_DAYS} days',
+                            lines=[
+                                f'Staff: {staff_name}',
+                                f'Active strikes (last {STRIKE_WINDOW_DAYS} days): {active}',
+                                f'Latest: {rule["title"]} ({severity}) on {incident_date}',
+                                f'Policy: {STRIKE_THRESHOLD}+ violations within the window → review for termination.',
+                            ],
+                            link_path='/admin/violations',
+                            actor=submitted_by,
+                        )
+                        flash(f'⚠ {staff_name} now has {active} active violations (last '
+                              f'{STRIKE_WINDOW_DAYS} days) — flagged for review.', 'danger')
+                    else:
+                        flash(f'Violation logged for {staff_name}. Active strikes: {active} '
+                              f'(last {STRIKE_WINDOW_DAYS} days).', 'success')
             return redirect(url_for('violation_rules'))
 
     status_filter = request.args.get('status', 'open')
@@ -3548,12 +3648,19 @@ def violation_rules():
             'rule_rank': rule_rank,
         }
 
+        # Strike standings (rolling 90-day active count + full history per staff)
+        strike_standings = staff_strike_standings(conn)
+        strike_watch = [s for s in strike_standings if s['active_count'] >= STRIKE_THRESHOLD - 1]
+
     return render_template('violation_rules.html',
         rules=rules, violations=violations, counts=counts,
         severity_counts=severity_counts, staff=get_active_staff(), managers=MANAGERS,
         status_filter=status_filter, staff_filter=staff_filter,
         severity_filter=severity_filter, date_from=date_from, date_to=date_to,
         violation_stats=violation_stats,
+        strike_standings=strike_standings, strike_watch=strike_watch,
+        strike_window_days=STRIKE_WINDOW_DAYS, strike_threshold=STRIKE_THRESHOLD,
+        severity_meta=SEVERITY_META,
         today=today_iso, now_time=datetime.now().strftime('%H:%M'),
     )
 
@@ -3561,7 +3668,7 @@ def violation_rules():
 @admin_required
 def update_violation(violation_id):
     status = request.form.get('status', 'open')
-    if status not in ('open', 'in_progress', 'resolved', 'void'):
+    if status not in ('open', 'in_progress', 'counseled', 'resolved', 'void'):
         status = 'open'
     try:
         rule_id = int(request.form.get('rule_id', 0) or 0)

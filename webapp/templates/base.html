@@ -501,6 +501,118 @@ function _updateInstallBtnVisibility() {
 window.addEventListener('appinstalled', () => { _runningAsPwa = true; _updateInstallBtnVisibility(); });
 document.addEventListener('DOMContentLoaded', _updateInstallBtnVisibility);
 </script>
+
+<!-- ── Draft auto-save: never lose typed data on navigation / reload ──────── -->
+<script>
+(function () {
+  const PREFIX = 'mcqdraft::';
+  const TTL = 2 * 24 * 60 * 60 * 1000;   // drafts expire after 2 days
+  const base = () => PREFIX + location.pathname + location.search + '::';
+
+  function formId(form, idx) {
+    return form.getAttribute('data-draft') || form.id || ('form' + idx);
+  }
+  function formEligible(form) {
+    if ((form.getAttribute('method') || 'get').toLowerCase() !== 'post') return false;
+    if (form.hasAttribute('data-no-autosave')) return false;
+    return true;
+  }
+  function fieldEligible(f) {
+    if (!f.name && !f.id) return false;
+    if (f.name && f.name.endsWith('[]')) return false;          // dynamic JS rows
+    const t = (f.type || '').toLowerCase();
+    if (['password', 'file', 'hidden', 'submit', 'button', 'reset', 'image'].includes(t)) return false;
+    if (f.hasAttribute('data-no-autosave') || f.closest('[data-no-autosave]')) return false;
+    return true;
+  }
+  function keyFor(form, idx, f) {
+    const name = f.name || f.id;
+    let k = base() + formId(form, idx) + '::' + name;
+    if (f.type === 'checkbox') k += '::' + (f.value || 'on');
+    return k;
+  }
+  function store(k, v) {
+    try { localStorage.setItem(k, JSON.stringify({ v: v, t: Date.now() })); } catch (e) {}
+  }
+  function read(k) {
+    try {
+      const raw = localStorage.getItem(k);
+      if (!raw) return null;
+      const o = JSON.parse(raw);
+      if (!o || (Date.now() - (o.t || 0)) > TTL) { localStorage.removeItem(k); return null; }
+      return o.v;
+    } catch (e) { return null; }
+  }
+
+  function saveField(form, idx, f) {
+    const k = keyFor(form, idx, f);
+    if (f.type === 'checkbox' || f.type === 'radio') {
+      if (f.checked) store(k, f.value || 'on'); else { try { localStorage.removeItem(k); } catch (e) {} }
+    } else if (f.value !== '') {
+      store(k, f.value);
+    } else {
+      try { localStorage.removeItem(k); } catch (e) {}
+    }
+  }
+
+  function restoreForm(form, idx) {
+    form.querySelectorAll('input, select, textarea').forEach(f => {
+      if (!fieldEligible(f)) return;
+      const v = read(keyFor(form, idx, f));
+      if (v === null) return;
+      if (f.type === 'checkbox' || f.type === 'radio') {
+        if (!f.checked) { f.checked = true; f.dispatchEvent(new Event('change', { bubbles: true })); }
+      } else if (f.value === '' || f.value === f.defaultValue) {
+        // only fill blank / unchanged fields — never clobber server-loaded data
+        if (f.value !== v) {
+          f.value = v;
+          f.dispatchEvent(new Event('input', { bubbles: true }));
+          f.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }
+    });
+  }
+
+  function clearForm(form, idx) {
+    const p = base() + formId(form, idx) + '::';
+    try {
+      Object.keys(localStorage).forEach(k => { if (k.indexOf(p) === 0) localStorage.removeItem(k); });
+    } catch (e) {}
+  }
+
+  function purgeExpired() {
+    try {
+      Object.keys(localStorage).forEach(k => {
+        if (k.indexOf(PREFIX) !== 0) return;
+        const raw = localStorage.getItem(k);
+        try { const o = JSON.parse(raw); if (!o || (Date.now() - (o.t || 0)) > TTL) localStorage.removeItem(k); }
+        catch (e) { localStorage.removeItem(k); }
+      });
+    } catch (e) {}
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    purgeExpired();
+    const forms = Array.from(document.querySelectorAll('form')).filter(formEligible);
+    forms.forEach((form, idx) => {
+      restoreForm(form, idx);
+      let timer = null;
+      const dirty = new Set();
+      const flush = () => { dirty.forEach(f => saveField(form, idx, f)); dirty.clear(); };
+      const onChange = (e) => {
+        const f = e.target;
+        if (!f || !fieldEligible(f)) return;
+        dirty.add(f);                 // remember every touched field, not just the last
+        clearTimeout(timer);
+        timer = setTimeout(flush, 250);
+      };
+      form.addEventListener('input', onChange);
+      form.addEventListener('change', onChange);
+      form.addEventListener('submit', () => { flush(); clearForm(form, idx); });
+    });
+  });
+})();
+</script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

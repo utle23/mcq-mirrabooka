@@ -65,6 +65,19 @@
   </div>
   {% if snapshot %}
   <div class="p-3">
+    {% set stk = strike_map.get(selected_staff) %}
+    {% if stk and stk.active_count >= strike_threshold %}
+    <div class="alert alert-danger d-flex align-items-center gap-2 py-2 mb-3">
+      <i class="fas fa-triangle-exclamation fa-lg"></i>
+      <div><strong>{{ stk.active_count }} active violations</strong> in the last {{ strike_window_days }} days
+        ({{ strike_threshold }}+ = review for termination). Consider before approving any raise.</div>
+    </div>
+    {% elif stk and stk.active_count == strike_threshold - 1 %}
+    <div class="alert alert-warning d-flex align-items-center gap-2 py-2 mb-3">
+      <i class="fas fa-circle-exclamation"></i>
+      <div><strong>{{ stk.active_count }} active violations</strong> (last {{ strike_window_days }} days) — one more reaches the review threshold.</div>
+    </div>
+    {% endif %}
     <div class="row g-3">
       <div class="col-6 col-xl-3"><div class="rr-score" style="--c:#6A1B9A"><div class="rr-score-value">{{ snapshot.current.employee_score }}</div><div class="rr-score-label">Monthly Score</div></div></div>
       <div class="col-6 col-xl-3"><div class="rr-score" style="--c:#1565C0"><div class="rr-score-value">{{ snapshot.avg_3m }}</div><div class="rr-score-label">3 Month Avg</div></div></div>

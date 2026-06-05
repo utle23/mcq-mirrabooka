@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 
 from flask import Blueprint, render_template, request, send_file, redirect, url_for, session
@@ -139,7 +139,7 @@ def _collect_today(date_str: str, period: str | None = None) -> dict:
     period = _resolve_share_period(period)
     period_meta = SHARE_PERIODS[period]
     out = {'date': date_str, 'checklists': [], 'temperatures': [],
-           'equipment': None, 'violations': [], 'issues': [], 'prep_timetable': [],
+           'equipment': None, 'violations': [], 'issues': [], 'prep_timetable': {},
            'period': period, 'period_meta': period_meta}
     with _conn() as conn:
         # Checklists — one entry per (type, section) combination submitted today
@@ -218,34 +218,77 @@ def _collect_today(date_str: str, period: str | None = None) -> dict:
 
 
 def _collect_prep_timetable(conn, date_str):
-    """Per-station prep tasks scheduled for this weekday (same for AM & PM share)."""
+    """Per-station prep tasks for this weekday, linked to the weekly prep
+    schedule's real done / not-done status. Same content for the AM & PM share
+    (prep is one shared list per day, not split by period)."""
+    empty = {'stations': [], 'total': 0, 'done': 0, 'not_done': 0, 'has_schedule': False}
     try:
-        wd = datetime.strptime(date_str, '%Y-%m-%d').weekday()
+        d = datetime.strptime(date_str, '%Y-%m-%d').date()
     except Exception:
-        wd = datetime.now().weekday()
-    day_key = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'][wd]
-    out = []
+        d = datetime.now().date()
+    day_key = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'][d.weekday()]
+    week_start = (d - timedelta(days=d.weekday())).isoformat()
+
     try:
-        stations = conn.execute(
-            'SELECT id, name_en, color FROM prep_stations ORDER BY id').fetchall()
+        stations_meta = {s['id']: {'name': s['name_en'], 'color': s['color'] or '#607D8B'}
+                         for s in conn.execute(
+                             'SELECT id, name_en, color FROM prep_stations ORDER BY id').fetchall()}
     except sqlite3.OperationalError:
-        return out
-    for s in stations:
+        return empty
+
+    by_station = {}
+    total = done = 0
+    has_schedule = False
+
+    # 1) Prefer the actual weekly schedule → real per-task done status for the date.
+    try:
+        sched = conn.execute(
+            'SELECT id FROM prep_weekly_schedules WHERE week_start=?', (week_start,)).fetchone()
+        if sched:
+            has_schedule = True
+            rows = conn.execute('''
+                SELECT wt.station_id AS sid, wt.task_name_en AS name,
+                       COALESCE(ds.scheduled_time, wt.scheduled_time) AS time,
+                       ds.status AS status, ds.done_by AS done_by
+                FROM prep_daily_status ds
+                JOIN prep_weekly_tasks wt ON wt.id = ds.weekly_task_id
+                WHERE ds.date=? AND ds.is_required=1 AND COALESCE(wt.is_supplier,0)=0
+                ORDER BY wt.station_id, wt.sort_order, wt.id''', (date_str,)).fetchall()
+            for r in rows:
+                is_done = (r['status'] == 'done')
+                by_station.setdefault(r['sid'], []).append(
+                    {'name': r['name'], 'time': r['time'] or '',
+                     'done': is_done, 'done_by': r['done_by'] or ''})
+                total += 1
+                if is_done:
+                    done += 1
+    except sqlite3.OperationalError:
+        pass
+
+    # 2) Fallback: no schedule built yet → recurring templates (all not-done).
+    if not has_schedule:
         try:
-            tasks = conn.execute(
-                'SELECT task_name_en, default_time, active_days FROM prep_task_templates '
-                'WHERE active=1 AND station_id=? ORDER BY sort_order, id', (s['id'],)).fetchall()
+            for t in conn.execute(
+                'SELECT station_id AS sid, task_name_en AS name, default_time AS time, active_days '
+                'FROM prep_task_templates WHERE active=1 ORDER BY station_id, sort_order, id').fetchall():
+                days = (t['active_days'] or '').split(',') if t['active_days'] else []
+                if day_key in days:
+                    by_station.setdefault(t['sid'], []).append(
+                        {'name': t['name'], 'time': t['time'] or '', 'done': False, 'done_by': ''})
+                    total += 1
         except sqlite3.OperationalError:
+            pass
+
+    stations = []
+    for sid, meta in stations_meta.items():
+        tasks = by_station.get(sid)
+        if not tasks:
             continue
-        todays = []
-        for t in tasks:
-            days = (t['active_days'] or '').split(',') if t['active_days'] else []
-            if day_key in days:
-                todays.append({'name': t['task_name_en'], 'time': (t['default_time'] or '')})
-        if todays:
-            out.append({'station': s['name_en'],
-                        'color': s['color'] or '#607D8B', 'tasks': todays})
-    return out
+        stations.append({'station': meta['name'], 'color': meta['color'], 'tasks': tasks,
+                         'done': sum(1 for t in tasks if t['done']), 'total': len(tasks)})
+
+    return {'stations': stations, 'total': total, 'done': done,
+            'not_done': total - done, 'has_schedule': has_schedule}
 
 
 def _equipment_stats(equip: dict | None) -> dict:
@@ -1184,6 +1227,23 @@ def build_temperature_png(session_id: int) -> bytes:
 
 # ── Daily PDF report (one polished A4 doc, designed for WhatsApp share) ─────
 
+def _pdf_photo_buffer(src, max_px=1100):
+    """Downscale + exif-correct a photo to a small in-memory JPEG before it is
+    embedded in the PDF. Phone photos are 3-4000px but the report shows them at
+    ~100mm, so this both speeds up rendering and shrinks the PDF a lot."""
+    try:
+        from PIL import Image, ImageOps
+        im = ImageOps.exif_transpose(Image.open(src)).convert('RGB')
+        if max(im.size) > max_px:
+            im.thumbnail((max_px, max_px), Image.LANCZOS)
+        buf = BytesIO()
+        im.save(buf, 'JPEG', quality=82, optimize=True)
+        buf.seek(0)
+        return buf
+    except Exception:
+        return None
+
+
 def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
     """Compose a magazine-style A4 PDF combining cover, every checklist
     (with all photos at large size), and every temperature record into one
@@ -1404,7 +1464,7 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
 
     # One reusable stat tile: bold gold/colour hairline, big value, status sub
     def _stat_card(label, value, label_hex, sub_markup=None, accent_rule='#D4AF37',
-                   value_size=32, value_hex='#FFFFFF'):
+                   value_size=32, value_hex='#FFFFFF', card_w=54):
         rows = [
             [Paragraph(f'<font color="{label_hex}" size="10"><b>{label}</b></font>',
                        ParagraphStyle('sc_l', fontName=bold_font, alignment=TA_CENTER))],
@@ -1417,7 +1477,7 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
             rows.append([Paragraph(sub_markup, ParagraphStyle('sc_s', fontName=font_name,
                          fontSize=8, leading=10, alignment=TA_CENTER))])
             rh.append(5 * mm)
-        t = Table(rows, colWidths=[54 * mm], rowHeights=rh)
+        t = Table(rows, colWidths=[card_w * mm], rowHeights=rh)
         t.hAlign = 'CENTER'
         t.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#1E1E38')),
@@ -1453,13 +1513,26 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
     al_sub = ('<font color="#9AE6A0">all clear</font>' if total_alerts == 0
               else '<font color="#FF9A9A">needs review</font>')
 
+    prep_data = data.get('prep_timetable') or {}
+    prep_total = int(prep_data.get('total') or 0)
+    prep_done = int(prep_data.get('done') or 0)
+    if not prep_total:
+        prep_sub = '<font color="#9AA3B2">no tasks today</font>'
+    elif prep_done >= prep_total:
+        prep_sub = '<font color="#9AE6A0">all done</font>'
+    else:
+        prep_sub = f'<font color="#FFD39B">{prep_total - prep_done} not done</font>'
+
     story.append(_stat_row([
         _stat_card('CHECKLISTS', str(len(data['checklists'])), '#A5D6A7', chk_sub,
-                   accent_rule='#43A047'),
+                   accent_rule='#43A047', value_size=26, card_w=42),
+        _stat_card('PREP', f'{prep_done}/{prep_total}', '#C8E6C9', prep_sub,
+                   accent_rule='#2E7D32', value_size=23, card_w=42),
         _stat_card('EQUIPMENT', equip_recorded, '#80DEEA', eq_sub,
-                   accent_rule='#00ACC1', value_size=27),
+                   accent_rule='#00ACC1', value_size=23, card_w=42),
         _stat_card('ALERTS', str(total_alerts), '#FFCDD2', al_sub,
-                   accent_rule='#C62828' if total_alerts else '#43A047'),
+                   accent_rule='#C62828' if total_alerts else '#43A047',
+                   value_size=26, card_w=42),
     ]))
 
     # ── Food temperature by station — opening reports include food temps ────
@@ -1666,7 +1739,7 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
                     cells.append([Paragraph('(photo missing)', S['small']), cap])
                     continue
                 try:
-                    rl_img = RLImage(src)
+                    rl_img = RLImage(_pdf_photo_buffer(src) or src)
                     iw, ih = rl_img.imageWidth, rl_img.imageHeight
                     ratio = col_w / float(iw) if iw else 1
                     h = ih * ratio
@@ -1976,16 +2049,18 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
         story.append(et)
 
     # ── Prep timetable (same content on the opening & closing reports) ─────
-    prep_tt = data.get('prep_timetable') or []
-    if prep_tt:
+    prep_tt = data.get('prep_timetable') or {}
+    prep_stations = prep_tt.get('stations') or []
+    if prep_stations:
         story.append(PageBreak())
         try:
             _pd = datetime.strptime(date_str, '%Y-%m-%d').strftime('%A · %d %b %Y')
         except Exception:
             _pd = date_str
+        _pdone, _ptot = prep_tt.get('done', 0), prep_tt.get('total', 0)
         hdr = Table([[Paragraph(
             '<font color="white" size="20"><b>PREP TIMETABLE — TODAY</b></font><br/>'
-            f'<font color="#D7F5DD" size="11">WHAT EACH STATION PREPARES · {_pd}</font>',
+            f'<font color="#D7F5DD" size="11">{_pdone} / {_ptot} TASKS DONE · {_pd}</font>',
             ParagraphStyle('ptth', fontName=bold_font, leading=24))]], colWidths=[USABLE_W])
         hdr.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#2E7D32')),
@@ -1995,15 +2070,18 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
         story.append(hdr)
         story.append(Spacer(1, 4 * mm))
         story.append(Paragraph(
-            'Follow your station&rsquo;s timetable for today. Tick <b>YES</b> on the printed '
-            'sheet as each item is prepared (e.g. take out bones, peel prawns, prepare goi cuon).',
+            ('Status is pulled live from the Weekly Prep Schedule for this day. '
+             '<font color="#1B7F3B"><b>DONE</b></font> = ticked complete · '
+             '<font color="#C62828"><b>NOT DONE</b></font> = still outstanding'
+             + ('' if prep_tt.get('has_schedule')
+                else ' (no weekly schedule built yet — showing the planned timetable).')),
             S['body']))
         story.append(Spacer(1, 4 * mm))
-        for st in prep_tt:
+        for st in prep_stations:
             col = colors.HexColor(st.get('color') or '#2E7D32')
             sub = Table([[Paragraph(
                 f'<font color="white"><b>{_esc(st["station"])}</b>'
-                f'<font size="9">  ·  {len(st["tasks"])} task(s) today</font></font>',
+                f'<font size="9">  ·  {st.get("done", 0)}/{st.get("total", len(st["tasks"]))} done today</font></font>',
                 ParagraphStyle('pst', fontName=bold_font, fontSize=12))]], colWidths=[USABLE_W])
             sub.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, -1), col),
@@ -2013,12 +2091,19 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
             story.append(sub)
             trows = []
             for t in st['tasks']:
+                if t.get('done'):
+                    badge = '<font color="#1B7F3B"><b>DONE</b></font>'
+                    extra = (f'<font color="#7A8089">{_esc(t.get("done_by") or "")}</font>'
+                             if t.get('done_by') else (_esc(t['time']) if t['time'] else ''))
+                else:
+                    badge = '<font color="#C62828"><b>NOT DONE</b></font>'
+                    extra = _esc(t['time']) if t['time'] else ''
                 trows.append([
-                    Paragraph('[  ]', ParagraphStyle('pck', fontName=font_name, fontSize=11, alignment=TA_CENTER)),
+                    Paragraph(badge, ParagraphStyle('pbk', fontName=bold_font, fontSize=9, alignment=TA_CENTER)),
                     Paragraph(_esc(t['name']), S['task']),
-                    Paragraph(_esc(t['time']) if t['time'] else '', S['small']),
+                    Paragraph(extra, S['small']),
                 ])
-            tt = Table(trows, colWidths=[12 * mm, USABLE_W * 0.70, USABLE_W * 0.20])
+            tt = Table(trows, colWidths=[26 * mm, USABLE_W - 26 * mm - USABLE_W * 0.20, USABLE_W * 0.20])
             tt.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, -1), colors.white),
                 ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
@@ -2100,7 +2185,7 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
     # Empty-state if nothing today
     if (not data['checklists'] and not data['temperatures']
             and not (equip and equip.get('total')) and not violations and not issues
-            and not prep_tt):
+            and not prep_stations):
         story.append(PageBreak())
         story.append(Spacer(1, 60 * mm))
         story.append(Paragraph('No data recorded yet today.', S['section']))
@@ -2169,6 +2254,24 @@ def _pdf_signature(date_str: str, period: str) -> str:
             parts.append(tuple(conn.execute(
                 "SELECT COUNT(*), COALESCE(MAX(id),0) "
                 "FROM equipment_units WHERE active=1").fetchone()))
+            # Prep timetable status — ticking a prep task must refresh the PDF.
+            try:
+                parts.append(tuple(conn.execute(
+                    "SELECT COUNT(*), COALESCE(SUM(CASE WHEN status='done' THEN 1 ELSE 0 END),0), "
+                    "COALESCE(MAX(done_at),'') FROM prep_daily_status WHERE date=?",
+                    (date_str,)).fetchone()))
+            except Exception:
+                parts.append(('prep?',))
+            # Violations + issues rendered on the report.
+            try:
+                parts.append(tuple(conn.execute(
+                    "SELECT COUNT(*), COALESCE(MAX(id),0) FROM staff_violations WHERE incident_date=?",
+                    (date_str,)).fetchone()))
+                parts.append(tuple(conn.execute(
+                    "SELECT COUNT(*), COALESCE(MAX(id),0) FROM issue_reports WHERE date=?",
+                    (date_str,)).fetchone()))
+            except Exception:
+                parts.append(('vi?',))
     except Exception:
         # On any probe failure, force a rebuild rather than risk a stale PDF.
         return f'err-{datetime.now().timestamp()}'
