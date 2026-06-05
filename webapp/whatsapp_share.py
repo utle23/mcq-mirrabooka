@@ -139,7 +139,7 @@ def _collect_today(date_str: str, period: str | None = None) -> dict:
     period = _resolve_share_period(period)
     period_meta = SHARE_PERIODS[period]
     out = {'date': date_str, 'checklists': [], 'temperatures': [],
-           'equipment': None, 'violations': [], 'issues': [],
+           'equipment': None, 'violations': [], 'issues': [], 'prep_timetable': [],
            'period': period, 'period_meta': period_meta}
     with _conn() as conn:
         # Checklists — one entry per (type, section) combination submitted today
@@ -196,7 +196,7 @@ def _collect_today(date_str: str, period: str | None = None) -> dict:
                     # Pastry hot display: 3rd check is informational — no alert.
                     if r['type'] == 'pastry' and idx == 3:
                         continue
-                    if (kind == 'cold' and v > 5) or (kind == 'hot' and v < 60):
+                    if _temp_unsafe(kind, v):
                         bad += 1
             r['out_of_zone'] = bad
             r['meta']        = meta
@@ -211,6 +211,40 @@ def _collect_today(date_str: str, period: str | None = None) -> dict:
         except Exception:
             out['equipment'] = None
 
+        # Prep timetable for the day — shared by the opening & closing reports.
+        out['prep_timetable'] = _collect_prep_timetable(conn, date_str)
+
+    return out
+
+
+def _collect_prep_timetable(conn, date_str):
+    """Per-station prep tasks scheduled for this weekday (same for AM & PM share)."""
+    try:
+        wd = datetime.strptime(date_str, '%Y-%m-%d').weekday()
+    except Exception:
+        wd = datetime.now().weekday()
+    day_key = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'][wd]
+    out = []
+    try:
+        stations = conn.execute(
+            'SELECT id, name_en, color FROM prep_stations ORDER BY id').fetchall()
+    except sqlite3.OperationalError:
+        return out
+    for s in stations:
+        try:
+            tasks = conn.execute(
+                'SELECT task_name_en, default_time, active_days FROM prep_task_templates '
+                'WHERE active=1 AND station_id=? ORDER BY sort_order, id', (s['id'],)).fetchall()
+        except sqlite3.OperationalError:
+            continue
+        todays = []
+        for t in tasks:
+            days = (t['active_days'] or '').split(',') if t['active_days'] else []
+            if day_key in days:
+                todays.append({'name': t['task_name_en'], 'time': (t['default_time'] or '')})
+        if todays:
+            out.append({'station': s['name_en'],
+                        'color': s['color'] or '#607D8B', 'tasks': todays})
     return out
 
 
@@ -986,6 +1020,8 @@ def _temp_unsafe(kind: str, v) -> bool:
         return False
     if kind == 'hot':
         return v < 60
+    if kind == 'room':           # ambient items: safe 15–30°C
+        return v < 15 or v > 30
     return v > 5
 
 
@@ -1094,9 +1130,9 @@ def build_temperature_png(session_id: int) -> bytes:
     for r in t['readings']:
         kind = r['food_kind'] or 'cold'
         # Kind badge
-        kind_label = 'HOT' if kind == 'hot' else 'COLD'
-        kind_col   = (192, 57, 43) if kind == 'hot' else (21, 101, 192)
-        kind_bg    = (255, 224, 178) if kind == 'hot' else (225, 245, 254)
+        kind_label = {'hot': 'HOT', 'room': 'ROOM'}.get(kind, 'COLD')
+        kind_col   = {'hot': (192, 57, 43), 'room': (0, 137, 123)}.get(kind, (21, 101, 192))
+        kind_bg    = {'hot': (255, 224, 178), 'room': (224, 242, 241)}.get(kind, (225, 245, 254))
         kw = draw.textbbox((0, 0), kind_label, font=f_chip)[2] + 18
         _rounded(draw, (PAD + 24, ty + 14, PAD + 24 + kw, ty + 42), radius=10, fill=kind_bg)
         draw.text((PAD + 32, ty + 20), kind_label, fill=kind_col, font=f_chip)
@@ -1773,9 +1809,9 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
         rows_data = [head]
         for r in full['readings']:
             kind = r['food_kind'] or 'cold'
-            kind_label = 'HOT' if kind == 'hot' else 'COLD'
-            kind_color = colors.HexColor('#FFE0B2') if kind == 'hot' else colors.HexColor('#E1F5FE')
-            kind_text  = colors.HexColor('#C0392B') if kind == 'hot' else colors.HexColor('#1565C0')
+            kind_label = {'hot': 'HOT', 'room': 'ROOM'}.get(kind, 'COLD')
+            kind_color = colors.HexColor({'hot': '#FFE0B2', 'room': '#E0F2F1'}.get(kind, '#E1F5FE'))
+            kind_text  = colors.HexColor({'hot': '#C0392B', 'room': '#00897B'}.get(kind, '#1565C0'))
 
             cells = [
                 Paragraph(f'<font color="{kind_text.hexval()}"><b>{kind_label}</b></font>',
@@ -1939,6 +1975,60 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
         ]))
         story.append(et)
 
+    # ── Prep timetable (same content on the opening & closing reports) ─────
+    prep_tt = data.get('prep_timetable') or []
+    if prep_tt:
+        story.append(PageBreak())
+        try:
+            _pd = datetime.strptime(date_str, '%Y-%m-%d').strftime('%A · %d %b %Y')
+        except Exception:
+            _pd = date_str
+        hdr = Table([[Paragraph(
+            '<font color="white" size="20"><b>PREP TIMETABLE — TODAY</b></font><br/>'
+            f'<font color="#D7F5DD" size="11">WHAT EACH STATION PREPARES · {_pd}</font>',
+            ParagraphStyle('ptth', fontName=bold_font, leading=24))]], colWidths=[USABLE_W])
+        hdr.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#2E7D32')),
+            ('LEFTPADDING', (0, 0), (-1, -1), 16), ('RIGHTPADDING', (0, 0), (-1, -1), 16),
+            ('TOPPADDING', (0, 0), (-1, -1), 14), ('BOTTOMPADDING', (0, 0), (-1, -1), 14),
+        ]))
+        story.append(hdr)
+        story.append(Spacer(1, 4 * mm))
+        story.append(Paragraph(
+            'Follow your station&rsquo;s timetable for today. Tick <b>YES</b> on the printed '
+            'sheet as each item is prepared (e.g. take out bones, peel prawns, prepare goi cuon).',
+            S['body']))
+        story.append(Spacer(1, 4 * mm))
+        for st in prep_tt:
+            col = colors.HexColor(st.get('color') or '#2E7D32')
+            sub = Table([[Paragraph(
+                f'<font color="white"><b>{_esc(st["station"])}</b>'
+                f'<font size="9">  ·  {len(st["tasks"])} task(s) today</font></font>',
+                ParagraphStyle('pst', fontName=bold_font, fontSize=12))]], colWidths=[USABLE_W])
+            sub.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), col),
+                ('LEFTPADDING', (0, 0), (-1, -1), 12), ('RIGHTPADDING', (0, 0), (-1, -1), 12),
+                ('TOPPADDING', (0, 0), (-1, -1), 7), ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
+            ]))
+            story.append(sub)
+            trows = []
+            for t in st['tasks']:
+                trows.append([
+                    Paragraph('[  ]', ParagraphStyle('pck', fontName=font_name, fontSize=11, alignment=TA_CENTER)),
+                    Paragraph(_esc(t['name']), S['task']),
+                    Paragraph(_esc(t['time']) if t['time'] else '', S['small']),
+                ])
+            tt = Table(trows, colWidths=[12 * mm, USABLE_W * 0.70, USABLE_W * 0.20])
+            tt.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), colors.white),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('TOPPADDING', (0, 0), (-1, -1), 5), ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+                ('LEFTPADDING', (0, 0), (-1, -1), 8),
+                ('LINEBELOW', (0, 0), (-1, -1), 0.25, SOFT),
+            ]))
+            story.append(tt)
+            story.append(Spacer(1, 5 * mm))
+
     # ── Issues & Violations page ───────────────────────────────────────────
     violations = data.get('violations', [])
     issues = data.get('issues', [])
@@ -2009,7 +2099,8 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
 
     # Empty-state if nothing today
     if (not data['checklists'] and not data['temperatures']
-            and not (equip and equip.get('total')) and not violations and not issues):
+            and not (equip and equip.get('total')) and not violations and not issues
+            and not prep_tt):
         story.append(PageBreak())
         story.append(Spacer(1, 60 * mm))
         story.append(Paragraph('No data recorded yet today.', S['section']))

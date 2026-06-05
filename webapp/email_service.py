@@ -1054,7 +1054,10 @@ def collect_daily_digest(target_date: str, checklists_meta: dict | None = None,
                 # Pastry hot display: 3rd check is informational — no alert.
                 if r.get('temp_type') == 'pastry' and n == 3:
                     continue
-                unsafe = (kind == 'cold' and v > 5) or (kind == 'hot' and v < 60)
+                # cold → >5 · room → <15 or >30 · hot → <60
+                unsafe = ((kind == 'cold' and v > 5)
+                          or (kind == 'room' and (v < 15 or v > 30))
+                          or (kind == 'hot' and v < 60))
                 if unsafe:
                     bad.append(f'{v}°C')
             if bad:

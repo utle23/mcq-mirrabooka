@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Equipment Temperature — Report{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-chart-simple me-2" style="color:#00838F"></i>Equipment Temperature Report</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.card-soft { background:#fff; border:1px solid #e8eaed; border-radius:14px; box-shadow:0 1px 4px rgba(0,0,0,.04); }
+.rep-table { border-collapse:separate; border-spacing:0; }
+.rep-table th, .rep-table td { vertical-align:middle; text-align:center; white-space:nowrap; }
+.rep-table thead th { background:#263238; color:#fff; font-size:.72rem; padding:6px 7px; position:sticky; top:0; z-index:3; }
+.rep-table thead .chk { background:#37474F; font-size:.62rem; text-transform:uppercase; }
+.rep-table thead th.today { background:#00838F; }
+.rep-table .unit-head { left:0; z-index:5; }
+.rep-unit { font-weight:700; color:#1A1A2E; text-align:left; min-width:210px; position:sticky; left:0; z-index:2; background:#fff; box-shadow:6px 0 10px rgba(0,0,0,.04); }
+.eq-kind { display:inline-block; font-size:.58rem; font-weight:800; padding:1px 7px; border-radius:999px; color:#fff; text-transform:uppercase; }
+.cell { font-weight:800; font-size:.82rem; padding:6px 8px; border-bottom:1px solid #eef0f3; }
+.cell.good { background:#e6f4ea; color:#1e4620; }
+.cell.bad  { background:#fdecea; color:#7a1f17; }
+.cell.miss { color:#c2c8cf; }
+.cell.today-col { box-shadow: inset 0 0 0 2px #00838F33; }
+.pill-stat { display:inline-block; padding:4px 12px; border-radius:999px; font-weight:800; font-size:.8rem; }
+.toggle-btn { border:1px solid #d8dde2; background:#fff; color:#444; border-radius:999px; padding:5px 16px; font-weight:700; font-size:.85rem; text-decoration:none; }
+.toggle-btn.active { background:#00838F; color:#fff; border-color:#00838F; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+  <div class="d-flex gap-2 align-items-center">
+    <a href="/equipment/today" class="btn btn-sm text-white" style="background:#00838F"><i class="fas fa-pen me-1"></i>Enter Today</a>
+    <a href="/equipment/report?period=week"  class="toggle-btn {% if period=='week' %}active{% endif %}">Week</a>
+    <a href="/equipment/report?period=month" class="toggle-btn {% if period=='month' %}active{% endif %}">Month</a>
+  </div>
+  <div class="d-flex gap-2 align-items-center">
+    <a href="/equipment/report?period={{ period }}&ref={{ prev_ref }}" class="btn btn-sm btn-outline-secondary"><i class="fas fa-chevron-left"></i></a>
+    <span class="fw-bold">{{ label }}</span>
+    <a href="/equipment/report?period={{ period }}&ref={{ next_ref }}" class="btn btn-sm btn-outline-secondary"><i class="fas fa-chevron-right"></i></a>
+  </div>
+</div>
+
+<div class="d-flex gap-2 mb-3 flex-wrap">
+  <span class="pill-stat" style="background:#e8f5e9;color:#1b5e20">{{ total_recorded }} readings recorded</span>
+  <span class="pill-stat" style="background:{% if total_alerts %}#fdecea;color:#b71c1c{% else %}#e8f5e9;color:#1b5e20{% endif %}">{{ total_alerts }} out of range</span>
+</div>
+
+<div class="card-soft p-2">
+  <div class="table-responsive">
+    <table class="table rep-table mb-0">
+      <thead>
+        <tr>
+          <th class="text-start unit-head" rowspan="2">Equipment</th>
+          {% for d in dates %}
+          <th colspan="{{ check_types|length }}" class="{% if date_iso[loop.index0]==today_iso %}today{% endif %}">
+            {{ d.strftime('%a')[:2] }}<br><span style="font-weight:400;font-size:.66rem">{{ d.strftime('%d/%m') }}</span>
+          </th>
+          {% endfor %}
+        </tr>
+        <tr>
+          {% for d in dates %}{% set di = loop.index0 %}
+            {% for check in check_types %}
+            <th class="chk {% if date_iso[di]==today_iso %}today{% endif %}">{{ check.short }}</th>
+            {% endfor %}
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in grid %}
+        <tr>
+          <td class="rep-unit">{{ row.unit.name }}
+            <span class="eq-kind" style="background:{{ row.meta.color }}">{{ row.meta.label }}</span>
+          </td>
+          {% for cell in row.cells %}
+            {% for check in check_types %}
+            {% set rd = cell.checks[check.key] %}
+            <td class="cell {% if rd.temp is none %}miss{% elif rd.unsafe %}bad{% else %}good{% endif %} {% if cell.date==today_iso %}today-col{% endif %}">
+              {% if rd.temp is not none %}{{ '%g'|format(rd.temp) }}°{% else %}—{% endif %}
+            </td>
+            {% endfor %}
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<div class="text-muted small mt-2"><i class="fas fa-circle-info me-1"></i>Read-only history. <strong>{{ check_types[0].short }}</strong> = morning check, <strong>{{ check_types[1].short }}</strong> = closing check. Green = in range, red = out of range, — = not recorded.</div>
+{% endblock %}

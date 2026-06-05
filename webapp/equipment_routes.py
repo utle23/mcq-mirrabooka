@@ -261,70 +261,181 @@ def collect_equipment_for_date(conn, date_str):
 
 # ── Routes ───────────────────────────────────────────────────────────────────
 
+def _cell_checks(u, r):
+    """Build the {morning,closing} reading dict for one unit on one date."""
+    checks = {}
+    for check in CHECK_TYPES:
+        temp_col, by_col, at_col = _check_columns(check['key'])
+        legacy_temp = r['temp'] if r and check['key'] == 'morning' else None
+        temp = r[temp_col] if r and temp_col in r.keys() else None
+        by = r[by_col] if r and by_col in r.keys() else ''
+        at = r[at_col] if r and at_col in r.keys() else ''
+        if check['key'] == 'morning':
+            if temp is None:
+                temp = legacy_temp
+            if not by and r:
+                by = r['recorded_by'] if 'recorded_by' in r.keys() else ''
+            if not at and r:
+                at = r['recorded_at'] if 'recorded_at' in r.keys() else ''
+        checks[check['key']] = _reading(temp, u['kind'], by, at)
+    return checks
+
+
 @equipment.route('/')
+@equipment.route('/today')
 @_login_required
-def index():
-    ws = _monday(date.today()).isoformat()
-    return redirect(url_for('equipment.week_view', week_start=ws))
+def today_view():
+    """Daily entry screen — only TODAY's morning + closing readings."""
+    today = date.today()
+    today_iso = today.isoformat()
+    with _get_db() as conn:
+        units = [dict(r) for r in conn.execute(
+            'SELECT * FROM equipment_units WHERE active=1 ORDER BY sort_order, id').fetchall()]
+        rows = conn.execute(
+            'SELECT * FROM equipment_temp_readings WHERE date=?', (today_iso,)).fetchall()
+    rmap = {r['unit_id']: r for r in rows}
+    grid = []
+    for u in units:
+        grid.append({'unit': u, 'checks': _cell_checks(u, rmap.get(u['id'])),
+                     'meta': KIND_META.get(u['kind'], KIND_META['cold'])})
+    return render_template('equipment_today.html',
+        grid=grid, units=units, kind_meta=KIND_META,
+        today=today, today_iso=today_iso, day_name=today.strftime('%A'),
+        check_types=CHECK_TYPES, staff=_get_staff(), is_admin=_is_admin())
 
-@equipment.route('/week/<week_start>')
+
+@equipment.route('/save-today', methods=['POST'])
 @_login_required
-def week_view(week_start):
+def save_today():
+    """Save only the posted date's readings (non-destructive to other days)."""
+    today_iso = (request.form.get('date') or date.today().isoformat()).strip()
+    recorded_by = request.form.get('recorded_by', '').strip()
+    now = datetime.now().strftime('%Y-%m-%d %H:%M')
+    alerts = []
+    with _get_db() as conn:
+        units = {r['id']: r for r in conn.execute(
+            'SELECT * FROM equipment_units WHERE active=1').fetchall()}
+        for uid in units:
+            conn.execute('INSERT OR IGNORE INTO equipment_temp_readings (unit_id, date) VALUES (?,?)',
+                         (uid, today_iso))
+            for check in CHECK_TYPES:
+                raw = request.form.get(f'{check["key"]}_temp_{uid}', '').strip()
+                temp_col, by_col, at_col = _check_columns(check['key'])
+                if raw == '':
+                    conn.execute(f'''UPDATE equipment_temp_readings
+                        SET {temp_col}=NULL, {by_col}=NULL, {at_col}=NULL
+                        WHERE unit_id=? AND date=?''', (uid, today_iso))
+                    if check['key'] == 'morning':
+                        conn.execute('''UPDATE equipment_temp_readings
+                            SET temp=NULL, recorded_by=NULL, recorded_at=NULL
+                            WHERE unit_id=? AND date=?''', (uid, today_iso))
+                    continue
+                try:
+                    temp = float(raw)
+                except ValueError:
+                    continue
+                conn.execute(f'''UPDATE equipment_temp_readings
+                    SET {temp_col}=?, {by_col}=?, {at_col}=? WHERE unit_id=? AND date=?''',
+                    (temp, recorded_by, now, uid, today_iso))
+                if check['key'] == 'morning':
+                    conn.execute('''UPDATE equipment_temp_readings
+                        SET temp=?, recorded_by=?, recorded_at=? WHERE unit_id=? AND date=?''',
+                        (temp, recorded_by, now, uid, today_iso))
+                if is_unsafe(units[uid]['kind'], temp):
+                    alerts.append(f"{units[uid]['name']} {check['label']}: {temp:g}°C")
+            conn.execute('''DELETE FROM equipment_temp_readings
+                WHERE unit_id=? AND date=? AND morning_temp IS NULL AND closing_temp IS NULL''',
+                (uid, today_iso))
+
+    if email_service:
+        try:
+            email_service.send_notification('temperature',
+                subject=f'Equipment Temperature saved ({today_iso})',
+                lines=[f'Date: {today_iso}', f'Recorded by: {recorded_by or "-"}',
+                       'Checks: Morning + Closing',
+                       f'Out-of-range: {len(alerts)}' + (' — ' + '; '.join(alerts[:6]) if alerts else '')],
+                link_path='/equipment/today', actor=recorded_by)
+        except Exception:
+            pass
+
+    flash(f'Equipment temperatures saved for {today_iso}.'
+          + (f' ⚠️ {len(alerts)} reading(s) out of range.' if alerts else ''),
+          'warning' if alerts else 'success')
+    return redirect(url_for('equipment.today_view'))
+
+
+@equipment.route('/report')
+@_login_required
+def report_view():
+    """Read-only history — view by week or by month."""
+    period = request.args.get('period', 'week')
+    ref = request.args.get('ref', date.today().isoformat())
     try:
-        ws = datetime.strptime(week_start, '%Y-%m-%d').date()
+        refd = datetime.strptime(ref, '%Y-%m-%d').date()
     except ValueError:
-        ws = _monday(date.today())
-    ws = _monday(ws)  # snap to Monday
-    week_dates = [(ws + timedelta(days=i)) for i in range(7)]
-    week_iso = [d.isoformat() for d in week_dates]
-    today_iso = date.today().isoformat()
+        refd = date.today()
 
+    if period == 'month':
+        start = refd.replace(day=1)
+        nxt = (start.replace(year=start.year + 1, month=1) if start.month == 12
+               else start.replace(month=start.month + 1))
+        end = nxt - timedelta(days=1)
+        dates = [start + timedelta(days=i) for i in range((end - start).days + 1)]
+        prev_ref = (start - timedelta(days=1)).replace(day=1).isoformat()
+        next_ref = nxt.isoformat()
+        label = start.strftime('%B %Y')
+    else:
+        period = 'week'
+        ws = _monday(refd)
+        dates = [ws + timedelta(days=i) for i in range(7)]
+        prev_ref = (ws - timedelta(days=7)).isoformat()
+        next_ref = (ws + timedelta(days=7)).isoformat()
+        label = f"{dates[0].strftime('%d %b')} – {dates[6].strftime('%d %b %Y')}"
+
+    date_iso = [d.isoformat() for d in dates]
     with _get_db() as conn:
         units = [dict(r) for r in conn.execute(
             'SELECT * FROM equipment_units WHERE active=1 ORDER BY sort_order, id').fetchall()]
         readings = conn.execute(
-            'SELECT * FROM equipment_temp_readings '
-            'WHERE date >= ? AND date <= ?', (week_iso[0], week_iso[6])).fetchall()
-
-    # map[unit_id][date] = sqlite row with morning/closing readings
+            'SELECT * FROM equipment_temp_readings WHERE date >= ? AND date <= ?',
+            (date_iso[0], date_iso[-1])).fetchall()
     rmap = {}
     for r in readings:
         rmap.setdefault(r['unit_id'], {})[r['date']] = r
 
-    grid = []
+    grid, total_alerts, total_recorded = [], 0, 0
     for u in units:
         cells = []
-        for diso in week_iso:
-            r = rmap.get(u['id'], {}).get(diso)
-            checks = {}
-            for check in CHECK_TYPES:
-                temp_col, by_col, at_col = _check_columns(check['key'])
-                legacy_temp = r['temp'] if r and check['key'] == 'morning' else None
-                temp = r[temp_col] if r and temp_col in r.keys() else None
-                by = r[by_col] if r and by_col in r.keys() else ''
-                at = r[at_col] if r and at_col in r.keys() else ''
-                if check['key'] == 'morning':
-                    if temp is None:
-                        temp = legacy_temp
-                    if not by and r:
-                        by = r['recorded_by'] if 'recorded_by' in r.keys() else ''
-                    if not at and r:
-                        at = r['recorded_at'] if 'recorded_at' in r.keys() else ''
-                checks[check['key']] = _reading(temp, u['kind'], by, at)
+        for diso in date_iso:
+            checks = _cell_checks(u, rmap.get(u['id'], {}).get(diso))
+            for c in CHECK_TYPES:
+                rd = checks[c['key']]
+                if rd['temp'] is not None:
+                    total_recorded += 1
+                    if rd['unsafe']:
+                        total_alerts += 1
             cells.append({'date': diso, 'checks': checks,
                           'status': _combined_status({'checks': checks})})
         grid.append({'unit': u, 'cells': cells,
                      'meta': KIND_META.get(u['kind'], KIND_META['cold'])})
 
-    prev_ws = (ws - timedelta(days=7)).isoformat()
-    next_ws = (ws + timedelta(days=7)).isoformat()
+    return render_template('equipment_report.html',
+        grid=grid, dates=dates, date_iso=date_iso, period=period, ref=refd.isoformat(),
+        prev_ref=prev_ref, next_ref=next_ref, label=label, today_iso=date.today().isoformat(),
+        kind_meta=KIND_META, check_types=CHECK_TYPES, days_short=DAYS_SHORT,
+        total_alerts=total_alerts, total_recorded=total_recorded, is_admin=_is_admin())
 
-    return render_template('equipment_temp.html',
-        grid=grid, units=units, kind_meta=KIND_META,
-        week_dates=week_dates, week_iso=week_iso, days_short=DAYS_SHORT,
-        week_start=ws.isoformat(), prev_ws=prev_ws, next_ws=next_ws,
-        today_iso=today_iso, staff=_get_staff(), is_admin=_is_admin(),
-        check_types=CHECK_TYPES)
+
+@equipment.route('/index-legacy')
+@_login_required
+def index():
+    return redirect(url_for('equipment.today_view'))
+
+@equipment.route('/week/<week_start>')
+@_login_required
+def week_view(week_start):
+    """Backwards-compatible alias — the weekly grid is now the read-only report."""
+    return redirect(url_for('equipment.report_view', period='week', ref=week_start))
 
 @equipment.route('/save', methods=['POST'])
 @_login_required

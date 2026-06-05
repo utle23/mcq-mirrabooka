@@ -245,25 +245,27 @@ TEMPERATURES = {
         ],
     },
     'chef': {
-        'title': 'Chef / Cold Storage Temperature Record',
+        'title': 'Chef / Food Temperature Record',
         'short': 'Chef',
         'color': '#F44336',
         'badge': 'danger',
-        # Chef temperature record = cold storage only (per food-safety rule).
-        # All items must hold <= 5°C.
+        # Chef record mixes three holding rules:
+        #   cold → must hold <= 5°C
+        #   room → ambient items, safe between 15°C and 30°C
+        #   hot  → must hold >= 60°C
         'foods': [
             {'name': 'Cooked Beef',         'kind': 'cold'},
             {'name': 'Raw Beef',            'kind': 'cold'},
             {'name': 'Cooked Beef Ball',    'kind': 'cold'},
             {'name': 'Cooked Pork',         'kind': 'cold'},
             {'name': 'Cooked Pork Ham',     'kind': 'cold'},
-            {'name': 'Pho Noodle',          'kind': 'cold'},
-            {'name': 'Rice Vermicelli Bun', 'kind': 'cold'},
-            {'name': 'Pork Chop',           'kind': 'cold'},
-            {'name': 'Egg',                 'kind': 'cold'},
+            {'name': 'Pho Noodle',          'kind': 'room'},
+            {'name': 'Rice Vermicelli Bun', 'kind': 'room'},
+            {'name': 'Pork Chop',           'kind': 'hot'},
+            {'name': 'Egg',                 'kind': 'hot'},
             {'name': 'Pickled',             'kind': 'cold'},
             {'name': 'Cucumber',            'kind': 'cold'},
-            {'name': 'Lettuce',             'kind': 'cold'},
+            {'name': 'Lettuce',             'kind': 'room'},
             {'name': 'Tomato',              'kind': 'cold'},
         ],
     },
@@ -303,6 +305,29 @@ def temp_food_kind_default(temp_type, name):
     if temp_type == 'pastry':  return 'hot'
     if temp_type == 'chef':    return 'cold'
     return 'cold'   # banh_mi default
+
+# Holding rules per food kind — single source of truth for headings, badges,
+# colour-coding and out-of-zone alerts.
+#   cold → safe ≤ 5°C   ·   room → safe 15–30°C   ·   hot → safe ≥ 60°C
+TEMP_KIND_RULES = {
+    'cold': {'label': 'COLD', 'icon': 'fa-snowflake',        'rule': '5°C or below (≤ 5°C)',
+             'lo': None, 'hi': 5.0,  'badge': '#1565C0'},
+    'room': {'label': 'ROOM', 'icon': 'fa-temperature-half', 'rule': 'room temperature, 15°C to 30°C',
+             'lo': 15.0, 'hi': 30.0, 'badge': '#00897B'},
+    'hot':  {'label': 'HOT',  'icon': 'fa-fire',             'rule': '60°C or above (≥ 60°C)',
+             'lo': 60.0, 'hi': None, 'badge': '#C0392B'},
+}
+
+def temp_is_unsafe(kind, temp):
+    """True if a temperature reading is outside the safe range for its kind."""
+    if temp is None:
+        return False
+    r = TEMP_KIND_RULES.get(kind, TEMP_KIND_RULES['cold'])
+    if r['lo'] is not None and temp < r['lo']:
+        return True
+    if r['hi'] is not None and temp > r['hi']:
+        return True
+    return False
 
 STAFF = [
     'DANG, THI LAN UY', 'DOAN, THI NI', 'NGUYEN, PHU TAN',
@@ -701,6 +726,26 @@ def init_db():
                     "VALUES (?,?,?,?)",
                     (mig_marker, 'migration', 'system',
                      'Classified temp foods as hot/cold and ensured Beef Brisket on banh_mi.'))
+        except sqlite3.OperationalError:
+            pass
+
+        # Migration v2: re-classify chef foods now that some items are 'room'
+        # (Pho Noodle / Rice Vermicelli Bun / Lettuce) or 'hot' (Pork Chop / Egg).
+        try:
+            mig2 = '_mig_food_kind_v2'
+            done = conn.execute(
+                "SELECT 1 FROM audit_log WHERE action=? LIMIT 1", (mig2,)).fetchone()
+            if not done:
+                for r in conn.execute(
+                    'SELECT rowid, temp_type, food_name FROM temp_food_templates').fetchall():
+                    kind = temp_food_kind_default(r['temp_type'], r['food_name'])
+                    conn.execute('UPDATE temp_food_templates SET food_kind=? WHERE rowid=?',
+                                 (kind, r['rowid']))
+                conn.execute(
+                    "INSERT INTO audit_log (action,record_type,user_name,details) "
+                    "VALUES (?,?,?,?)",
+                    (mig2, 'migration', 'system',
+                     'Re-synced chef food kinds: added room-temp and hot items.'))
         except sqlite3.OperationalError:
             pass
 
@@ -1279,6 +1324,7 @@ def inject_globals():
         photos_required=PHOTOS_REQUIRED,
         branch=session.get('branch', ''),
         issue_categories=ISSUE_CATEGORIES,
+        temp_kind_rules=TEMP_KIND_RULES,
     )
 
 # Paths that should NOT trigger or be affected by the timeout middleware:
@@ -1866,8 +1912,7 @@ def temperature_save(temp_type):
                         f'{TEMPERATURES[temp_type]["title"]} / {temp_date}')
 
     # Out-of-zone check uses food_kind:
-    #   cold food → unsafe if temp > 5°C   (must stay at or below 5)
-    #   hot  food → unsafe if temp < 60°C  (must stay at or above 60)
+    #   cold → unsafe if > 5°C · room → unsafe if <15 or >30 · hot → unsafe if <60
     out_of_zone = []
     discarded_items = []
     for r in readings:
@@ -1878,8 +1923,7 @@ def temperature_save(temp_type):
             # Pastry hot display: the 3rd check is informational only — no alert.
             if temp_type == 'pastry' and n == 3:
                 continue
-            unsafe = (r['food_kind'] == 'cold' and tv > 5) or \
-                     (r['food_kind'] == 'hot'  and tv < 60)
+            unsafe = temp_is_unsafe(r['food_kind'], tv)
             if unsafe:
                 out_of_zone.append(
                     f'{r["food_name"]} ({r["food_kind"]}) check {n}: {tv}°C')

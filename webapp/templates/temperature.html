@@ -26,26 +26,21 @@
   Cells highlighted <span class="badge bg-danger">red</span> indicate danger zone temps.
 </div>
 
-{# Kind-aware safe-range heading: chef/banh_mi have cold storage; pastry is hot holding. #}
-{% if temp_type in ('chef', 'banh_mi') %}
-<div class="alert alert-primary py-2 mb-3 d-flex align-items-center gap-2">
-  <i class="fas fa-snowflake fa-lg"></i>
-  <div>
-    <strong>Cold storage safe range:</strong> all <span class="badge" style="background:#1565C0">COLD</span> items must be held at
-    <strong>5°C or below (≤ 5°C)</strong>. Above 5°C is unsafe — record, act, and discard if needed.
-    {% if temp_type == 'banh_mi' %}<br><span class="small">Hot items (roast/stir-fry) must stay <strong>≥ 60°C</strong>.</span>{% endif %}
+{# Adaptive safe-range legend — one instruction line per holding rule this
+   record actually uses (cold ≤5°C · room 15–30°C · hot ≥60°C). #}
+{% set kinds_here = [] %}
+{% for f in temp_data.foods %}{% if f.kind not in kinds_here %}{% set _ = kinds_here.append(f.kind) %}{% endif %}{% endfor %}
+<div class="alert alert-light border py-2 mb-3">
+  <div class="fw-bold small text-uppercase text-muted mb-2"><i class="fas fa-temperature-half me-1"></i>Safe holding ranges for this record</div>
+  {% for k in ['cold', 'room', 'hot'] %}{% if k in kinds_here %}
+  {% set m = temp_kind_rules[k] %}
+  <div class="d-flex align-items-center gap-2 mb-1">
+    <span class="kind-badge kind-{{ k }}"><i class="fas {{ m.icon }}"></i> {{ m.label }}</span>
+    <span class="small">items must be held at <strong>{{ m.rule }}</strong>.</span>
   </div>
+  {% endif %}{% endfor %}
+  {% if temp_type == 'pastry' %}<div class="small text-muted mt-1"><i class="fas fa-circle-info me-1"></i><strong>Check 3</strong> is informational only — <strong>no alert</strong> is raised for the 3rd reading.</div>{% endif %}
 </div>
-{% elif temp_type == 'pastry' %}
-<div class="alert alert-warning py-2 mb-3 d-flex align-items-center gap-2">
-  <i class="fas fa-fire fa-lg"></i>
-  <div>
-    <strong>Hot holding safe range:</strong> all <span class="badge bg-danger">HOT</span> pastry items must be held at
-    <strong>60°C or above (≥ 60°C)</strong>.
-    <span class="small d-block"><i class="fas fa-circle-info me-1"></i><strong>Check 3</strong> is informational only — <strong>no alert</strong> is raised for the 3rd reading.</span>
-  </div>
-</div>
-{% endif %}
 
 <div class="card shadow-sm">
   <div class="card-header py-2" style="background:{{ temp_data.color }}15; border-left:4px solid {{ temp_data.color }}">
@@ -130,15 +125,10 @@
             {% set er = existing_readings[i] if i < existing_readings|length else None %}
             <tr data-kind="{{ food.kind }}" class="food-row food-row-{{ food.kind }}">
               <td class="fw-semibold small" id="food-cell-{{ i }}">
-                {% if food.kind == 'hot' %}
-                <span class="kind-badge kind-hot" title="Hot food — must hold at 60°C or above">
-                  <i class="fas fa-fire"></i> HOT
+                {% set km = temp_kind_rules.get(food.kind, temp_kind_rules['cold']) %}
+                <span class="kind-badge kind-{{ food.kind }}" title="{{ km.label }} — must hold at {{ km.rule }}">
+                  <i class="fas {{ km.icon }}"></i> {{ km.label }}
                 </span>
-                {% else %}
-                <span class="kind-badge kind-cold" title="Cold food — must hold at 5°C or below">
-                  <i class="fas fa-snowflake"></i> COLD
-                </span>
-                {% endif %}
                 {% if is_admin %}
                 <span class="food-label ms-1" id="food-label-{{ i }}"
                       title="Click to edit food item"
@@ -270,11 +260,13 @@
 }
 .kind-badge.kind-hot  { background: #FFE0B2; color: #C0392B; border: 1px solid #FFAB91; }
 .kind-badge.kind-cold { background: #E1F5FE; color: #1565C0; border: 1px solid #81D4FA; }
+.kind-badge.kind-room { background: #E0F2F1; color: #00897B; border: 1px solid #80CBC4; }
 .kind-badge i { font-size: 0.62rem; margin-right: 2px; }
 
 /* Subtle row tint by kind */
 .food-row-hot  > td:first-child { box-shadow: inset 3px 0 0 #FFAB91; }
 .food-row-cold > td:first-child { box-shadow: inset 3px 0 0 #81D4FA; }
+.food-row-room > td:first-child { box-shadow: inset 3px 0 0 #80CBC4; }
 
 /* Note toggle button */
 .note-toggle {
@@ -317,6 +309,10 @@ function colorTemp(input){
     safe = v >= 60;
     input.title = safe ? 'OK · hot food at safe holding temperature'
                        : 'DANGER · hot food below 60°C';
+  } else if (kind === 'room') {
+    safe = v >= 15 && v <= 30;
+    input.title = safe ? 'OK · room temperature (15–30°C)'
+                       : 'DANGER · outside room range 15–30°C';
   } else {
     safe = v <= 5;
     input.title = safe ? 'OK · cold food at safe storage temperature'

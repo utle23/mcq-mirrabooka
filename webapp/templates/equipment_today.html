@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Equipment Temperature — Today{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-temperature-half me-2" style="color:#00838F"></i>Equipment Temperature — Today</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.card-soft { background:#fff; border:1px solid #e8eaed; border-radius:14px; box-shadow:0 1px 4px rgba(0,0,0,.04); }
+.range-card { border-radius:12px; padding:12px 16px; color:#fff; }
+.legend-dot { display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:5px; vertical-align:middle; }
+.unit-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:12px; }
+.unit-card { background:#fff; border:1px solid #e8eaed; border-left:5px solid #ccc; border-radius:12px; padding:12px 14px; }
+.unit-name { font-weight:800; color:#1A1A2E; font-size:.98rem; }
+.kind-pill { display:inline-block; font-size:.6rem; font-weight:800; padding:1px 8px; border-radius:999px; color:#fff; text-transform:uppercase; letter-spacing:.04em; vertical-align:middle; }
+.unit-range { color:#8a929b; font-size:.74rem; margin:2px 0 10px; }
+.checks { display:flex; gap:10px; }
+.check-box { flex:1; }
+.check-box label { display:block; font-size:.66rem; font-weight:800; color:#566; text-transform:uppercase; letter-spacing:.03em; margin-bottom:3px; }
+.check-box label small { display:block; font-weight:500; color:#aab; text-transform:none; letter-spacing:0; }
+.check-box input { width:100%; text-align:center; border:1px solid #d8dde2; border-radius:8px; padding:8px 4px; font-weight:800; font-size:1.05rem; }
+.check-box.good input { background:#e6f4ea; color:#1e4620; border-color:#aed6b8; }
+.check-box.bad  input { background:#fdecea; color:#7a1f17; border-color:#f0a9a0; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Safe-range knowledge headings -->
+<div class="row g-2 mb-3">
+  {% for k, m in kind_meta.items() %}
+  <div class="col-md-4">
+    <div class="range-card" style="background:linear-gradient(135deg,{{ m.color }},{{ m.color }}cc)">
+      <div class="d-flex align-items-center gap-2">
+        <i class="fas {{ m.icon }} fa-lg"></i>
+        <div><div class="fw-bold">{{ m.label }}</div><div class="small">Safe range: <strong>{{ m.range }}</strong></div></div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+  <div>
+    <div class="fw-bold fs-5"><i class="fas fa-calendar-day me-1 text-muted"></i>{{ day_name }}, {{ today.strftime('%d %b %Y') }}</div>
+    <div class="text-muted small">Record each unit twice today: <strong>Morning</strong> before 10:00 AM · <strong>Closing</strong> before 6:00 PM.</div>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="/equipment/report?period=week" class="btn btn-outline-secondary btn-sm"><i class="fas fa-calendar-week me-1"></i>Weekly Report</a>
+    <a href="/equipment/report?period=month" class="btn btn-outline-secondary btn-sm"><i class="fas fa-calendar me-1"></i>Monthly Report</a>
+  </div>
+</div>
+
+<form method="POST" action="/equipment/save-today">
+<input type="hidden" name="date" value="{{ today_iso }}">
+<div class="card-soft p-3 mb-3">
+  <div class="d-flex flex-wrap gap-2 align-items-end mb-3">
+    <div>
+      <label class="form-label small fw-bold mb-1">Recorded by</label>
+      <input name="recorded_by" class="form-control form-control-sm" list="eq-staff" style="width:220px" placeholder="Staff name">
+      <datalist id="eq-staff">{% for s in staff %}<option value="{{ s }}">{% endfor %}</datalist>
+    </div>
+    <button type="submit" class="btn text-white ms-auto" style="background:#00838F"><i class="fas fa-save me-1"></i>Save Today</button>
+  </div>
+  <div class="unit-grid">
+    {% for row in grid %}
+    <div class="unit-card" style="border-left-color:{{ row.meta.color }}">
+      <div class="unit-name">{{ row.unit.name }}
+        <span class="kind-pill" style="background:{{ row.meta.color }}">{{ row.meta.label }}</span>
+      </div>
+      <div class="unit-range">Safe: {{ row.meta.range }}</div>
+      <div class="checks">
+        {% for check in check_types %}
+        {% set rd = row.checks[check.key] %}
+        <div class="check-box {% if rd.temp is not none %}{% if rd.unsafe %}bad{% else %}good{% endif %}{% endif %}">
+          <label>{{ check.label }}<small>{{ check.deadline }}</small></label>
+          <input type="number" step="0.1" name="{{ check.key }}_temp_{{ row.unit.id }}"
+                 data-lo="{{ row.meta.lo }}" data-hi="{{ row.meta.hi if row.meta.hi is not none else '' }}"
+                 value="{{ '%g'|format(rd.temp) if rd.temp is not none else '' }}"
+                 placeholder="°C" oninput="colorEq(this)">
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+</form>
+
+{% if is_admin %}
+<div class="card-soft p-3">
+  <h6 class="fw-bold mb-3"><i class="fas fa-screwdriver-wrench me-1"></i>Manage Equipment <span class="text-muted small">(admin)</span></h6>
+  <form method="POST" action="/equipment/unit/add" class="d-flex gap-2 flex-wrap mb-3">
+    <input name="name" class="form-control form-control-sm" style="flex:1 1 220px" placeholder="New equipment name (e.g. Cold Unit 8 – Salad)" required>
+    <select name="kind" class="form-select form-select-sm" style="max-width:170px">
+      {% for k, m in kind_meta.items() %}<option value="{{ k }}">{{ m.label }}</option>{% endfor %}
+    </select>
+    <button class="btn btn-sm btn-success"><i class="fas fa-plus me-1"></i>Add</button>
+  </form>
+  {% for u in units %}
+  <div class="d-flex gap-2 align-items-center mb-2 flex-wrap">
+    <form method="POST" action="/equipment/unit/{{ u.id }}/update" class="d-flex gap-2 align-items-center flex-wrap w-100">
+      <input name="name" value="{{ u.name }}" class="form-control form-control-sm" style="flex:1 1 220px">
+      <select name="kind" class="form-select form-select-sm" style="max-width:170px">
+        {% for k, m in kind_meta.items() %}<option value="{{ k }}" {% if u.kind==k %}selected{% endif %}>{{ m.label }}</option>{% endfor %}
+      </select>
+      <select name="active" class="form-select form-select-sm" style="max-width:110px">
+        <option value="1" {% if u.active %}selected{% endif %}>Active</option>
+        <option value="0" {% if not u.active %}selected{% endif %}>Hidden</option>
+      </select>
+      <button class="btn btn-sm btn-outline-primary">Save</button>
+    </form>
+    <form method="POST" action="/equipment/unit/{{ u.id }}/delete" onsubmit="return confirm('Delete {{ u.name }} and all its readings?')">
+      <button class="btn btn-sm btn-outline-danger"><i class="fas fa-trash"></i></button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function colorEq(input){
+  const box = input.closest('.check-box');
+  if (box) box.classList.remove('good','bad');
+  if (input.value === '' || isNaN(parseFloat(input.value))) return;
+  const v = parseFloat(input.value);
+  const lo = parseFloat(input.dataset.lo);
+  const hi = input.dataset.hi === '' ? null : parseFloat(input.dataset.hi);
+  let unsafe = (hi === null) ? v < lo : (v < lo || v > hi);
+  if (box) box.classList.add(unsafe ? 'bad' : 'good');
+}
+</script>
+{% endblock %}
