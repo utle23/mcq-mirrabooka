@@ -76,6 +76,7 @@ JACCUS_SUPPLIER_SEED = {
     'cc_emails':      'Mirrabooka@mcqinternational.com',
     'delivery_days':  'WED,FRI',
     'cafe_name':      'MCQ Vietnamese Street Food — MIRRABOOKA',
+    'cafe_address':   'Shop MM4/43 Yirrigan Dr, Mirrabooka WA 6061',
     'cafe_contacts':  '0433 916 386 — Kate\n0449 624 146 — Tommy',
     'notes':          '',
 }
@@ -122,6 +123,7 @@ def init_packaging(db_path: str):
                 cc_emails     TEXT NOT NULL DEFAULT '',
                 delivery_days TEXT NOT NULL DEFAULT '',
                 cafe_name     TEXT NOT NULL DEFAULT 'MCQ Vietnamese Street Food — MIRRABOOKA',
+                cafe_address  TEXT NOT NULL DEFAULT '',
                 cafe_contacts TEXT NOT NULL DEFAULT '',
                 notes         TEXT NOT NULL DEFAULT '',
                 active        INTEGER NOT NULL DEFAULT 1,
@@ -151,17 +153,26 @@ def init_packaging(db_path: str):
             );
         ''')
 
+        # Migration: add cafe_address to pre-existing supplier tables.
+        cols = [r['name'] for r in c.execute("PRAGMA table_info(packaging_suppliers)").fetchall()]
+        if 'cafe_address' not in cols:
+            c.execute("ALTER TABLE packaging_suppliers ADD COLUMN cafe_address TEXT NOT NULL DEFAULT ''")
+        # Backfill the MCQ Mirrabooka delivery address where it's still blank.
+        c.execute("UPDATE packaging_suppliers SET cafe_address=? WHERE COALESCE(cafe_address,'')=''",
+                  (JACCUS_SUPPLIER_SEED['cafe_address'],))
+
         # Seed Jaccus if no suppliers exist yet
         if c.execute('SELECT COUNT(*) c FROM packaging_suppliers').fetchone()['c'] == 0:
             cur = c.execute('''INSERT INTO packaging_suppliers
-                (name, email, phone, cc_emails, delivery_days, cafe_name, cafe_contacts)
-                VALUES (?,?,?,?,?,?,?)''',
+                (name, email, phone, cc_emails, delivery_days, cafe_name, cafe_address, cafe_contacts)
+                VALUES (?,?,?,?,?,?,?,?)''',
                 (JACCUS_SUPPLIER_SEED['name'],
                  JACCUS_SUPPLIER_SEED['email'],
                  JACCUS_SUPPLIER_SEED['phone'],
                  JACCUS_SUPPLIER_SEED['cc_emails'],
                  JACCUS_SUPPLIER_SEED['delivery_days'],
                  JACCUS_SUPPLIER_SEED['cafe_name'],
+                 JACCUS_SUPPLIER_SEED['cafe_address'],
                  JACCUS_SUPPLIER_SEED['cafe_contacts']))
             sid = cur.lastrowid
             for i, (code, en, vi, unit, qty) in enumerate(JACCUS_ITEMS_SEED):
@@ -212,17 +223,22 @@ def _compose_order(supplier: dict, items_with_qty: list[dict],
     ASCII-table layout when the user opened the draft."""
     today_pretty = datetime.now().strftime('%d/%m/%Y')
     deliv_pretty = _format_delivery_date(delivery_date)
-    subject = f"MCQ Mirrabooka — Packaging order — delivery {deliv_pretty}"
+    subject = f"MCQ Restaurant Mirrabooka — Packaging order — delivery {deliv_pretty}"
 
     total_units = sum(i['qty'] for i in items_with_qty)
     line_count  = len(items_with_qty)
     s = 's' if total_units != 1 else ''
     ls = 's' if line_count != 1 else ''
 
+    cafe_address = (supplier.get('cafe_address') or '').strip()
     parts = [
         f"Hello {supplier['name']},",
         "",
         f"Please prepare the following packaging order for delivery on {deliv_pretty}.",
+    ]
+    if cafe_address:
+        parts.append(f"Deliver to: {supplier.get('cafe_name') or 'MCQ Restaurant Mirrabooka'} — {cafe_address}")
+    parts += [
         "",
         f"ORDER LIST ({line_count} item{ls}, {total_units} unit{s}):",
         "",
@@ -243,7 +259,11 @@ def _compose_order(supplier: dict, items_with_qty: list[dict],
         "",
         f"CC: {supplier.get('cc_emails') or '-'}",
         "",
-        f"— {supplier.get('cafe_name') or 'MCQ Mirrabooka'}",
+        f"— {supplier.get('cafe_name') or 'MCQ Restaurant Mirrabooka'}",
+    ]
+    if cafe_address:
+        parts.append(cafe_address)
+    parts += [
         "Contact:",
         supplier.get('cafe_contacts') or '-',
         "",
@@ -497,7 +517,7 @@ def supplier_edit(sid):
     with _conn() as c:
         c.execute('''UPDATE packaging_suppliers SET
             name=?, email=?, phone=?, cc_emails=?, delivery_days=?,
-            cafe_name=?, cafe_contacts=?, notes=?
+            cafe_name=?, cafe_address=?, cafe_contacts=?, notes=?
             WHERE id=?''',
             (name,
              request.form.get('email', '').strip(),
@@ -505,6 +525,7 @@ def supplier_edit(sid):
              request.form.get('cc_emails', '').strip(),
              request.form.get('delivery_days', '').strip().upper(),
              request.form.get('cafe_name', '').strip(),
+             request.form.get('cafe_address', '').strip(),
              request.form.get('cafe_contacts', '').strip(),
              request.form.get('notes', '').strip(),
              sid))

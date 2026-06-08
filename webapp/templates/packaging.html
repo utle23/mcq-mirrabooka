@@ -142,6 +142,7 @@
     <div class="text-end" style="font-size:0.85rem;opacity:.92">
       <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:.1em;opacity:.7">From</div>
       <div class="fw-semibold">{{ supplier.cafe_name }}</div>
+      {% if supplier.cafe_address %}<div style="font-size:0.8rem;opacity:.85">{{ supplier.cafe_address }}</div>{% endif %}
       <pre style="font-family:inherit;font-size:0.85rem;color:#FFE082;margin:0;white-space:pre-line">{{ supplier.cafe_contacts }}</pre>
     </div>
   </div>
@@ -316,6 +317,10 @@
               <input type="text" name="cafe_name" class="form-control form-control-sm" value="{{ supplier.cafe_name }}">
             </div>
             <div class="col-md-6">
+              <label class="form-label small fw-semibold">Delivery address (shown in email)</label>
+              <input type="text" name="cafe_address" class="form-control form-control-sm" value="{{ supplier.cafe_address }}">
+            </div>
+            <div class="col-md-6">
               <label class="form-label small fw-semibold">Cafe contact lines (one per line)</label>
               <textarea name="cafe_contacts" rows="3" class="form-control form-control-sm">{{ supplier.cafe_contacts }}</textarea>
             </div>
@@ -460,10 +465,20 @@ let prepareOrderPromise = null;
 let prepareOrderTimer = null;
 let prepareOrderSeq = 0;
 
+// Build a stable cache key from the form WITHOUT new URLSearchParams(FormData),
+// which throws "The string did not match the expected pattern." on iOS Safari.
+function fdKey(fd) {
+  const pairs = [];
+  for (const entry of fd.entries()) {
+    pairs.push(encodeURIComponent(entry[0]) + '=' + encodeURIComponent(entry[1]));
+  }
+  return pairs.join('&');
+}
+
 function orderContext() {
   const form = document.getElementById('orderForm');
   const fd = new FormData(form);
-  return { form, fd, key: new URLSearchParams(fd).toString() };
+  return { form, fd, key: fdKey(fd) };
 }
 
 function selectedLineCount() {
