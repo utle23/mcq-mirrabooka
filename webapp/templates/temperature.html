@@ -123,7 +123,7 @@
             {% for food in temp_data.foods %}
             {% set i = loop.index0 %}
             {% set er = existing_readings[i] if i < existing_readings|length else None %}
-            <tr data-kind="{{ food.kind }}" class="food-row food-row-{{ food.kind }}">
+            <tr data-kind="{{ food.kind }}" class="food-row food-row-{{ food.kind }}{% if er and er.get('defrosted')=='Y' %} defrosting{% endif %}">
               <td class="fw-semibold small" id="food-cell-{{ i }}">
                 {% set km = temp_kind_rules.get(food.kind, temp_kind_rules['cold']) %}
                 <span class="kind-badge kind-{{ food.kind }}" title="{{ km.label }} — must hold at {{ km.rule }}">
@@ -161,6 +161,14 @@
                         onclick="toggleFoodNote({{ i }})">
                   <i class="fas fa-comment-dots"></i>
                 </button>
+                {% if food.kind == 'cold' %}
+                <label class="defrost-toggle ms-2" title="Mark this item as defrosting — a higher temperature is expected and will not be flagged as unsafe">
+                  <input type="checkbox" name="defrosted_{{ i }}" value="Y"
+                         {% if er and er.get('defrosted')=='Y' %}checked{% endif %}
+                         onchange="toggleDefrost(this, {{ i }})">
+                  <i class="fas fa-icicles"></i> Defrosting
+                </label>
+                {% endif %}
               </td>
               {% for c in range(1,6) %}
               {% set tkey = 'c' ~ c ~ '_time' %}
@@ -268,6 +276,12 @@
 .food-row-hot  > td:first-child { box-shadow: inset 3px 0 0 #FFAB91; }
 .food-row-cold > td:first-child { box-shadow: inset 3px 0 0 #81D4FA; }
 .food-row-room > td:first-child { box-shadow: inset 3px 0 0 #80CBC4; }
+.defrost-toggle { display:inline-flex; align-items:center; gap:3px; font-size:.7rem; font-weight:700;
+  color:#1565C0; cursor:pointer; padding:1px 8px; border:1px solid #90caf9; border-radius:999px;
+  background:#e3f2fd; user-select:none; white-space:nowrap; }
+.defrost-toggle input { margin:0; cursor:pointer; }
+.food-row.defrosting { background:#eef6ff; }
+.food-row.defrosting > td:first-child { box-shadow: inset 3px 0 0 #2196F3; }
 
 /* Note toggle button */
 .note-toggle {
@@ -298,6 +312,14 @@ function colorTemp(input){
   }
   const kind = input.dataset.kind || 'cold';
   const check = parseInt(input.dataset.check || '0');
+  // Defrosting item: a higher temperature is expected — never flag it red.
+  const row = input.closest('tr');
+  if (row && row.classList.contains('defrosting')) {
+    input.style.background = '#e3f2fd';
+    input.style.color = '#0b5394';
+    input.title = 'Defrosting — higher temperature expected (not flagged)';
+    return;
+  }
   // Pastry hot display: the 3rd check is informational only — never flag it.
   if (TEMP_TYPE === 'pastry' && check === 3) {
     input.style.background = '#fff3cd';
@@ -330,6 +352,15 @@ function colorTemp(input){
 document.addEventListener('DOMContentLoaded', ()=>{
   document.querySelectorAll('.temp-input').forEach(colorTemp);
 });
+
+// Toggle the per-food "Defrosting" state and recolour its readings.
+function toggleDefrost(cb, i) {
+  const cell = document.getElementById('food-cell-' + i);
+  const row = cell ? cell.closest('tr') : null;
+  if (!row) return;
+  row.classList.toggle('defrosting', cb.checked);
+  row.querySelectorAll('.temp-input').forEach(colorTemp);
+}
 
 function toggleFoodNote(i) {
   const row = document.getElementById('food-note-row-' + i);

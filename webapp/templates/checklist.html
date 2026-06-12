@@ -56,15 +56,29 @@
       <input type="hidden" name="section" value="{{ section }}">
 
       <div class="row g-3 mb-3">
+        {% set resp_parts = ((existing.responsible if existing else '') or '').split(' & ') %}
+        {% set resp1 = resp_parts[0] if (resp_parts and resp_parts[0]) else '' %}
+        {% set resp2 = resp_parts[1] if (resp_parts|length > 1) else '' %}
         <div class="col-md-6">
-          <label class="form-label fw-semibold">Responsible Person</label>
+          <label class="form-label fw-semibold">Responsible Person{% if chk_type == 'banh_mi' %} 1{% endif %}</label>
           <select name="responsible" class="form-select">
             <option value="">— Select staff —</option>
             {% for s in staff %}
-            <option value="{{ s }}" {% if existing and existing.responsible==s %}selected{% endif %}>{{ s }}</option>
+            <option value="{{ s }}" {% if resp1==s %}selected{% endif %}>{{ s }}</option>
             {% endfor %}
           </select>
         </div>
+        {% if chk_type == 'banh_mi' %}
+        <div class="col-md-6">
+          <label class="form-label fw-semibold">Responsible Person 2 <span class="text-muted small fw-normal">(optional)</span></label>
+          <select name="responsible2" class="form-select">
+            <option value="">— Select staff —</option>
+            {% for s in staff %}
+            <option value="{{ s }}" {% if resp2==s %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endif %}
         <div class="col-md-6">
           <label class="form-label fw-semibold">Submitted by</label>
           <select name="submitted_by" class="form-select" required>

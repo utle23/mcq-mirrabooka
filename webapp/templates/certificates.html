@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Food Safety Certificates{% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-certificate me-2" style="color:#2E7D32"></i>Food Safety Certificates</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.card-soft { background:#fff; border:1px solid #e8eaed; border-radius:14px; box-shadow:0 1px 4px rgba(0,0,0,.05); }
+.cert-card { border:1px solid #e8eaed; border-radius:12px; padding:12px 14px; background:#fff; }
+.cert-thumb { width:46px; height:46px; border-radius:8px; object-fit:cover; border:1px solid #e0e0e0; background:#f5f5f5; }
+.cert-pdf { width:46px; height:46px; border-radius:8px; display:flex; align-items:center; justify-content:center; background:#fdecea; color:#c62828; font-size:1.2rem; }
+.exp-badge { font-size:.68rem; font-weight:800; padding:2px 9px; border-radius:999px; }
+.staff-block { border-left:4px solid #2E7D32; }
+.empty-state { background:#f7f9fb; border:1px dashed #ccd; border-radius:10px; padding:24px; text-align:center; color:#999; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row g-3 mb-3">
+  <div class="col-6 col-md-3"><div class="card-soft p-3 text-center"><div class="text-muted small">Staff with cert</div><div class="fs-3 fw-bold text-success">{{ with_cert }}/{{ total_staff }}</div></div></div>
+</div>
+
+<!-- Upload -->
+<div class="card-soft p-3 mb-4">
+  <h6 class="fw-bold mb-3"><i class="fas fa-cloud-arrow-up me-1"></i>Upload a Certificate</h6>
+  <form method="POST" action="/admin/certificates/upload" enctype="multipart/form-data" class="row g-2 align-items-end">
+    <div class="col-md-3">
+      <label class="form-label small fw-semibold mb-1">Staff member *</label>
+      <select name="staff_name" class="form-select form-select-sm" required>
+        <option value="">— Select staff —</option>
+        {% for s in staff %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label small fw-semibold mb-1">Certificate type</label>
+      <input name="cert_type" class="form-control form-control-sm" value="Food Safety Certificate">
+    </div>
+    <div class="col-md-2">
+      <label class="form-label small fw-semibold mb-1">Expiry date</label>
+      <input type="date" name="expiry_date" class="form-control form-control-sm">
+    </div>
+    <div class="col-md-2">
+      <label class="form-label small fw-semibold mb-1">File (image/PDF) *</label>
+      <input type="file" name="certificate" accept="image/*,application/pdf" class="form-control form-control-sm" required>
+    </div>
+    <div class="col-md-2">
+      <button class="btn btn-sm w-100 text-white" style="background:#2E7D32"><i class="fas fa-upload me-1"></i>Upload</button>
+    </div>
+    <div class="col-12">
+      <input name="notes" class="form-control form-control-sm mt-1" placeholder="Notes (optional) — e.g. issuing body, certificate number">
+    </div>
+  </form>
+</div>
+
+<!-- Certificates by staff -->
+{% if not by_staff %}
+<div class="empty-state"><i class="fas fa-certificate fa-2x mb-2 d-block opacity-25"></i>No certificates uploaded yet. Select a staff member above and upload their certificate.</div>
+{% else %}
+{% for staff_name, certs in by_staff.items() %}
+<div class="card-soft p-3 mb-3 staff-block">
+  <div class="fw-bold mb-2"><i class="fas fa-user me-1 text-success"></i>{{ staff_name }}
+    <span class="text-muted small">· {{ certs|length }} file(s)</span>
+  </div>
+  {% for c in certs %}
+  <div class="cert-card d-flex align-items-center gap-3 mb-2">
+    <a href="/admin/certificate/{{ c.id }}/file" target="_blank">
+      {% if c.is_pdf %}<div class="cert-pdf"><i class="fas fa-file-pdf"></i></div>
+      {% else %}<img src="/admin/certificate/{{ c.id }}/file" class="cert-thumb" alt="cert">{% endif %}
+    </a>
+    <div class="flex-grow-1">
+      <div class="fw-semibold">{{ c.cert_type }}</div>
+      <div class="text-muted small">
+        Uploaded {{ c.uploaded_at[:16] }}{% if c.uploaded_by %} by {{ c.uploaded_by }}{% endif %}
+        {% if c.notes %} · {{ c.notes }}{% endif %}
+      </div>
+    </div>
+    <div class="text-end">
+      {% if c.expiry_date %}
+        {% if c.expired %}<span class="exp-badge bg-danger text-white">Expired {{ c.expiry_date }}</span>
+        {% elif c.expiring_soon %}<span class="exp-badge" style="background:#FFF3CD;color:#7a5b00">Expires {{ c.expiry_date }}</span>
+        {% else %}<span class="exp-badge bg-success text-white">Valid to {{ c.expiry_date }}</span>{% endif %}
+      {% else %}<span class="text-muted small">No expiry</span>{% endif %}
+    </div>
+    <div class="d-flex gap-1">
+      <a href="/admin/certificate/{{ c.id }}/file" download class="btn btn-sm btn-outline-secondary" title="Download"><i class="fas fa-download"></i></a>
+      <form method="POST" action="/admin/certificate/{{ c.id }}/delete" onsubmit="return confirm('Delete this certificate?')">
+        <button class="btn btn-sm btn-outline-danger" title="Delete"><i class="fas fa-trash"></i></button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}

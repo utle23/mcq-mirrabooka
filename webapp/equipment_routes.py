@@ -114,10 +114,12 @@ def _check_columns(check_type):
             f'{check_type}_recorded_at')
 
 
-def _reading(temp, kind, recorded_by='', recorded_at=''):
+def _reading(temp, kind, recorded_by='', recorded_at='', defrosted=False):
+    # A unit being defrosted is expected to run warm — never flag it unsafe.
     return {
         'temp': temp,
-        'unsafe': is_unsafe(kind, temp),
+        'unsafe': False if defrosted else is_unsafe(kind, temp),
+        'defrosted': bool(defrosted),
         'recorded_by': recorded_by or '',
         'recorded_at': recorded_at or '',
     }
@@ -186,6 +188,7 @@ def init_equipment_tables(db_path):
             ('closing_temp', "ALTER TABLE equipment_temp_readings ADD COLUMN closing_temp REAL"),
             ('closing_recorded_by', "ALTER TABLE equipment_temp_readings ADD COLUMN closing_recorded_by TEXT"),
             ('closing_recorded_at', "ALTER TABLE equipment_temp_readings ADD COLUMN closing_recorded_at TEXT"),
+            ('defrosted', "ALTER TABLE equipment_temp_readings ADD COLUMN defrosted TEXT DEFAULT 'N'"),
         ]:
             try:
                 conn.execute(ddl)
@@ -219,6 +222,7 @@ def collect_equipment_for_date(conn, date_str):
     out, recorded, alerts, missing, missing_due, recorded_by = [], 0, 0, 0, 0, ''
     for u in units:
         r = by_unit.get(u['id'])
+        defrosted = _row_defrosted(r)
         checks = {}
         for check in CHECK_TYPES:
             temp_col, by_col, at_col = _check_columns(check['key'])
@@ -233,7 +237,7 @@ def collect_equipment_for_date(conn, date_str):
                     by = r['recorded_by'] if 'recorded_by' in r.keys() else ''
                 if not at and r:
                     at = r['recorded_at'] if 'recorded_at' in r.keys() else ''
-            checks[check['key']] = _reading(temp, u['kind'], by, at)
+            checks[check['key']] = _reading(temp, u['kind'], by, at, defrosted=defrosted)
             if temp is None:
                 missing += 1
                 if check['key'] in due_keys:
@@ -245,6 +249,7 @@ def collect_equipment_for_date(conn, date_str):
                 if checks[check['key']]['unsafe']:
                     alerts += 1
         unit = {'name': u['name'], 'kind': u['kind'], 'checks': checks,
+                'defrosted': defrosted,
                 'range': KIND_META.get(u['kind'], {}).get('range', '')}
         unit['status'] = _combined_status(unit)
         # Legacy convenience fields for callers that have not been updated yet.
@@ -261,8 +266,13 @@ def collect_equipment_for_date(conn, date_str):
 
 # ── Routes ───────────────────────────────────────────────────────────────────
 
+def _row_defrosted(r):
+    return bool(r and 'defrosted' in r.keys() and (r['defrosted'] or 'N').upper() == 'Y')
+
+
 def _cell_checks(u, r):
     """Build the {morning,closing} reading dict for one unit on one date."""
+    defrosted = _row_defrosted(r)
     checks = {}
     for check in CHECK_TYPES:
         temp_col, by_col, at_col = _check_columns(check['key'])
@@ -277,7 +287,7 @@ def _cell_checks(u, r):
                 by = r['recorded_by'] if 'recorded_by' in r.keys() else ''
             if not at and r:
                 at = r['recorded_at'] if 'recorded_at' in r.keys() else ''
-        checks[check['key']] = _reading(temp, u['kind'], by, at)
+        checks[check['key']] = _reading(temp, u['kind'], by, at, defrosted=defrosted)
     return checks
 
 
@@ -296,7 +306,9 @@ def today_view():
     rmap = {r['unit_id']: r for r in rows}
     grid = []
     for u in units:
-        grid.append({'unit': u, 'checks': _cell_checks(u, rmap.get(u['id'])),
+        r = rmap.get(u['id'])
+        grid.append({'unit': u, 'checks': _cell_checks(u, r),
+                     'defrosted': _row_defrosted(r),
                      'meta': KIND_META.get(u['kind'], KIND_META['cold'])})
     return render_template('equipment_today.html',
         grid=grid, units=units, kind_meta=KIND_META,
@@ -319,6 +331,10 @@ def save_today():
         for uid in units:
             conn.execute('INSERT OR IGNORE INTO equipment_temp_readings (unit_id, date) VALUES (?,?)',
                          (uid, today_iso))
+            # Defrosting flag for this unit today (cold/freezer units only).
+            defrosted = 'Y' if request.form.get(f'defrosted_{uid}', '') == 'Y' else 'N'
+            conn.execute('UPDATE equipment_temp_readings SET defrosted=? WHERE unit_id=? AND date=?',
+                         (defrosted, uid, today_iso))
             for check in CHECK_TYPES:
                 raw = request.form.get(f'{check["key"]}_temp_{uid}', '').strip()
                 temp_col, by_col, at_col = _check_columns(check['key'])
@@ -343,10 +359,12 @@ def save_today():
                     conn.execute('''UPDATE equipment_temp_readings
                         SET temp=?, recorded_by=?, recorded_at=? WHERE unit_id=? AND date=?''',
                         (temp, recorded_by, now, uid, today_iso))
-                if is_unsafe(units[uid]['kind'], temp):
+                if defrosted != 'Y' and is_unsafe(units[uid]['kind'], temp):
                     alerts.append(f"{units[uid]['name']} {check['label']}: {temp:g}°C")
+            # Drop a fully-empty row unless it's flagged defrosting (keep the flag).
             conn.execute('''DELETE FROM equipment_temp_readings
-                WHERE unit_id=? AND date=? AND morning_temp IS NULL AND closing_temp IS NULL''',
+                WHERE unit_id=? AND date=? AND morning_temp IS NULL AND closing_temp IS NULL
+                  AND COALESCE(defrosted,'N')<>'Y' ''',
                 (uid, today_iso))
 
     if email_service:

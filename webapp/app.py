@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_file, send_from_directory, flash
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_file, send_from_directory, flash, abort
 from functools import wraps
 import sqlite3, os, json, calendar, uuid
 from datetime import datetime, date, timedelta
@@ -544,6 +544,17 @@ def init_db():
                 active     INTEGER DEFAULT 1,
                 created_at TEXT DEFAULT (datetime('now','localtime'))
             );
+            CREATE TABLE IF NOT EXISTS staff_certificates (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                staff_name    TEXT NOT NULL,
+                cert_type     TEXT DEFAULT 'Food Safety Certificate',
+                filename      TEXT NOT NULL,
+                original_name TEXT,
+                expiry_date   TEXT,
+                notes         TEXT,
+                uploaded_by   TEXT,
+                uploaded_at   TEXT DEFAULT (datetime('now','localtime'))
+            );
             CREATE TABLE IF NOT EXISTS checklist_photos (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id    INTEGER NOT NULL REFERENCES checklist_sessions(id) ON DELETE CASCADE,
@@ -672,6 +683,12 @@ def init_db():
         # Migrate: per-food notes column on the reading row.
         try:
             conn.execute("ALTER TABLE temp_readings ADD COLUMN notes TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
+        # Migrate: 'defrosting' flag for cold items being thawed (high temp is
+        # then expected, so it is not treated as an out-of-zone alert).
+        try:
+            conn.execute("ALTER TABLE temp_readings ADD COLUMN defrosted TEXT DEFAULT 'N'")
         except sqlite3.OperationalError:
             pass
         # Seed from CHECKLISTS if empty
@@ -1605,6 +1622,10 @@ def checklist_save(chk_type):
     chk_date       = request.form.get('date', date.today().isoformat())
     section        = request.form.get('section', 'opening')
     responsible    = request.form.get('responsible', '')
+    # Banh Mi station can have two people responsible — combine into one field.
+    responsible2   = request.form.get('responsible2', '').strip()
+    if responsible2 and responsible2 != responsible.strip():
+        responsible = ' & '.join([p for p in (responsible.strip(), responsible2) if p])
     submitted_by   = request.form.get('submitted_by', '')
     general_done_by = request.form.get('general_done_by', '')
     manager_submit = request.form.get('manager_submit', '')
@@ -1884,6 +1905,7 @@ def temperature_save(temp_type):
             'c4_time': request.form.get(f'c4_time_{i}',''), 'c4_temp': p(request.form.get(f'c4_temp_{i}','')),
             'c5_time': request.form.get(f'c5_time_{i}',''), 'c5_temp': p(request.form.get(f'c5_temp_{i}','')),
             'discarded': request.form.get(f'discarded_{i}', 'N'),
+            'defrosted': request.form.get(f'defrosted_{i}', 'N'),
             'notes':     request.form.get(f'food_notes_{i}', '').strip(),
         })
 
@@ -1903,11 +1925,11 @@ def temperature_save(temp_type):
             sid = cur.lastrowid
         for r in readings:
             conn.execute(
-                'INSERT INTO temp_readings (session_id,food_order,food_name,c1_time,c1_temp,c2_time,c2_temp,c3_time,c3_temp,c4_time,c4_temp,c5_time,c5_temp,discarded,notes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                'INSERT INTO temp_readings (session_id,food_order,food_name,c1_time,c1_temp,c2_time,c2_temp,c3_time,c3_temp,c4_time,c4_temp,c5_time,c5_temp,discarded,notes,defrosted) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                 (sid,r['food_order'],r['food_name'],
                  r['c1_time'],r['c1_temp'],r['c2_time'],r['c2_temp'],
                  r['c3_time'],r['c3_temp'],r['c4_time'],r['c4_temp'],
-                 r['c5_time'],r['c5_temp'],r['discarded'],r['notes']))
+                 r['c5_time'],r['c5_temp'],r['discarded'],r['notes'],r['defrosted']))
         log_action_conn(conn, 'SAVE_TEMP', 'temperature', sid, recorded_by,
                         f'{TEMPERATURES[temp_type]["title"]} / {temp_date}')
 
@@ -1916,6 +1938,9 @@ def temperature_save(temp_type):
     out_of_zone = []
     discarded_items = []
     for r in readings:
+        # A cold item being defrosted is expected to rise above range — no alert.
+        if (r.get('defrosted') or 'N').upper() == 'Y':
+            continue
         for n in range(1, 6):
             tv = r.get(f'c{n}_temp')
             if tv is None:
@@ -3190,6 +3215,93 @@ def staff_profile_update(staff_id):
              staff_id))
     flash('Profile updated.', 'success')
     return redirect(url_for('staff_profile', staff_id=staff_id))
+
+# ─── Food Safety Certificates ───────────────────────────────────────────────────
+
+CERT_EXT = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'pdf'}
+
+@app.route('/admin/certificates')
+@admin_required
+def certificates():
+    today_iso = date.today().isoformat()
+    with get_db() as conn:
+        staff = [r['name'] for r in conn.execute(
+            'SELECT name FROM staff_members WHERE active=1 ORDER BY name').fetchall()]
+        rows = [dict(r) for r in conn.execute(
+            'SELECT * FROM staff_certificates ORDER BY staff_name, uploaded_at DESC').fetchall()]
+    # Group certificates by staff member
+    by_staff = {}
+    for r in rows:
+        r['is_pdf'] = (r['filename'] or '').lower().endswith('.pdf')
+        r['expired'] = bool(r.get('expiry_date') and r['expiry_date'] < today_iso)
+        r['expiring_soon'] = bool(
+            r.get('expiry_date') and not r['expired']
+            and r['expiry_date'] <= (date.today() + timedelta(days=30)).isoformat())
+        by_staff.setdefault(r['staff_name'], []).append(r)
+    return render_template('certificates.html',
+        staff=staff, by_staff=by_staff, today=today_iso,
+        with_cert=len(by_staff), total_staff=len(staff))
+
+@app.route('/admin/certificates/upload', methods=['POST'])
+@admin_required
+def certificate_upload():
+    staff_name = request.form.get('staff_name', '').strip()
+    cert_type  = request.form.get('cert_type', '').strip() or 'Food Safety Certificate'
+    expiry     = request.form.get('expiry_date', '').strip()
+    notes      = request.form.get('notes', '').strip()
+    f = request.files.get('certificate')
+    if not staff_name:
+        flash('Please choose a staff member.', 'warning')
+        return redirect(url_for('certificates'))
+    if not f or not f.filename:
+        flash('Please choose a certificate file to upload.', 'warning')
+        return redirect(url_for('certificates'))
+    ext = f.filename.rsplit('.', 1)[-1].lower() if '.' in f.filename else ''
+    if ext not in CERT_EXT:
+        flash('Unsupported file type. Use an image (JPG/PNG) or PDF.', 'danger')
+        return redirect(url_for('certificates'))
+    fname = f"cert_{secure_filename(staff_name)}_{datetime.now().strftime('%Y%m%d%H%M%S')}.{ext}"
+    dest = os.path.join(UPLOAD_FOLDER, fname)
+    try:
+        if ext == 'pdf':
+            f.save(dest)
+        else:
+            # Re-encodes images as JPEG and may change the extension — keep the
+            # actual filename it writes so the file can be served back.
+            fname = save_uploaded_photo(f, dest, max_dim=1800, quality=85)
+    except Exception:
+        f.save(dest)
+    with get_db() as conn:
+        conn.execute('''INSERT INTO staff_certificates
+            (staff_name, cert_type, filename, original_name, expiry_date, notes, uploaded_by)
+            VALUES (?,?,?,?,?,?,?)''',
+            (staff_name, cert_type, fname, secure_filename(f.filename),
+             expiry, notes, session.get('role', 'admin')))
+    flash(f'Certificate uploaded for {staff_name}.', 'success')
+    return redirect(url_for('certificates'))
+
+@app.route('/admin/certificate/<int:cert_id>/file')
+@login_required
+def certificate_file(cert_id):
+    with get_db() as conn:
+        row = conn.execute('SELECT filename FROM staff_certificates WHERE id=?', (cert_id,)).fetchone()
+    if not row:
+        abort(404)
+    return send_from_directory(UPLOAD_FOLDER, os.path.basename(row['filename']))
+
+@app.route('/admin/certificate/<int:cert_id>/delete', methods=['POST'])
+@admin_required
+def certificate_delete(cert_id):
+    with get_db() as conn:
+        row = conn.execute('SELECT filename FROM staff_certificates WHERE id=?', (cert_id,)).fetchone()
+        if row:
+            try:
+                os.remove(os.path.join(UPLOAD_FOLDER, row['filename']))
+            except OSError:
+                pass
+            conn.execute('DELETE FROM staff_certificates WHERE id=?', (cert_id,))
+    flash('Certificate deleted.', 'warning')
+    return redirect(url_for('certificates'))
 
 # ─── Photos ────────────────────────────────────────────────────────────────────
 

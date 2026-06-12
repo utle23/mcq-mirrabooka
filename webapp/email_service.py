@@ -1037,6 +1037,7 @@ def collect_daily_digest(target_date: str, checklists_meta: dict | None = None,
         oos = [dict(r) for r in conn.execute('''
             SELECT ts.type as temp_type, tr.food_name,
                    tr.c1_temp, tr.c2_temp, tr.c3_temp, tr.c4_temp, tr.c5_temp,
+                   COALESCE(tr.defrosted, 'N') AS defrosted,
                    COALESCE(ft.food_kind, 'cold') AS food_kind
             FROM temp_readings tr
             JOIN temp_sessions ts ON ts.id = tr.session_id
@@ -1045,6 +1046,8 @@ def collect_daily_digest(target_date: str, checklists_meta: dict | None = None,
             WHERE ts.date=?''', (target_date,)).fetchall()]
         oos_flagged = []
         for r in oos:
+            if (r.get('defrosted') or 'N').upper() == 'Y':
+                continue  # defrosting cold item — not an alert
             kind = r.get('food_kind') or 'cold'
             bad = []
             for n in range(1, 6):

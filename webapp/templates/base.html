@@ -221,6 +221,9 @@
           <a href="/staff" class="nav-link-item {% if current_ep=='staff_page' %}active{% endif %}" style="border-left-color:#52B788">
             <i class="fas fa-users fa-fw"></i><span>Staff Members</span>
           </a>
+          <a href="/admin/certificates" class="nav-link-item {% if current_ep in ('certificates','certificate_upload') %}active{% endif %}" style="border-left-color:#2E7D32">
+            <i class="fas fa-certificate fa-fw"></i><span>Food Safety Certificates</span>
+          </a>
           <a href="/admin/violations" class="nav-link-item {% if current_ep in ('violation_rules','update_violation','add_violation_rule','update_violation_rule','delete_violation_rule') %}active{% endif %}" style="border-left-color:#C62828">
             <i class="fas fa-triangle-exclamation fa-fw"></i><span>Violation Rules</span>
           </a>

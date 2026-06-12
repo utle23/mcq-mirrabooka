@@ -181,6 +181,7 @@ def _collect_today(date_str: str, period: str | None = None) -> dict:
             # Out-of-zone count uses food_kind: cold→unsafe if >5, hot→unsafe if <60
             reading_rows = conn.execute('''
                 SELECT tr.food_name, tr.c1_temp, tr.c2_temp, tr.c3_temp, tr.c4_temp, tr.c5_temp,
+                       COALESCE(tr.defrosted, 'N') AS defrosted,
                        COALESCE(ft.food_kind, 'cold') AS kind
                 FROM temp_readings tr
                 LEFT JOIN temp_food_templates ft
@@ -188,6 +189,9 @@ def _collect_today(date_str: str, period: str | None = None) -> dict:
                 WHERE tr.session_id = ?''', (r['type'], r['id'])).fetchall()
             bad = 0
             for rr in reading_rows:
+                # Defrosting cold item — higher temp expected, not an alert.
+                if (rr['defrosted'] or 'N').upper() == 'Y':
+                    continue
                 kind = rr['kind'] or 'cold'
                 for idx, col in enumerate(('c1_temp', 'c2_temp', 'c3_temp', 'c4_temp', 'c5_temp'), start=1):
                     v = rr[col]
