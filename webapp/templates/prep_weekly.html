@@ -1013,6 +1013,17 @@ function markDirty(cb) {
 function saveAll() {
   const items = Object.entries(_dirty).map(([id, done]) => ({id: parseInt(id), done}));
   if (!items.length) return;
+  // A task left NOT DONE for today must have a reason. A task with a reason
+  // becomes an issue cell (no checkbox), so any unchecked today checkbox = no reason.
+  const noReason = [...document.querySelectorAll('td[data-today="true"] .prep-track:not(:checked)')];
+  document.querySelectorAll('td[data-today="true"]').forEach(td => td.style.outline = '');
+  if (noReason.length) {
+    noReason.forEach(cb => { const td = cb.closest('td'); if (td) td.style.outline = '2px solid #C62828'; });
+    alert(noReason.length + " of today's prep task(s) are NOT DONE without a reason.\n\n" +
+          "For each highlighted task: either tick it DONE, or click the ⚠ flag on it and " +
+          "enter the reason — then press Save again.\n\nThe reason will appear on the WhatsApp report.");
+    return;
+  }
   const btn = document.querySelector('#save-bar .btn-success');
   btn.disabled = true;
   btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Saving...';

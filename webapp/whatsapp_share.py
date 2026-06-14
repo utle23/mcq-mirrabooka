@@ -253,7 +253,7 @@ def _collect_prep_timetable(conn, date_str):
             rows = conn.execute('''
                 SELECT wt.station_id AS sid, wt.task_name_en AS name,
                        COALESCE(ds.scheduled_time, wt.scheduled_time) AS time,
-                       ds.status AS status, ds.done_by AS done_by
+                       ds.status AS status, ds.done_by AS done_by, ds.note AS note
                 FROM prep_daily_status ds
                 JOIN prep_weekly_tasks wt ON wt.id = ds.weekly_task_id
                 WHERE ds.date=? AND ds.is_required=1 AND COALESCE(wt.is_supplier,0)=0
@@ -262,7 +262,8 @@ def _collect_prep_timetable(conn, date_str):
                 is_done = (r['status'] == 'done')
                 by_station.setdefault(r['sid'], []).append(
                     {'name': r['name'], 'time': r['time'] or '',
-                     'done': is_done, 'done_by': r['done_by'] or ''})
+                     'done': is_done, 'done_by': r['done_by'] or '',
+                     'reason': (r['note'] or '').strip()})
                 total += 1
                 if is_done:
                     done += 1
@@ -278,7 +279,8 @@ def _collect_prep_timetable(conn, date_str):
                 days = (t['active_days'] or '').split(',') if t['active_days'] else []
                 if day_key in days:
                     by_station.setdefault(t['sid'], []).append(
-                        {'name': t['name'], 'time': t['time'] or '', 'done': False, 'done_by': ''})
+                        {'name': t['name'], 'time': t['time'] or '', 'done': False,
+                         'done_by': '', 'reason': ''})
                     total += 1
         except sqlite3.OperationalError:
             pass
@@ -1988,6 +1990,9 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
         kind_label = {'cold': 'FRIDGE', 'freezer': 'FREEZER', 'hot': 'HOT'}
         def _eq_temp_cell(reading, key):
             reading = reading or {}
+            if reading.get('defrosted'):
+                return Paragraph('<font color="#1565C0"><b>DEFROST</b></font>',
+                    ParagraphStyle('ed', fontName=bold_font, fontSize=8.5, alignment=TA_CENTER))
             temp = reading.get('temp')
             if temp is None:
                 label = 'MISSING' if key in due_keys else 'PENDING'
@@ -2006,11 +2011,16 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
                      + ['Status']]
         for u in equip['units']:
             checks = u.get('checks') or {}
+            is_defrost = bool(u.get('defrosted')) or any(
+                (checks.get(k) or {}).get('defrosted') for k in check_keys)
             unsafe = any(bool((checks.get(k) or {}).get('unsafe')) for k in check_keys)
             due_missing = any((checks.get(k) or {}).get('temp') is None and k in due_keys
                               for k in check_keys)
             pending = any((checks.get(k) or {}).get('temp') is None for k in check_keys)
-            if unsafe:
+            if is_defrost:
+                status_p = Paragraph('<font color="#1565C0"><b>DEFROSTING</b></font>',
+                    ParagraphStyle('es', fontName=bold_font, fontSize=8.5, alignment=TA_CENTER))
+            elif unsafe:
                 status_p = Paragraph('<font color="#C62828"><b>OUT OF RANGE</b></font>',
                     ParagraphStyle('es', fontName=bold_font, fontSize=8.5, alignment=TA_CENTER))
             elif due_missing:
@@ -2061,10 +2071,14 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
             _pd = datetime.strptime(date_str, '%Y-%m-%d').strftime('%A · %d %b %Y')
         except Exception:
             _pd = date_str
+        is_opening = data.get('period') != 'closing'
         _pdone, _ptot = prep_tt.get('done', 0), prep_tt.get('total', 0)
+        _ppend = max(_ptot - _pdone, 0)
+        sub_line = (f'{_ppend} PENDING of {_ptot} · {_pd}' if is_opening
+                    else f'{_pdone} DONE · {_ppend} NOT DONE of {_ptot} · {_pd}')
         hdr = Table([[Paragraph(
             '<font color="white" size="20"><b>PREP TIMETABLE — TODAY</b></font><br/>'
-            f'<font color="#D7F5DD" size="11">{_pdone} / {_ptot} TASKS DONE · {_pd}</font>',
+            f'<font color="#D7F5DD" size="11">{sub_line}</font>',
             ParagraphStyle('ptth', fontName=bold_font, leading=24))]], colWidths=[USABLE_W])
         hdr.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#2E7D32')),
@@ -2073,19 +2087,24 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
         ]))
         story.append(hdr)
         story.append(Spacer(1, 4 * mm))
-        story.append(Paragraph(
-            ('Status is pulled live from the Weekly Prep Schedule for this day. '
-             '<font color="#1B7F3B"><b>DONE</b></font> = ticked complete · '
-             '<font color="#C62828"><b>NOT DONE</b></font> = still outstanding'
-             + ('' if prep_tt.get('has_schedule')
-                else ' (no weekly schedule built yet — showing the planned timetable).')),
-            S['body']))
+        if is_opening:
+            intro = ('Morning report — prep is ticked off at closing. '
+                     '<font color="#B45309"><b>PENDING</b></font> means not done yet (normal in the morning).')
+        else:
+            intro = ('Closing report — <font color="#1B7F3B"><b>DONE</b></font> = ticked complete · '
+                     '<font color="#C62828"><b>NOT DONE</b></font> = not completed (reason shown).')
+        if not prep_tt.get('has_schedule'):
+            intro += ' (No weekly schedule built yet — showing the planned timetable.)'
+        story.append(Paragraph(intro, S['body']))
         story.append(Spacer(1, 4 * mm))
         for st in prep_stations:
             col = colors.HexColor(st.get('color') or '#2E7D32')
+            st_total = st.get('total', len(st['tasks']))
+            st_summary = (f'{st_total - st.get("done", 0)} pending' if is_opening
+                          else f'{st.get("done", 0)}/{st_total} done')
             sub = Table([[Paragraph(
                 f'<font color="white"><b>{_esc(st["station"])}</b>'
-                f'<font size="9">  ·  {st.get("done", 0)}/{st.get("total", len(st["tasks"]))} done today</font></font>',
+                f'<font size="9">  ·  {st_summary}</font></font>',
                 ParagraphStyle('pst', fontName=bold_font, fontSize=12))]], colWidths=[USABLE_W])
             sub.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, -1), col),
@@ -2095,13 +2114,18 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
             story.append(sub)
             trows = []
             for t in st['tasks']:
+                reason = (t.get('reason') or '').strip()
                 if t.get('done'):
                     badge = '<font color="#1B7F3B"><b>DONE</b></font>'
                     extra = (f'<font color="#7A8089">{_esc(t.get("done_by") or "")}</font>'
                              if t.get('done_by') else (_esc(t['time']) if t['time'] else ''))
+                elif is_opening:
+                    badge = '<font color="#B45309"><b>PENDING</b></font>'
+                    extra = _esc(t['time']) if t['time'] else ''
                 else:
                     badge = '<font color="#C62828"><b>NOT DONE</b></font>'
-                    extra = _esc(t['time']) if t['time'] else ''
+                    extra = (f'<font color="#C62828"><b>Reason:</b> {_esc(reason)}</font>' if reason
+                             else '<font color="#B45309">(no reason given)</font>')
                 trows.append([
                     Paragraph(badge, ParagraphStyle('pbk', fontName=bold_font, fontSize=9, alignment=TA_CENTER)),
                     Paragraph(_esc(t['name']), S['task']),
@@ -2258,11 +2282,14 @@ def _pdf_signature(date_str: str, period: str) -> str:
             parts.append(tuple(conn.execute(
                 "SELECT COUNT(*), COALESCE(MAX(id),0) "
                 "FROM equipment_units WHERE active=1").fetchone()))
-            # Prep timetable status — ticking a prep task must refresh the PDF.
+            # Prep timetable status — ticking a prep task OR editing a not-done
+            # reason/note must refresh the PDF.
             try:
                 parts.append(tuple(conn.execute(
                     "SELECT COUNT(*), COALESCE(SUM(CASE WHEN status='done' THEN 1 ELSE 0 END),0), "
-                    "COALESCE(MAX(done_at),'') FROM prep_daily_status WHERE date=?",
+                    "COALESCE(MAX(done_at),''), COALESCE(SUM(issue_flag),0), "
+                    "COALESCE(SUM(LENGTH(COALESCE(note,''))),0) "
+                    "FROM prep_daily_status WHERE date=?",
                     (date_str,)).fetchone()))
             except Exception:
                 parts.append(('prep?',))
