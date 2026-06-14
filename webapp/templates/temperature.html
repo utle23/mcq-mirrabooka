@@ -353,14 +353,25 @@ document.addEventListener('DOMContentLoaded', ()=>{
   document.querySelectorAll('.temp-input').forEach(colorTemp);
 });
 
-// Toggle the per-food "Defrosting" state and recolour its readings.
+// Toggle the per-food "Defrosting" state: a defrosting item is not given a
+// temperature, so its inputs are cleared + disabled.
+function applyDefrostRow(row, on) {
+  row.classList.toggle('defrosting', on);
+  row.querySelectorAll('.temp-input').forEach(inp => {
+    inp.disabled = on;
+    if (on) inp.value = '';
+    colorTemp(inp);
+  });
+}
 function toggleDefrost(cb, i) {
   const cell = document.getElementById('food-cell-' + i);
   const row = cell ? cell.closest('tr') : null;
-  if (!row) return;
-  row.classList.toggle('defrosting', cb.checked);
-  row.querySelectorAll('.temp-input').forEach(colorTemp);
+  if (row) applyDefrostRow(row, cb.checked);
 }
+// On load, lock the inputs of any row already marked defrosting.
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('tr.food-row.defrosting').forEach(row => applyDefrostRow(row, true));
+});
 
 function toggleFoodNote(i) {
   const row = document.getElementById('food-note-row-' + i);

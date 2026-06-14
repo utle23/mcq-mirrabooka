@@ -164,12 +164,22 @@ function colorEq(input){
   if (box) box.classList.add(unsafe ? 'bad' : 'good');
 }
 
+function applyEqDefrost(card, on){
+  card.classList.toggle('defrosting', on);
+  card.querySelectorAll('.check-box input').forEach(inp => {
+    inp.disabled = on;
+    if (on) inp.value = '';
+    colorEq(inp);
+  });
+}
 function toggleEqDefrost(cb){
   const card = cb.closest('.unit-card');
-  if (!card) return;
-  card.classList.toggle('defrosting', cb.checked);
-  card.querySelectorAll('.check-box input').forEach(colorEq);
+  if (card) applyEqDefrost(card, cb.checked);
 }
+// On load, lock inputs of any unit already marked defrosting.
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.unit-card.defrosting').forEach(card => applyEqDefrost(card, true));
+});
 
 let eqToastTimer = null;
 function eqShowToast(msg, kind){

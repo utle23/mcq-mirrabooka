@@ -1404,6 +1404,9 @@ def build_digest_html(data: dict, base_url: str = '') -> str:
 
         def _eq_cell(reading, key):
             reading = reading or {}
+            if reading.get('defrosted'):
+                return ('<td style="padding:7px;text-align:center;background:#E3F2FD;'
+                        'border:1px solid #90CAF9;color:#1565C0;font-size:11px;font-weight:800">DEFROST</td>')
             temp = reading.get('temp')
             if temp is None:
                 if key in due_keys:
@@ -1425,11 +1428,14 @@ def build_digest_html(data: dict, base_url: str = '') -> str:
             checks = u.get('checks') or {}
             morning = checks.get('morning') or {}
             closing = checks.get('closing') or {}
+            is_defrost = bool(u.get('defrosted') or morning.get('defrosted') or closing.get('defrosted'))
             unsafe = bool(morning.get('unsafe') or closing.get('unsafe'))
             due_missing = ((morning.get('temp') is None and 'morning' in due_keys)
                            or (closing.get('temp') is None and 'closing' in due_keys))
             pending = morning.get('temp') is None or closing.get('temp') is None
-            if unsafe:
+            if is_defrost:
+                status = '<span style="color:#1565C0;font-weight:800">DEFROSTING</span>'
+            elif unsafe:
                 status = '<span style="color:#C62828;font-weight:800">OUT OF RANGE</span>'
             elif due_missing:
                 status = '<span style="color:#C62828;font-weight:800">MISSING</span>'
