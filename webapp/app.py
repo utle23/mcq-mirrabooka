@@ -777,11 +777,21 @@ def init_db():
             'ALTER TABLE staff_members ADD COLUMN email TEXT',
             'ALTER TABLE staff_members ADD COLUMN emergency_contact TEXT',
             'ALTER TABLE staff_members ADD COLUMN staff_notes TEXT',
+            "ALTER TABLE staff_violations ADD COLUMN warning_step TEXT DEFAULT 'Verbal Discussion'",
         ]:
             try:
                 conn.execute(col_sql)
             except Exception:
                 pass
+
+        # Normalize legacy violation statuses → open / closed / cancelled.
+        try:
+            conn.execute("UPDATE staff_violations SET status='closed' WHERE status='resolved'")
+            conn.execute("UPDATE staff_violations SET status='cancelled' WHERE status='void'")
+            conn.execute("UPDATE staff_violations SET status='open' "
+                         "WHERE status IN ('in_progress','counseled') OR status IS NULL OR status=''")
+        except Exception:
+            pass
 
         # Seed staff if empty
         for name in STAFF:
@@ -3474,6 +3484,15 @@ SEVERITY_META = {
     'moderate': {'label': 'Moderate', 'color': '#F9A825'},
     'minor':    {'label': 'Minor',    'color': '#1565C0'},
 }
+# Disciplinary escalation ladder. The step is chosen MANUALLY when a violation
+# is logged (not auto-escalated) — staff/manager pick where this incident sits.
+WARNING_STEPS = ['Verbal Discussion', 'Written Warning', 'Final Warning', 'Termination Referral']
+WARNING_STEP_META = {
+    'Verbal Discussion':   {'color': '#1565C0', 'short': 'Verbal'},
+    'Written Warning':     {'color': '#F9A825', 'short': 'Written'},
+    'Final Warning':       {'color': '#E65100', 'short': 'Final'},
+    'Termination Referral':{'color': '#B71C1C', 'short': 'Termination'},
+}
 
 
 def staff_active_strikes(conn, staff_name, window_days=STRIKE_WINDOW_DAYS):
@@ -3504,7 +3523,10 @@ def staff_strike_standings(conn, window_days=STRIKE_WINDOW_DAYS):
         if sev not in SEVERITY_ORDER:
             sev = 'minor'
         r['severity'] = sev
-        r['is_active'] = (r.get('incident_date') or '') >= cutoff
+        # A strike is active only while the case is still OPEN and within window.
+        _st = (r.get('status') or 'open').lower()
+        r['is_active'] = (_st not in ('closed', 'cancelled', 'resolved', 'void')
+                          and (r.get('incident_date') or '') >= cutoff)
         st = by_staff.setdefault(name, {
             'staff_name': name, 'active_count': 0, 'total_count': 0,
             'active_severity': {k: 0 for k in SEVERITY_ORDER},
@@ -3535,6 +3557,24 @@ def staff_strike_standings(conn, window_days=STRIKE_WINDOW_DAYS):
     return standings
 
 
+def auto_close_violations(conn, window_days=STRIKE_WINDOW_DAYS):
+    """Per staff, once their FIRST open case is older than the window (6 months),
+    close all their still-open cases — the disciplinary cycle resets."""
+    today = date.today()
+    rows = conn.execute(
+        "SELECT staff_name, MIN(incident_date) AS first FROM staff_violations "
+        "WHERE status='open' GROUP BY staff_name").fetchall()
+    for r in rows:
+        try:
+            first = datetime.strptime(r['first'], '%Y-%m-%d').date()
+        except (TypeError, ValueError):
+            continue
+        if (today - first).days >= window_days:
+            conn.execute(
+                "UPDATE staff_violations SET status='closed' "
+                "WHERE staff_name=? AND status='open'", (r['staff_name'],))
+
+
 @app.route('/admin/violations', methods=['GET', 'POST'])
 @admin_required
 def violation_rules():
@@ -3548,6 +3588,9 @@ def violation_rules():
         description   = request.form.get('description', '').strip()
         action_taken  = request.form.get('action_taken', '').strip()
         follow_up     = request.form.get('follow_up_date', '').strip()
+        warning_step  = request.form.get('warning_step', '').strip()
+        if warning_step not in WARNING_STEPS:
+            warning_step = WARNING_STEPS[0]
 
         try:
             rule_id_int = int(rule_id)
@@ -3565,11 +3608,11 @@ def violation_rules():
                         action_taken = rule['default_action'] or ''
                     cur = conn.execute('''INSERT INTO staff_violations
                         (rule_id,staff_name,incident_date,incident_time,submitted_by,branch,
-                         severity,description,action_taken,follow_up_date,status)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
+                         severity,description,action_taken,follow_up_date,status,warning_step)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
                         (rule_id_int, staff_name, incident_date, incident_time, submitted_by,
                          session.get('branch', ''), severity, description, action_taken,
-                         follow_up, 'open'))
+                         follow_up, 'open', warning_step))
                     vid = cur.lastrowid
                     email_service.send_notification(
                         'violation',
@@ -3579,6 +3622,7 @@ def violation_rules():
                             f'Rule: {rule["title"]}',
                             f'Category: {rule["category"]}',
                             f'Severity: {severity}',
+                            f'Warning step: {warning_step}',
                             f'Date: {incident_date} {incident_time}',
                             f'Branch: {session.get("branch", "-")}',
                             f'Description: {description}',
@@ -3611,6 +3655,25 @@ def violation_rules():
                               f'(last {STRIKE_WINDOW_DAYS} days).', 'success')
             return redirect(url_for('violation_rules'))
 
+    return _render_violations_page('records')
+
+
+@app.route('/admin/violations/new')
+@admin_required
+def violation_new():
+    """Create a new disciplinary case."""
+    return _render_violations_page('new')
+
+
+@app.route('/admin/violations/stats')
+@admin_required
+def violation_statistics():
+    """Statistics dashboard + staff strike standings."""
+    return _render_violations_page('stats')
+
+
+def _render_violations_page(view):
+    today_iso = date.today().isoformat()
     status_filter = request.args.get('status', 'open')
     staff_filter  = request.args.get('staff', '')
     severity_filter = request.args.get('severity', '')
@@ -3618,6 +3681,8 @@ def violation_rules():
     date_to   = request.args.get('date_to', today_iso)
 
     with get_db() as conn:
+        # Auto-close cases once a person's first open case is >6 months old.
+        auto_close_violations(conn)
         rules = [dict(r) for r in conn.execute('''
             SELECT * FROM violation_rules
             WHERE active=1
@@ -3659,16 +3724,16 @@ def violation_rules():
             SELECT
                 COUNT(*) as total,
                 COALESCE(SUM(CASE WHEN sv.status='open' THEN 1 ELSE 0 END), 0) as open_count,
-                COALESCE(SUM(CASE WHEN sv.status='in_progress' THEN 1 ELSE 0 END), 0) as in_progress_count,
-                COALESCE(SUM(CASE WHEN sv.status='resolved' THEN 1 ELSE 0 END), 0) as resolved_count,
+                COALESCE(SUM(CASE WHEN sv.status='cancelled' THEN 1 ELSE 0 END), 0) as cancelled_count,
+                COALESCE(SUM(CASE WHEN sv.status='closed' THEN 1 ELSE 0 END), 0) as closed_count,
                 COALESCE(SUM(CASE WHEN sv.severity IN ('serious','critical') THEN 1 ELSE 0 END), 0) as serious_count,
                 COALESCE(SUM(CASE WHEN sv.incident_date=? THEN 1 ELSE 0 END), 0) as today_count
             FROM staff_violations sv
             WHERE {stats_sql}
         ''', [today_iso] + stats_params).fetchone()
         summary = dict(summary_row)
-        summary['resolved_rate'] = round(
-            (summary['resolved_count'] / summary['total'] * 100), 1
+        summary['closed_rate'] = round(
+            (summary['closed_count'] / summary['total'] * 100), 1
         ) if summary['total'] else 0
 
         month_start = date.today().replace(day=1).isoformat()
@@ -3694,10 +3759,9 @@ def violation_rules():
             GROUP BY sv.status
             ORDER BY CASE sv.status
                 WHEN 'open' THEN 1
-                WHEN 'in_progress' THEN 2
-                WHEN 'resolved' THEN 3
-                WHEN 'void' THEN 4
-                ELSE 5 END
+                WHEN 'closed' THEN 2
+                WHEN 'cancelled' THEN 3
+                ELSE 4 END
         ''', stats_params).fetchall()]
 
         severity_breakdown = [dict(r) for r in conn.execute(f'''
@@ -3741,7 +3805,7 @@ def violation_rules():
                 COALESCE(vr.category, 'Other') as category,
                 COALESCE(vr.color, '#607D8B') as color,
                 COUNT(*) as total,
-                COALESCE(SUM(CASE WHEN sv.status!='resolved' AND sv.status!='void' THEN 1 ELSE 0 END), 0) as active_count,
+                COALESCE(SUM(CASE WHEN sv.status='open' THEN 1 ELSE 0 END), 0) as active_count,
                 COALESCE(SUM(CASE WHEN sv.severity IN ('serious','critical') THEN 1 ELSE 0 END), 0) as serious_count
             FROM staff_violations sv
             LEFT JOIN violation_rules vr ON vr.id=sv.rule_id
@@ -3765,6 +3829,7 @@ def violation_rules():
         strike_watch = [s for s in strike_standings if s['active_count'] >= STRIKE_THRESHOLD - 1]
 
     return render_template('violation_rules.html',
+        view=view,
         rules=rules, violations=violations, counts=counts,
         severity_counts=severity_counts, staff=get_active_staff(), managers=MANAGERS,
         status_filter=status_filter, staff_filter=staff_filter,
@@ -3773,6 +3838,7 @@ def violation_rules():
         strike_standings=strike_standings, strike_watch=strike_watch,
         strike_window_days=STRIKE_WINDOW_DAYS, strike_threshold=STRIKE_THRESHOLD,
         severity_meta=SEVERITY_META,
+        warning_steps=WARNING_STEPS, warning_step_meta=WARNING_STEP_META,
         today=today_iso, now_time=datetime.now().strftime('%H:%M'),
     )
 
@@ -3780,7 +3846,7 @@ def violation_rules():
 @admin_required
 def update_violation(violation_id):
     status = request.form.get('status', 'open')
-    if status not in ('open', 'in_progress', 'counseled', 'resolved', 'void'):
+    if status not in ('open', 'closed', 'cancelled'):
         status = 'open'
     try:
         rule_id = int(request.form.get('rule_id', 0) or 0)
@@ -3797,15 +3863,19 @@ def update_violation(violation_id):
     action_taken = request.form.get('action_taken', '').strip()
     follow_up_date = request.form.get('follow_up_date', '').strip()
     manager_notes = request.form.get('manager_notes', '').strip()
+    warning_step = request.form.get('warning_step', '').strip()
     resolved_by = request.form.get('resolved_by', '').strip()
-    resolved_at = datetime.now().strftime('%Y-%m-%d %H:%M') if status == 'resolved' else None
+    resolved_at = datetime.now().strftime('%Y-%m-%d %H:%M') if status in ('closed', 'cancelled') else None
     with get_db() as conn:
         current = conn.execute('SELECT * FROM staff_violations WHERE id=?', (violation_id,)).fetchone()
         if current:
+            if warning_step not in WARNING_STEPS:
+                warning_step = (current['warning_step'] if 'warning_step' in current.keys()
+                                and current['warning_step'] else WARNING_STEPS[0])
             conn.execute('''UPDATE staff_violations
                 SET rule_id=?, staff_name=?, incident_date=?, incident_time=?, submitted_by=?,
                     severity=?, description=?, action_taken=?, follow_up_date=?,
-                    status=?, manager_notes=?, resolved_by=?, resolved_at=?
+                    status=?, manager_notes=?, resolved_by=?, resolved_at=?, warning_step=?
                 WHERE id=?''',
                 (rule_id or current['rule_id'],
                  staff_name or current['staff_name'],
@@ -3820,8 +3890,9 @@ def update_violation(violation_id):
                  manager_notes,
                  resolved_by,
                  resolved_at,
+                 warning_step,
                  violation_id))
-    return redirect(url_for('violation_rules', status=status if status != 'void' else 'all'))
+    return redirect(url_for('violation_rules', status=status))
 
 @app.route('/admin/violations/rules/add', methods=['POST'])
 @admin_required
