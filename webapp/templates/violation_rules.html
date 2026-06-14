@@ -71,7 +71,23 @@
 
 {% block content %}
 {% set summary = violation_stats.summary %}
+{% set view = view|default('records') %}
 
+{# ── Page switcher: Statistics / Records / New Case ───────────────────────── #}
+<div class="d-flex flex-wrap gap-2 mb-4">
+  <a href="/admin/violations/stats" class="btn {{ 'btn-danger' if view=='stats' else 'btn-outline-danger' }}">
+    <i class="fas fa-chart-line me-2"></i>Statistics
+  </a>
+  <a href="/admin/violations" class="btn {{ 'btn-danger' if view=='records' else 'btn-outline-danger' }}">
+    <i class="fas fa-folder-open me-2"></i>Records
+    <span class="badge bg-light text-dark ms-1">{{ counts.get('open', 0) }} open</span>
+  </a>
+  <a href="/admin/violations/new" class="btn {{ 'btn-success' if view=='new' else 'btn-outline-success' }}">
+    <i class="fas fa-plus me-2"></i>New Case
+  </a>
+</div>
+
+{% if view == 'stats' %}
 {# ── Strike standings: 3+ active violations = review for termination ──────── #}
 {% if strike_standings %}
 <div class="card shadow-sm mb-4" style="border-top:4px solid #B71C1C">
@@ -129,7 +145,10 @@
               {% for v in s.violations %}
               <tr {% if not v.is_active %}class="opacity-50"{% endif %}>
                 <td style="width:90px"><span class="badge" style="background:{{ severity_meta[v.severity].color }}">{{ severity_meta[v.severity].label }}</span></td>
-                <td>{{ v.rule_title }}<div class="text-muted small">{{ v.description }}</div></td>
+                <td>{{ v.rule_title }}
+                  {% set ws = v.warning_step or warning_steps[0] %}
+                  <span class="badge ms-1" style="background:{{ warning_step_meta.get(ws, {}).get('color', '#607D8B') }}">{{ warning_step_meta.get(ws, {}).get('short', ws) }}</span>
+                  <div class="text-muted small">{{ v.description }}</div></td>
                 <td class="small" style="width:100px">{{ v.incident_date }}</td>
                 <td class="small text-capitalize" style="width:120px">{{ v.status }}{% if not v.is_active %}<span class="badge bg-light text-muted ms-1">expired</span>{% endif %}</td>
               </tr>
@@ -149,7 +168,7 @@
   <div class="col-6 col-md-3"><div class="vr-stat" style="--vr-color:#263238"><div class="vr-stat-value">{{ summary.total }}</div><div class="vr-stat-label">Selected Period</div></div></div>
   <div class="col-6 col-md-3"><div class="vr-stat" style="--vr-color:#C62828"><div class="vr-stat-value">{{ summary.open_count }}</div><div class="vr-stat-label">Open</div></div></div>
   <div class="col-6 col-md-3"><div class="vr-stat" style="--vr-color:#6A1B9A"><div class="vr-stat-value">{{ summary.serious_count }}</div><div class="vr-stat-label">Serious / Critical</div></div></div>
-  <div class="col-6 col-md-3"><div class="vr-stat" style="--vr-color:#2E7D32"><div class="vr-stat-value">{{ summary.resolved_rate }}%</div><div class="vr-stat-label">Resolved Rate</div></div></div>
+  <div class="col-6 col-md-3"><div class="vr-stat" style="--vr-color:#2E7D32"><div class="vr-stat-value">{{ summary.closed_rate }}%</div><div class="vr-stat-label">Closed Rate</div></div></div>
 </div>
 
 <div class="card shadow-sm mb-4">
@@ -243,11 +262,14 @@
   </div>
 </div>
 
+{% endif %}{# end stats view #}
+
+{% if view == 'new' %}
 <div class="row g-4 mb-4">
   <div class="col-12 col-xl-5">
     <div class="card shadow-sm">
       <div class="card-header py-2">
-        <h6 class="mb-0"><i class="fas fa-pen-to-square me-2 text-danger"></i>Record Staff Violation</h6>
+        <h6 class="mb-0"><i class="fas fa-pen-to-square me-2 text-danger"></i>New Disciplinary Case</h6>
       </div>
       <div class="card-body">
         <div class="quick-fill-note mb-3">
@@ -288,6 +310,14 @@
               <option value="critical">Critical</option>
             </select>
           </div>
+          <div class="col-12">
+            <label class="form-label fw-semibold">Warning Step <span class="text-muted small fw-normal">(choose the disciplinary level for this case)</span></label>
+            <select name="warning_step" class="form-select">
+              {% for step in warning_steps %}
+              <option value="{{ step }}">{{ loop.index }}. {{ step }}</option>
+              {% endfor %}
+            </select>
+          </div>
           <div class="col-md-6">
             <label class="form-label fw-semibold">Incident Date</label>
             <input type="date" name="incident_date" class="form-control" value="{{ today }}" required>
@@ -321,7 +351,7 @@
           </div>
           <div class="col-12">
             <button type="submit" class="btn btn-danger">
-              <i class="fas fa-save me-2"></i>Submit Violation
+              <i class="fas fa-save me-2"></i>Create Case
             </button>
           </div>
         </form>
@@ -399,12 +429,15 @@
   </div>
 </div>
 
+{% endif %}{# end new view #}
+
+{% if view == 'records' %}
 <div class="card shadow-sm mb-4">
   <div class="card-body py-2">
     <form method="GET" class="row g-2 align-items-end">
       <div class="col-auto"><label class="form-label small fw-semibold mb-1">From</label><input type="date" name="date_from" class="form-control form-control-sm" value="{{ date_from }}"></div>
       <div class="col-auto"><label class="form-label small fw-semibold mb-1">To</label><input type="date" name="date_to" class="form-control form-control-sm" value="{{ date_to }}"></div>
-      <div class="col-auto"><label class="form-label small fw-semibold mb-1">Status</label><select name="status" class="form-select form-select-sm"><option value="all" {% if status_filter=='all' %}selected{% endif %}>All</option><option value="open" {% if status_filter=='open' %}selected{% endif %}>Open</option><option value="in_progress" {% if status_filter=='in_progress' %}selected{% endif %}>In Progress</option><option value="counseled" {% if status_filter=='counseled' %}selected{% endif %}>Counseled</option><option value="resolved" {% if status_filter=='resolved' %}selected{% endif %}>Resolved</option><option value="void" {% if status_filter=='void' %}selected{% endif %}>Void</option></select></div>
+      <div class="col-auto"><label class="form-label small fw-semibold mb-1">Status</label><select name="status" class="form-select form-select-sm"><option value="all" {% if status_filter=='all' %}selected{% endif %}>All</option><option value="open" {% if status_filter=='open' %}selected{% endif %}>Open</option><option value="closed" {% if status_filter=='closed' %}selected{% endif %}>Closed</option><option value="cancelled" {% if status_filter=='cancelled' %}selected{% endif %}>Cancelled</option></select></div>
       <div class="col-auto"><label class="form-label small fw-semibold mb-1">Severity</label><select name="severity" class="form-select form-select-sm"><option value="">All</option><option value="minor" {% if severity_filter=='minor' %}selected{% endif %}>Minor</option><option value="moderate" {% if severity_filter=='moderate' %}selected{% endif %}>Moderate</option><option value="serious" {% if severity_filter=='serious' %}selected{% endif %}>Serious</option><option value="critical" {% if severity_filter=='critical' %}selected{% endif %}>Critical</option></select></div>
       <div class="col-auto"><label class="form-label small fw-semibold mb-1">Staff</label><select name="staff" class="form-select form-select-sm"><option value="">All Staff</option>{% for s in staff %}<option value="{{ s }}" {% if staff_filter==s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select></div>
       <div class="col-auto"><button class="btn btn-sm btn-success"><i class="fas fa-search me-1"></i>Filter</button><a href="/admin/violations" class="btn btn-sm btn-outline-secondary ms-1">Reset</a></div>
@@ -413,13 +446,15 @@
 </div>
 
 {% for v in violations %}
-{% set status_badge = {'open':'danger','in_progress':'warning text-dark','resolved':'success','void':'secondary'}.get(v.status, 'secondary') %}
+{% set status_badge = {'open':'danger','closed':'success','cancelled':'secondary'}.get(v.status, 'secondary') %}
+{% set ws = v.warning_step or warning_steps[0] %}
 <div class="card shadow-sm mb-3 violation-row" style="--rule-color:{{ v.rule_color or '#607D8B' }}">
   <div class="card-header py-2 d-flex flex-wrap gap-2 align-items-center">
     <i class="fas {{ v.rule_icon or 'fa-triangle-exclamation' }}" style="color:{{ v.rule_color or '#607D8B' }}"></i>
     <strong>{{ v.rule_title or 'Rule removed' }}</strong>
     <span class="badge severity-{{ v.severity }}">{{ v.severity|title }}</span>
-    <span class="badge bg-{{ status_badge }}">{{ v.status.replace('_',' ')|title }}</span>
+    <span class="badge" style="background:{{ warning_step_meta.get(ws, {}).get('color', '#607D8B') }}"><i class="fas fa-stairs me-1"></i>{{ ws }}</span>
+    <span class="badge bg-{{ status_badge }}">{{ v.status|title }}</span>
     <span class="ms-auto text-muted small">
       <i class="fas fa-user me-1"></i>{{ v.staff_name }}
       &nbsp;|&nbsp;<i class="fas fa-calendar me-1"></i>{{ v.incident_date }}
@@ -457,7 +492,8 @@
       <div class="col-md-2"><label class="form-label small fw-semibold mb-1">Time</label><input type="time" name="incident_time" class="form-control form-control-sm" value="{{ v.incident_time }}"></div>
       <div class="col-md-1"><button class="btn btn-sm btn-success w-100"><i class="fas fa-save"></i></button></div>
       <div class="col-md-2"><label class="form-label small fw-semibold mb-1">Severity</label><select name="severity" class="form-select form-select-sm">{% for sev in ['minor','moderate','serious','critical'] %}<option value="{{ sev }}" {% if v.severity==sev %}selected{% endif %}>{{ sev|title }}</option>{% endfor %}</select></div>
-      <div class="col-md-2"><label class="form-label small fw-semibold mb-1">Status</label><select name="status" class="form-select form-select-sm"><option value="open" {% if v.status=='open' %}selected{% endif %}>Open</option><option value="in_progress" {% if v.status=='in_progress' %}selected{% endif %}>In Progress</option><option value="counseled" {% if v.status=='counseled' %}selected{% endif %}>Counseled</option><option value="resolved" {% if v.status=='resolved' %}selected{% endif %}>Resolved</option><option value="void" {% if v.status=='void' %}selected{% endif %}>Void</option></select></div>
+      <div class="col-md-3"><label class="form-label small fw-semibold mb-1">Warning Step</label><select name="warning_step" class="form-select form-select-sm">{% for step in warning_steps %}<option value="{{ step }}" {% if ws==step %}selected{% endif %}>{{ loop.index }}. {{ step }}</option>{% endfor %}</select></div>
+      <div class="col-md-2"><label class="form-label small fw-semibold mb-1">Status</label><select name="status" class="form-select form-select-sm"><option value="open" {% if v.status=='open' %}selected{% endif %}>Open</option><option value="closed" {% if v.status=='closed' %}selected{% endif %}>Closed</option><option value="cancelled" {% if v.status=='cancelled' %}selected{% endif %}>Cancelled</option></select></div>
       <div class="col-md-3"><label class="form-label small fw-semibold mb-1">Submitted by</label><select name="submitted_by" class="form-select form-select-sm"><option value="">— Admin / Manager —</option>{% for m in managers %}<option value="{{ m }}" {% if v.submitted_by==m %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div>
       <div class="col-md-3"><label class="form-label small fw-semibold mb-1">Resolved by</label><select name="resolved_by" class="form-select form-select-sm"><option value="">— Manager —</option>{% for m in managers %}<option value="{{ m }}" {% if v.resolved_by==m %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div>
       <div class="col-md-2"><label class="form-label small fw-semibold mb-1">Follow-up</label><input type="date" name="follow_up_date" class="form-control form-control-sm" value="{{ v.follow_up_date or '' }}"></div>
@@ -479,8 +515,10 @@
 <div class="text-center text-muted py-5">
   <i class="fas fa-scale-balanced fa-3x mb-3 d-block opacity-25"></i>
   <h5>No violations found</h5>
+  <a href="/admin/violations/new" class="btn btn-success mt-2"><i class="fas fa-plus me-1"></i>Create a case</a>
 </div>
 {% endfor %}
+{% endif %}{# end records view #}
 {% endblock %}
 
 {% block scripts %}
@@ -536,9 +574,8 @@ function makeViolationChart(canvasId, config) {
 document.addEventListener('DOMContentLoaded', () => {
   const statusColors = {
     open: '#C62828',
-    in_progress: '#F57C00',
-    resolved: '#2E7D32',
-    void: '#78909C'
+    closed: '#2E7D32',
+    cancelled: '#78909C'
   };
   const severityColors = {
     minor: '#90A4AE',
