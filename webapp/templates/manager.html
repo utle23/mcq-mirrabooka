@@ -3,6 +3,30 @@
 {% block topbar_title %}<span class="fw-bold">Manager Panel — Verification</span>{% endblock %}
 
 {% block content %}
+<!-- Date toolbar -->
+<div class="card shadow-sm mb-3">
+  <div class="card-body py-2 d-flex flex-wrap align-items-center gap-2">
+    <a href="/manager?date={{ prev_date }}" class="btn btn-sm btn-outline-secondary" title="Previous day">
+      <i class="fas fa-chevron-left"></i>
+    </a>
+    <form method="GET" action="/manager" class="d-flex align-items-center gap-2 mb-0">
+      <input type="date" name="date" value="{{ sel_date }}" max="{{ today }}"
+             class="form-control form-control-sm" style="width:auto"
+             onchange="this.form.submit()">
+      <button type="submit" class="btn btn-sm btn-success"><i class="fas fa-filter me-1"></i>Show</button>
+    </form>
+    <a href="/manager?date={{ next_date }}" class="btn btn-sm btn-outline-secondary" title="Next day">
+      <i class="fas fa-chevron-right"></i>
+    </a>
+    {% if not is_today %}
+    <a href="/manager" class="btn btn-sm btn-outline-primary"><i class="fas fa-calendar-day me-1"></i>Back to Today</a>
+    {% endif %}
+    <span class="ms-auto badge {{ 'bg-success' if is_today else 'bg-secondary' }} fs-6">
+      <i class="fas fa-calendar me-1"></i>{{ sel_date }}{% if is_today %} · Today{% endif %}
+    </span>
+  </div>
+</div>
+
 <!-- Stats -->
 <div class="row g-3 mb-4">
   <div class="col-6 col-md-3">
@@ -16,7 +40,7 @@
     <div class="stat-card stat-green">
       <div class="stat-icon"><i class="fas fa-check-double"></i></div>
       <div class="stat-value">{{ verified_today }}</div>
-      <div class="stat-label">Verified Today</div>
+      <div class="stat-label">{{ 'Verified Today' if is_today else 'Verified This Day' }}</div>
     </div>
   </div>
   <div class="col-6 col-md-3">
@@ -76,7 +100,7 @@
 </div>
 {% else %}
 <div class="alert alert-success mb-4">
-  <i class="fas fa-check-circle me-2"></i>All checklists have been verified. Great work!
+  <i class="fas fa-check-circle me-2"></i>No checklists awaiting verification on {{ sel_date }}{% if is_today %} — great work!{% endif %}
 </div>
 {% endif %}
 
@@ -119,7 +143,7 @@
 {% endif %}
 
 <!-- Recent Activity Log -->
-<h5 class="section-heading"><i class="fas fa-stream me-2 text-info"></i>Recent Activity Log</h5>
+<h5 class="section-heading"><i class="fas fa-stream me-2 text-info"></i>Activity Log — {{ sel_date }}</h5>
 <div class="card shadow-sm">
   <div class="table-responsive">
     <table class="table table-sm table-hover mb-0 align-middle">
@@ -140,7 +164,7 @@
           <td class="small text-muted">{{ r.details or '' }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="5" class="text-center text-muted py-3">No activity logged yet</td></tr>
+        <tr><td colspan="5" class="text-center text-muted py-3">No activity logged on {{ sel_date }}</td></tr>
         {% endfor %}
       </tbody>
     </table>

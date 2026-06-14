@@ -2041,26 +2041,39 @@ def history():
 @admin_required
 def manager():
     today_str = date.today().isoformat()
+    # Panel is scoped to a single day; defaults to today but can be sorted/
+    # navigated by date via ?date=YYYY-MM-DD.
+    sel_date = (request.args.get('date', '') or '').strip() or today_str
+    try:
+        d = datetime.strptime(sel_date, '%Y-%m-%d').date()
+    except ValueError:
+        d = date.today()
+        sel_date = today_str
+    prev_date = (d - timedelta(days=1)).isoformat()
+    next_date = (d + timedelta(days=1)).isoformat()
     with get_db() as conn:
         pending = [dict(r) for r in conn.execute('''
             SELECT cs.*,
               (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id AND done=1) as done_count,
               (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id) as total_count
-            FROM checklist_sessions cs WHERE cs.verified=0
-            ORDER BY cs.date DESC, cs.type, cs.section
-        ''').fetchall()]
+            FROM checklist_sessions cs WHERE cs.verified=0 AND cs.date=?
+            ORDER BY cs.type, cs.section
+        ''', (sel_date,)).fetchall()]
         issues = [dict(r) for r in conn.execute('''
-            SELECT * FROM checklist_sessions WHERE overall_result='issues_found'
-            ORDER BY date DESC LIMIT 20
-        ''').fetchall()]
+            SELECT * FROM checklist_sessions WHERE overall_result='issues_found' AND date=?
+            ORDER BY type, section LIMIT 50
+        ''', (sel_date,)).fetchall()]
         verified_today = conn.execute(
             "SELECT COUNT(*) as c FROM checklist_sessions WHERE verified=1 AND date=?",
-            (today_str,)).fetchone()['c']
+            (sel_date,)).fetchone()['c']
         recent_log = [dict(r) for r in conn.execute(
-            'SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 20').fetchall()]
+            "SELECT * FROM audit_log WHERE substr(timestamp,1,10)=? "
+            "ORDER BY timestamp DESC LIMIT 50", (sel_date,)).fetchall()]
     return render_template('manager.html',
         pending=pending, issues=issues,
         verified_today=verified_today, recent_log=recent_log, staff=get_active_staff(),
+        sel_date=sel_date, today=today_str, is_today=(sel_date == today_str),
+        prev_date=prev_date, next_date=next_date,
     )
 
 # ─── Analytics ─────────────────────────────────────────────────────────────────
