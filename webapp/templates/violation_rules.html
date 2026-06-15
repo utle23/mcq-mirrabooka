@@ -66,6 +66,115 @@
 .vr-soft-panel {
   background:#fbfcfb; border:1px solid #e7ece9; border-radius:8px; padding:12px;
 }
+.vr-record-filter {
+  background:#fff; border:1px solid #e0e7e3; border-radius:8px;
+  box-shadow:0 1px 5px rgba(0,0,0,.05);
+}
+.vr-record-filter .form-label {
+  color:#56625b; font-size:.72rem; font-weight:700; text-transform:uppercase;
+}
+.vr-record-card {
+  border:1px solid #e1e7e4; border-left:5px solid var(--rule-color);
+  border-radius:8px; background:#fff; box-shadow:0 2px 8px rgba(0,0,0,.06);
+  overflow:hidden;
+}
+.vr-record-head {
+  display:flex; align-items:flex-start; gap:12px; padding:14px 16px;
+  background:linear-gradient(180deg, #fff, #fbfcfb); border-bottom:1px solid #edf1ef;
+}
+.vr-record-icon {
+  width:42px; height:42px; border-radius:8px; display:inline-flex;
+  align-items:center; justify-content:center; background:var(--rule-color); color:#fff;
+  flex:0 0 auto;
+}
+.vr-record-main { min-width:0; flex:1; }
+.vr-record-title {
+  margin:0; color:#233027; font-size:1rem; font-weight:800; line-height:1.25;
+}
+.vr-record-subtitle {
+  color:#66736c; font-size:.8rem; margin-top:3px;
+}
+.vr-record-badges {
+  display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-end;
+}
+.vr-status-badge,
+.vr-warning-badge {
+  display:inline-flex; align-items:center; gap:5px; border-radius:999px;
+  padding:5px 9px; font-size:.72rem; font-weight:700; line-height:1;
+}
+.vr-warning-badge { color:#fff; background:var(--warning-color, #607D8B); }
+.vr-record-body { padding:14px 16px 16px; }
+.vr-meta-grid {
+  display:grid; grid-template-columns:repeat(4, minmax(130px, 1fr));
+  gap:8px; margin-bottom:12px;
+}
+.vr-meta-item {
+  min-width:0; border:1px solid #e8eeeb; border-radius:8px; background:#fbfcfb;
+  padding:9px 10px;
+}
+.vr-meta-label {
+  color:#748078; font-size:.68rem; font-weight:700; text-transform:uppercase;
+}
+.vr-meta-value {
+  color:#243027; font-size:.88rem; font-weight:700; margin-top:2px;
+  overflow-wrap:anywhere;
+}
+.vr-detail-grid {
+  display:grid; grid-template-columns:minmax(0, 1.4fr) minmax(280px, .8fr);
+  gap:12px; align-items:start;
+}
+.vr-note-box {
+  border:1px solid #e6ece9; border-radius:8px; background:#fff; padding:11px 12px;
+}
+.vr-note-box + .vr-note-box { margin-top:8px; }
+.vr-note-label {
+  color:#58645d; font-size:.72rem; font-weight:800; text-transform:uppercase;
+  margin-bottom:5px;
+}
+.vr-note-text {
+  color:#233027; font-size:.88rem; line-height:1.45; white-space:pre-wrap;
+}
+.vr-note-muted { color:#7b8580; font-size:.84rem; }
+.vr-edit-panel {
+  margin-top:12px; border:1px solid #dfe8e3; border-radius:8px;
+  background:#f8faf9; overflow:hidden;
+}
+.vr-edit-panel > summary {
+  cursor:pointer; list-style:none; padding:10px 12px; display:flex;
+  align-items:center; justify-content:space-between; gap:10px; font-weight:800;
+  color:#263238; background:#f9fbfa;
+}
+.vr-edit-panel > summary::-webkit-details-marker { display:none; }
+.vr-edit-panel > summary .fa-chevron-down { transition:transform .15s; color:#7a8580; }
+.vr-edit-panel[open] > summary .fa-chevron-down { transform:rotate(180deg); }
+.vr-edit-form {
+  padding:12px; border-top:1px solid #e3ebe6;
+}
+.vr-edit-group {
+  border:1px solid #e5ece8; border-radius:8px; background:#fff; padding:11px;
+  height:100%;
+}
+.vr-edit-group-title {
+  color:#3d4842; font-size:.76rem; font-weight:800; text-transform:uppercase;
+  margin-bottom:8px;
+}
+.vr-record-actions {
+  display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap; margin-top:10px;
+}
+.vr-empty-state {
+  background:#fff; border:1px dashed #cfd8d3; border-radius:8px; padding:44px 18px;
+}
+@media (max-width: 991.98px) {
+  .vr-record-head { flex-wrap:wrap; }
+  .vr-record-badges { justify-content:flex-start; width:100%; }
+  .vr-meta-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+  .vr-detail-grid { grid-template-columns:1fr; }
+}
+@media (max-width: 575.98px) {
+  .vr-record-head, .vr-record-body { padding:12px; }
+  .vr-meta-grid { grid-template-columns:1fr; }
+  .vr-record-icon { width:38px; height:38px; }
+}
 </style>
 {% endblock %}
 
@@ -432,87 +541,246 @@
 {% endif %}{# end new view #}
 
 {% if view == 'records' %}
-<div class="card shadow-sm mb-4">
-  <div class="card-body py-2">
-    <form method="GET" class="row g-2 align-items-end">
-      <div class="col-auto"><label class="form-label small fw-semibold mb-1">From</label><input type="date" name="date_from" class="form-control form-control-sm" value="{{ date_from }}"></div>
-      <div class="col-auto"><label class="form-label small fw-semibold mb-1">To</label><input type="date" name="date_to" class="form-control form-control-sm" value="{{ date_to }}"></div>
-      <div class="col-auto"><label class="form-label small fw-semibold mb-1">Status</label><select name="status" class="form-select form-select-sm"><option value="all" {% if status_filter=='all' %}selected{% endif %}>All</option><option value="open" {% if status_filter=='open' %}selected{% endif %}>Open</option><option value="closed" {% if status_filter=='closed' %}selected{% endif %}>Closed</option><option value="cancelled" {% if status_filter=='cancelled' %}selected{% endif %}>Cancelled</option></select></div>
-      <div class="col-auto"><label class="form-label small fw-semibold mb-1">Severity</label><select name="severity" class="form-select form-select-sm"><option value="">All</option><option value="minor" {% if severity_filter=='minor' %}selected{% endif %}>Minor</option><option value="moderate" {% if severity_filter=='moderate' %}selected{% endif %}>Moderate</option><option value="serious" {% if severity_filter=='serious' %}selected{% endif %}>Serious</option><option value="critical" {% if severity_filter=='critical' %}selected{% endif %}>Critical</option></select></div>
-      <div class="col-auto"><label class="form-label small fw-semibold mb-1">Staff</label><select name="staff" class="form-select form-select-sm"><option value="">All Staff</option>{% for s in staff %}<option value="{{ s }}" {% if staff_filter==s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select></div>
-      <div class="col-auto"><button class="btn btn-sm btn-success"><i class="fas fa-search me-1"></i>Filter</button><a href="/admin/violations" class="btn btn-sm btn-outline-secondary ms-1">Reset</a></div>
-    </form>
+<div class="vr-record-filter mb-4 p-3">
+  <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+    <div class="me-auto">
+      <h6 class="mb-0"><i class="fas fa-folder-open me-2 text-danger"></i>Violation Records</h6>
+      <div class="text-muted small">{{ violations|length }} record(s) shown from {{ date_from }} to {{ date_to }}</div>
+    </div>
+    <span class="badge bg-danger">{{ counts.get('open', 0) }} open</span>
+    <span class="badge bg-success">{{ counts.get('closed', 0) }} closed</span>
+    <span class="badge bg-secondary">{{ counts.get('cancelled', 0) }} cancelled</span>
   </div>
+  <form method="GET" class="row g-2 align-items-end">
+    <div class="col-6 col-md-3 col-xl-2">
+      <label class="form-label mb-1">From</label>
+      <input type="date" name="date_from" class="form-control form-control-sm" value="{{ date_from }}">
+    </div>
+    <div class="col-6 col-md-3 col-xl-2">
+      <label class="form-label mb-1">To</label>
+      <input type="date" name="date_to" class="form-control form-control-sm" value="{{ date_to }}">
+    </div>
+    <div class="col-6 col-md-3 col-xl-2">
+      <label class="form-label mb-1">Status</label>
+      <select name="status" class="form-select form-select-sm">
+        <option value="all" {% if status_filter=='all' %}selected{% endif %}>All</option>
+        <option value="open" {% if status_filter=='open' %}selected{% endif %}>Open</option>
+        <option value="closed" {% if status_filter=='closed' %}selected{% endif %}>Closed</option>
+        <option value="cancelled" {% if status_filter=='cancelled' %}selected{% endif %}>Cancelled</option>
+      </select>
+    </div>
+    <div class="col-6 col-md-3 col-xl-2">
+      <label class="form-label mb-1">Severity</label>
+      <select name="severity" class="form-select form-select-sm">
+        <option value="">All</option>
+        <option value="minor" {% if severity_filter=='minor' %}selected{% endif %}>Minor</option>
+        <option value="moderate" {% if severity_filter=='moderate' %}selected{% endif %}>Moderate</option>
+        <option value="serious" {% if severity_filter=='serious' %}selected{% endif %}>Serious</option>
+        <option value="critical" {% if severity_filter=='critical' %}selected{% endif %}>Critical</option>
+      </select>
+    </div>
+    <div class="col-12 col-md-6 col-xl-2">
+      <label class="form-label mb-1">Staff</label>
+      <select name="staff" class="form-select form-select-sm">
+        <option value="">All Staff</option>
+        {% for s in staff %}<option value="{{ s }}" {% if staff_filter==s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-12 col-md-6 col-xl-2 d-flex gap-2">
+      <button class="btn btn-sm btn-success flex-fill"><i class="fas fa-search me-1"></i>Filter</button>
+      <a href="/admin/violations" class="btn btn-sm btn-outline-secondary flex-fill">Reset</a>
+    </div>
+  </form>
 </div>
 
 {% for v in violations %}
 {% set status_badge = {'open':'danger','closed':'success','cancelled':'secondary'}.get(v.status, 'secondary') %}
 {% set ws = v.warning_step or warning_steps[0] %}
-<div class="card shadow-sm mb-3 violation-row" style="--rule-color:{{ v.rule_color or '#607D8B' }}">
-  <div class="card-header py-2 d-flex flex-wrap gap-2 align-items-center">
-    <i class="fas {{ v.rule_icon or 'fa-triangle-exclamation' }}" style="color:{{ v.rule_color or '#607D8B' }}"></i>
-    <strong>{{ v.rule_title or 'Rule removed' }}</strong>
-    <span class="badge severity-{{ v.severity }}">{{ v.severity|title }}</span>
-    <span class="badge" style="background:{{ warning_step_meta.get(ws, {}).get('color', '#607D8B') }}"><i class="fas fa-stairs me-1"></i>{{ ws }}</span>
-    <span class="badge bg-{{ status_badge }}">{{ v.status|title }}</span>
-    <span class="ms-auto text-muted small">
-      <i class="fas fa-user me-1"></i>{{ v.staff_name }}
-      &nbsp;|&nbsp;<i class="fas fa-calendar me-1"></i>{{ v.incident_date }}
-      &nbsp;|&nbsp;<i class="fas fa-clock me-1"></i>{{ v.incident_time }}
-      &nbsp;|&nbsp;Submitted {{ v.submitted_at or '—' }}
-    </span>
-  </div>
-  <div class="card-body">
-    <p class="mb-2">{{ v.description }}</p>
-    {% if v.action_taken %}
-    <div class="alert alert-light border py-2 small mb-3"><strong>Action:</strong> {{ v.action_taken }}</div>
-    {% endif %}
-    {% if v.follow_up_date %}
-    <div class="small text-muted mb-2"><i class="fas fa-calendar-check me-1"></i>Follow-up date: {{ v.follow_up_date }}</div>
-    {% endif %}
-    {% if v.manager_notes %}
-    <div class="alert alert-info py-2 small mb-3"><strong>Manager notes:</strong> {{ v.manager_notes }}</div>
-    {% endif %}
-    <form method="POST" action="/admin/violations/{{ v.id }}/update" class="row g-2 align-items-end">
-      <div class="col-md-4">
-        <label class="form-label small fw-semibold mb-1">Rule</label>
-        <select name="rule_id" class="form-select form-select-sm">
-          {% for rule in rules %}
-          <option value="{{ rule.id }}" {% if v.rule_id==rule.id %}selected{% endif %}>{{ rule.title }}</option>
-          {% endfor %}
-        </select>
+<div class="vr-record-card mb-3" style="--rule-color:{{ v.rule_color or '#607D8B' }}">
+  <div class="vr-record-head">
+    <div class="vr-record-icon"><i class="fas {{ v.rule_icon or 'fa-triangle-exclamation' }}"></i></div>
+    <div class="vr-record-main">
+      <h6 class="vr-record-title">{{ v.rule_title or 'Rule removed' }}</h6>
+      <div class="vr-record-subtitle">
+        {{ v.rule_category or 'General' }} · Case #{{ v.id }}
       </div>
-      <div class="col-md-3">
-        <label class="form-label small fw-semibold mb-1">Staff</label>
-        <select name="staff_name" class="form-select form-select-sm">
-          {% for s in staff %}<option value="{{ s }}" {% if v.staff_name==s %}selected{% endif %}>{{ s }}</option>{% endfor %}
-        </select>
-      </div>
-      <div class="col-md-2"><label class="form-label small fw-semibold mb-1">Date</label><input type="date" name="incident_date" class="form-control form-control-sm" value="{{ v.incident_date }}"></div>
-      <div class="col-md-2"><label class="form-label small fw-semibold mb-1">Time</label><input type="time" name="incident_time" class="form-control form-control-sm" value="{{ v.incident_time }}"></div>
-      <div class="col-md-1"><button class="btn btn-sm btn-success w-100"><i class="fas fa-save"></i></button></div>
-      <div class="col-md-2"><label class="form-label small fw-semibold mb-1">Severity</label><select name="severity" class="form-select form-select-sm">{% for sev in ['minor','moderate','serious','critical'] %}<option value="{{ sev }}" {% if v.severity==sev %}selected{% endif %}>{{ sev|title }}</option>{% endfor %}</select></div>
-      <div class="col-md-3"><label class="form-label small fw-semibold mb-1">Warning Step</label><select name="warning_step" class="form-select form-select-sm">{% for step in warning_steps %}<option value="{{ step }}" {% if ws==step %}selected{% endif %}>{{ loop.index }}. {{ step }}</option>{% endfor %}</select></div>
-      <div class="col-md-2"><label class="form-label small fw-semibold mb-1">Status</label><select name="status" class="form-select form-select-sm"><option value="open" {% if v.status=='open' %}selected{% endif %}>Open</option><option value="closed" {% if v.status=='closed' %}selected{% endif %}>Closed</option><option value="cancelled" {% if v.status=='cancelled' %}selected{% endif %}>Cancelled</option></select></div>
-      <div class="col-md-3"><label class="form-label small fw-semibold mb-1">Submitted by</label><select name="submitted_by" class="form-select form-select-sm"><option value="">— Admin / Manager —</option>{% for m in managers %}<option value="{{ m }}" {% if v.submitted_by==m %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div>
-      <div class="col-md-3"><label class="form-label small fw-semibold mb-1">Resolved by</label><select name="resolved_by" class="form-select form-select-sm"><option value="">— Manager —</option>{% for m in managers %}<option value="{{ m }}" {% if v.resolved_by==m %}selected{% endif %}>{{ m }}</option>{% endfor %}</select></div>
-      <div class="col-md-2"><label class="form-label small fw-semibold mb-1">Follow-up</label><input type="date" name="follow_up_date" class="form-control form-control-sm" value="{{ v.follow_up_date or '' }}"></div>
-      <div class="col-md-6"><label class="form-label small fw-semibold mb-1">Description</label><textarea name="description" rows="2" class="form-control form-control-sm">{{ v.description or '' }}</textarea></div>
-      <div class="col-md-3"><label class="form-label small fw-semibold mb-1">Action</label><textarea name="action_taken" rows="2" class="form-control form-control-sm">{{ v.action_taken or '' }}</textarea></div>
-      <div class="col-md-3"><label class="form-label small fw-semibold mb-1">Manager Notes</label><textarea name="manager_notes" rows="2" class="form-control form-control-sm">{{ v.manager_notes or '' }}</textarea></div>
-    </form>
-    <div class="d-flex justify-content-end mt-2">
-      <form method="POST" action="/admin/delete/violation/{{ v.id }}" class="d-inline"
-            onsubmit="return confirm('Delete this violation record permanently?')">
-        <button type="submit" class="btn btn-sm btn-outline-danger">
-          <i class="fas fa-trash me-1"></i>Delete
-        </button>
-      </form>
     </div>
+    <div class="vr-record-badges">
+      <span class="badge severity-{{ v.severity }}">{{ v.severity|title }}</span>
+      <span class="vr-warning-badge" style="--warning-color:{{ warning_step_meta.get(ws, {}).get('color', '#607D8B') }}">
+        <i class="fas fa-stairs"></i>{{ warning_step_meta.get(ws, {}).get('short', ws) }}
+      </span>
+      <span class="vr-status-badge bg-{{ status_badge }} text-white">
+        <i class="fas {{ 'fa-circle-check' if v.status=='closed' else 'fa-ban' if v.status=='cancelled' else 'fa-circle-exclamation' }}"></i>{{ v.status|title }}
+      </span>
+    </div>
+  </div>
+  <div class="vr-record-body">
+    <div class="vr-meta-grid">
+      <div class="vr-meta-item">
+        <div class="vr-meta-label">Staff</div>
+        <div class="vr-meta-value"><i class="fas fa-user me-1 text-muted"></i>{{ v.staff_name }}</div>
+      </div>
+      <div class="vr-meta-item">
+        <div class="vr-meta-label">Incident Date</div>
+        <div class="vr-meta-value"><i class="fas fa-calendar me-1 text-muted"></i>{{ v.incident_date }}</div>
+      </div>
+      <div class="vr-meta-item">
+        <div class="vr-meta-label">Incident Time</div>
+        <div class="vr-meta-value"><i class="fas fa-clock me-1 text-muted"></i>{{ v.incident_time or '—' }}</div>
+      </div>
+      <div class="vr-meta-item">
+        <div class="vr-meta-label">Submitted</div>
+        <div class="vr-meta-value">{{ v.submitted_at or '—' }}</div>
+      </div>
+    </div>
+
+    <div class="vr-detail-grid">
+      <div class="vr-note-box">
+        <div class="vr-note-label"><i class="fas fa-file-lines me-1 text-danger"></i>Description</div>
+        <div class="vr-note-text">{{ v.description or 'No description recorded.' }}</div>
+      </div>
+      <div>
+        <div class="vr-note-box">
+          <div class="vr-note-label"><i class="fas fa-screwdriver-wrench me-1 text-success"></i>Action Taken</div>
+          <div class="{{ 'vr-note-text' if v.action_taken else 'vr-note-muted' }}">{{ v.action_taken or 'No action recorded yet.' }}</div>
+        </div>
+        <div class="vr-note-box">
+          <div class="vr-note-label"><i class="fas fa-user-shield me-1 text-primary"></i>Manager Review</div>
+          <div class="vr-note-muted mb-1">Submitted by: <strong>{{ v.submitted_by or 'Admin / Manager' }}</strong></div>
+          <div class="vr-note-muted mb-1">Resolved by: <strong>{{ v.resolved_by or '—' }}</strong></div>
+          <div class="vr-note-muted">Follow-up: <strong>{{ v.follow_up_date or '—' }}</strong></div>
+          {% if v.manager_notes %}
+          <div class="vr-note-text mt-2">{{ v.manager_notes }}</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <details class="vr-edit-panel">
+      <summary>
+        <span><i class="fas fa-pen-to-square me-2 text-danger"></i>Edit record</span>
+        <span class="text-muted small">Update details <i class="fas fa-chevron-down ms-1"></i></span>
+      </summary>
+      <div class="vr-edit-form">
+        <form method="POST" action="/admin/violations/{{ v.id }}/update">
+          <div class="row g-3">
+            <div class="col-12 col-xl-6">
+              <div class="vr-edit-group">
+                <div class="vr-edit-group-title">Case Details</div>
+                <div class="row g-2">
+                  <div class="col-12">
+                    <label class="form-label small fw-semibold mb-1">Rule</label>
+                    <select name="rule_id" class="form-select form-select-sm">
+                      {% for rule in rules %}
+                      <option value="{{ rule.id }}" {% if v.rule_id==rule.id %}selected{% endif %}>{{ rule.title }}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label small fw-semibold mb-1">Staff</label>
+                    <select name="staff_name" class="form-select form-select-sm">
+                      {% for s in staff %}<option value="{{ s }}" {% if v.staff_name==s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+                    </select>
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label small fw-semibold mb-1">Date</label>
+                    <input type="date" name="incident_date" class="form-control form-control-sm" value="{{ v.incident_date }}">
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label small fw-semibold mb-1">Time</label>
+                    <input type="time" name="incident_time" class="form-control form-control-sm" value="{{ v.incident_time }}">
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="col-12 col-xl-6">
+              <div class="vr-edit-group">
+                <div class="vr-edit-group-title">Review Status</div>
+                <div class="row g-2">
+                  <div class="col-md-4">
+                    <label class="form-label small fw-semibold mb-1">Severity</label>
+                    <select name="severity" class="form-select form-select-sm">
+                      {% for sev in ['minor','moderate','serious','critical'] %}
+                      <option value="{{ sev }}" {% if v.severity==sev %}selected{% endif %}>{{ sev|title }}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label small fw-semibold mb-1">Status</label>
+                    <select name="status" class="form-select form-select-sm">
+                      <option value="open" {% if v.status=='open' %}selected{% endif %}>Open</option>
+                      <option value="closed" {% if v.status=='closed' %}selected{% endif %}>Closed</option>
+                      <option value="cancelled" {% if v.status=='cancelled' %}selected{% endif %}>Cancelled</option>
+                    </select>
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label small fw-semibold mb-1">Follow-up</label>
+                    <input type="date" name="follow_up_date" class="form-control form-control-sm" value="{{ v.follow_up_date or '' }}">
+                  </div>
+                  <div class="col-md-6">
+                    <label class="form-label small fw-semibold mb-1">Warning Step</label>
+                    <select name="warning_step" class="form-select form-select-sm">
+                      {% for step in warning_steps %}
+                      <option value="{{ step }}" {% if ws==step %}selected{% endif %}>{{ loop.index }}. {{ step }}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-label small fw-semibold mb-1">Submitted by</label>
+                    <select name="submitted_by" class="form-select form-select-sm">
+                      <option value="">Admin / Manager</option>
+                      {% for m in managers %}<option value="{{ m }}" {% if v.submitted_by==m %}selected{% endif %}>{{ m }}</option>{% endfor %}
+                    </select>
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-label small fw-semibold mb-1">Resolved by</label>
+                    <select name="resolved_by" class="form-select form-select-sm">
+                      <option value="">Manager</option>
+                      {% for m in managers %}<option value="{{ m }}" {% if v.resolved_by==m %}selected{% endif %}>{{ m }}</option>{% endfor %}
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="col-12">
+              <div class="vr-edit-group">
+                <div class="vr-edit-group-title">Notes</div>
+                <div class="row g-2">
+                  <div class="col-md-6">
+                    <label class="form-label small fw-semibold mb-1">Description</label>
+                    <textarea name="description" rows="3" class="form-control form-control-sm">{{ v.description or '' }}</textarea>
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-label small fw-semibold mb-1">Action</label>
+                    <textarea name="action_taken" rows="3" class="form-control form-control-sm">{{ v.action_taken or '' }}</textarea>
+                  </div>
+                  <div class="col-md-3">
+                    <label class="form-label small fw-semibold mb-1">Manager Notes</label>
+                    <textarea name="manager_notes" rows="3" class="form-control form-control-sm">{{ v.manager_notes or '' }}</textarea>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="vr-record-actions">
+            <button class="btn btn-sm btn-success"><i class="fas fa-save me-1"></i>Save Changes</button>
+          </div>
+        </form>
+        <div class="vr-record-actions">
+          <form method="POST" action="/admin/delete/violation/{{ v.id }}" class="d-inline"
+                onsubmit="return confirm('Delete this violation record permanently?')">
+            <button type="submit" class="btn btn-sm btn-outline-danger">
+              <i class="fas fa-trash me-1"></i>Delete Record
+            </button>
+          </form>
+        </div>
+      </div>
+    </details>
   </div>
 </div>
 {% else %}
-<div class="text-center text-muted py-5">
+<div class="vr-empty-state text-center text-muted">
   <i class="fas fa-scale-balanced fa-3x mb-3 d-block opacity-25"></i>
   <h5>No violations found</h5>
   <a href="/admin/violations/new" class="btn btn-success mt-2"><i class="fas fa-plus me-1"></i>Create a case</a>
