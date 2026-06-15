@@ -1233,19 +1233,24 @@ def build_temperature_png(session_id: int) -> bytes:
 
 # ── Daily PDF report (one polished A4 doc, designed for WhatsApp share) ─────
 
-def _pdf_photo_buffer(src, max_px=1100):
+def _pdf_photo_buffer(src, max_px=850):
     """Downscale + exif-correct a photo to a small in-memory JPEG before it is
     embedded in the PDF. Phone photos are 3-4000px but the report shows them at
     ~100mm, so this both speeds up rendering and shrinks the PDF a lot."""
     try:
+        st = os.stat(src)
+        cache_key = (src, st.st_mtime_ns, st.st_size, max_px)
+        cached = _PDF_PHOTO_CACHE.get(cache_key)
+        if cached:
+            return BytesIO(cached)
+
         from PIL import Image, ImageOps
         im = ImageOps.exif_transpose(Image.open(src)).convert('RGB')
         if max(im.size) > max_px:
             im.thumbnail((max_px, max_px), Image.LANCZOS)
         buf = BytesIO()
-        im.save(buf, 'JPEG', quality=82, optimize=True)
-        buf.seek(0)
-        return buf
+        im.save(buf, 'JPEG', quality=74, optimize=False, progressive=False)
+        return _remember_pdf_photo(cache_key, buf.getvalue())
     except Exception:
         return None
 
@@ -2240,6 +2245,16 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
 # re-render the report from scratch.
 _PDF_CACHE: dict = {}
 _PDF_CACHE_MAX = 8
+_PDF_PHOTO_CACHE: dict = {}
+_PDF_PHOTO_CACHE_MAX = 96
+
+
+def _remember_pdf_photo(key, data: bytes) -> BytesIO:
+    _PDF_PHOTO_CACHE[key] = data
+    if len(_PDF_PHOTO_CACHE) > _PDF_PHOTO_CACHE_MAX:
+        for old_key in list(_PDF_PHOTO_CACHE.keys())[:-_PDF_PHOTO_CACHE_MAX]:
+            _PDF_PHOTO_CACHE.pop(old_key, None)
+    return BytesIO(data)
 
 
 def _pdf_signature(date_str: str, period: str) -> str:

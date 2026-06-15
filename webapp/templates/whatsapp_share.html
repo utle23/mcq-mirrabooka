@@ -249,6 +249,7 @@ const PDF_URL = '/whatsapp/pdf?date={{ date }}&period={{ period }}';
 const PDF_FNAME = 'MCQ_{{ period_meta.label }}_Report_{{ date }}.pdf';
 let preparedPdf = null;
 let preparePdfPromise = null;
+let preparePdfController = null;
 
 function pdfText() {
   return 'MCQ Mirrabooka Cafe - {{ period_meta.label|lower }} operations report ({{ date }})';
@@ -296,7 +297,8 @@ async function preparePdf({ silent = false } = {}) {
     status.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing PDF...';
   }
 
-  preparePdfPromise = fetch(PDF_URL)
+  preparePdfController = new AbortController();
+  preparePdfPromise = fetch(PDF_URL, { signal: preparePdfController.signal })
     .then(async resp => {
       if (!resp.ok) throw new Error('PDF generation failed (HTTP ' + resp.status + ')');
       const blob = await resp.blob();
@@ -306,6 +308,10 @@ async function preparePdf({ silent = false } = {}) {
       return preparedPdf;
     })
     .catch(e => {
+      if (e.name === 'AbortError') {
+        if (!silent) status.innerHTML = '<i class="fas fa-circle-info"></i> PDF generation cancelled.';
+        throw e;
+      }
       if (!silent) {
         status.innerHTML = '<i class="fas fa-circle-exclamation"></i> ' + e.message;
       }
@@ -313,18 +319,16 @@ async function preparePdf({ silent = false } = {}) {
     })
     .finally(() => {
       preparePdfPromise = null;
+      preparePdfController = null;
     });
 
   return preparePdfPromise;
 }
 
-// Pre-warm the PDF in the background as soon as the page opens, so tapping
-// "Share PDF to WhatsApp" is instant instead of waiting on a cold render.
-document.addEventListener('DOMContentLoaded', function () {
-  if ('requestIdleCallback' in window) {
-    requestIdleCallback(() => { try { preparePdf({ silent: true }); } catch (e) {} });
-  } else {
-    setTimeout(() => { try { preparePdf({ silent: true }); } catch (e) {} }, 400);
+document.addEventListener('click', function (e) {
+  const periodLink = e.target.closest('.period-toggle a');
+  if (periodLink && preparePdfController) {
+    preparePdfController.abort();
   }
 });
 
