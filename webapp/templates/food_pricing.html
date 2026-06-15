@@ -1,0 +1,543 @@
+{% extends "base.html" %}
+{% block title %}Food Pricing{% endblock %}
+{% block topbar_title %}
+<span class="fw-bold"><i class="fas fa-calculator me-2" style="color:#00897B"></i>Food Pricing</span>
+{% endblock %}
+
+{% block head %}
+<style>
+.fp-shell {
+  display:grid; grid-template-columns:minmax(280px, 360px) minmax(0, 1fr);
+  gap:14px; align-items:start;
+}
+.fp-panel {
+  background:#fff; border:1px solid #dde7e1; border-radius:8px;
+  box-shadow:0 1px 6px rgba(0,0,0,.06); overflow:hidden;
+}
+.fp-toolbar {
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+  padding:10px 12px; background:#f8fbf9; border-bottom:1px solid #e7eee9;
+}
+.fp-stat {
+  border-left:4px solid var(--c, #00897B); background:#fff; border-radius:8px;
+  padding:9px 11px; min-width:110px; box-shadow:0 1px 5px rgba(0,0,0,.05);
+}
+.fp-stat-value { font-size:1.25rem; font-weight:800; line-height:1; color:var(--c, #00897B); }
+.fp-stat-label { color:#66736c; font-size:.67rem; font-weight:800; text-transform:uppercase; }
+.fp-item-list {
+  max-height:calc(100vh - 245px); overflow:auto;
+}
+.fp-item-card {
+  display:block; text-decoration:none; color:inherit; padding:10px 12px;
+  border-bottom:1px solid #eef3f0; border-left:4px solid transparent;
+}
+.fp-item-card:hover { background:#f8fffb; }
+.fp-item-card.active { background:#eef8f3; border-left-color:#00897B; }
+.fp-item-name { font-weight:800; color:#213029; line-height:1.2; }
+.fp-item-meta { color:#6a756f; font-size:.74rem; margin-top:2px; }
+.fp-missing {
+  display:inline-flex; align-items:center; gap:4px; border-radius:999px;
+  background:#fff3cd; color:#8a5a00; border:1px solid #ffe08a;
+  padding:2px 7px; font-size:.68rem; font-weight:800;
+}
+.fp-price-mini { color:#00897B; font-weight:800; font-size:.85rem; }
+.fp-category-label {
+  padding:7px 12px; background:#1B3A2D; color:#fff; font-weight:800;
+  font-size:.72rem; text-transform:uppercase;
+}
+.fp-detail-head {
+  padding:14px 16px; background:linear-gradient(180deg, #fff, #f8fbf9);
+  border-bottom:1px solid #e6eee9;
+}
+.fp-title { margin:0; color:#203028; font-weight:850; line-height:1.2; }
+.fp-sub { color:#66736c; font-size:.82rem; margin-top:3px; }
+.fp-summary-grid {
+  display:grid; grid-template-columns:repeat(4, minmax(130px, 1fr)); gap:10px;
+  padding:14px 16px; border-bottom:1px solid #edf2ef; background:#fbfcfb;
+}
+.fp-summary {
+  background:#fff; border:1px solid #e3ebe6; border-radius:8px; padding:10px 11px;
+}
+.fp-summary-label {
+  color:#6e7a73; font-size:.68rem; font-weight:800; text-transform:uppercase;
+}
+.fp-summary-value { color:#1f2e27; font-size:1.05rem; font-weight:850; margin-top:2px; }
+.fp-summary-value.positive { color:#00897B; }
+.fp-summary-value.warning { color:#C62828; }
+.fp-body { padding:14px 16px 16px; }
+.fp-section-title {
+  color:#3d4a43; font-size:.78rem; font-weight:850; text-transform:uppercase;
+  margin-bottom:8px;
+}
+.fp-form-card {
+  background:#f8faf9; border:1px solid #e2ebe6; border-radius:8px; padding:11px;
+}
+.fp-table-wrap {
+  border:1px solid #dfe8e3; border-radius:8px; overflow:auto; background:#fff;
+}
+.fp-table {
+  width:100%; border-collapse:collapse; min-width:920px; font-size:.8rem;
+}
+.fp-table th {
+  background:#1B3A2D; color:#fff; padding:8px 9px; white-space:nowrap;
+  font-size:.7rem; text-transform:uppercase;
+}
+.fp-table td { padding:7px 8px; border-bottom:1px solid #eef3f0; vertical-align:middle; }
+.fp-table tfoot td {
+  background:#f1f8f4; font-weight:850; border-top:2px solid #b7d8c7;
+}
+.fp-input {
+  min-width:0; font-size:.78rem;
+}
+.fp-ing-name { min-width:180px; }
+.fp-number { width:92px; text-align:right; }
+.fp-unit { width:70px; }
+.fp-notes { min-width:150px; }
+.fp-cost-plus {
+  color:#00897B; font-weight:850; white-space:nowrap;
+}
+.fp-empty {
+  background:#fff; border:1px dashed #cad7d0; border-radius:8px;
+  padding:46px 18px; text-align:center; color:#7a8580;
+}
+.fp-actions { display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; }
+.fp-muted { color:#7a8580; font-size:.75rem; }
+.fp-add-panel {
+  border-bottom:1px solid #e7eee9; background:#fff;
+}
+.fp-add-panel summary {
+  list-style:none; cursor:pointer; padding:10px 12px; font-size:.78rem;
+  font-weight:850; color:#22362c; display:flex; align-items:center;
+  justify-content:space-between; gap:8px;
+}
+.fp-add-panel summary::-webkit-details-marker { display:none; }
+.fp-add-panel form { padding:0 12px 12px; }
+.fp-chip {
+  display:inline-flex; align-items:center; gap:5px; border:1px solid #dce8e2;
+  background:#fff; color:#4d5b54; border-radius:999px; padding:4px 8px;
+  font-size:.72rem; font-weight:800;
+}
+.fp-feature-tabs {
+  display:flex; flex-wrap:wrap; gap:7px; margin-top:12px;
+}
+.fp-tab-btn {
+  border:1px solid #d9e6df; background:#fff; color:#344a3f; border-radius:8px;
+  padding:7px 10px; font-size:.78rem; font-weight:850;
+}
+.fp-tab-btn:hover { border-color:#9ac8b5; color:#00796B; }
+.fp-tab-btn.is-active {
+  background:#00897B; border-color:#00897B; color:#fff;
+}
+.fp-tab-panel { display:none; }
+.fp-tab-panel.is-active { display:block; }
+@media (max-width: 1180px) {
+  .fp-shell { grid-template-columns:1fr; }
+  .fp-item-list { max-height:360px; }
+}
+@media (max-width: 767.98px) {
+  .fp-summary-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); padding:12px; }
+  .fp-detail-head, .fp-body { padding:12px; }
+}
+@media (max-width: 520px) {
+  .fp-summary-grid { grid-template-columns:1fr; }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap gap-2 mb-3">
+  <div class="fp-stat" style="--c:#00897B">
+    <div class="fp-stat-value">{{ totals['items'] }}</div>
+    <div class="fp-stat-label">Menu Items</div>
+  </div>
+  <div class="fp-stat" style="--c:#1565C0">
+    <div class="fp-stat-value">{{ totals['ingredients'] }}</div>
+    <div class="fp-stat-label">Ingredient Lines</div>
+  </div>
+  <div class="fp-stat" style="--c:#C62828">
+    <div class="fp-stat-value">{{ totals['ready'] }}</div>
+    <div class="fp-stat-label">Costed Items</div>
+  </div>
+</div>
+
+<div class="fp-shell">
+  <div class="fp-panel">
+    <div class="fp-toolbar">
+      <form method="GET" class="d-flex gap-2 flex-wrap w-100">
+        <select name="category" class="form-select form-select-sm" style="flex:1 1 145px">
+          <option value="All" {% if selected_category == 'All' %}selected{% endif %}>All Categories</option>
+          {% for cat in categories %}
+          <option value="{{ cat }}" {% if selected_category == cat %}selected{% endif %}>{{ cat }}</option>
+          {% endfor %}
+        </select>
+        <div class="input-group input-group-sm" style="flex:1 1 150px">
+          <span class="input-group-text"><i class="fas fa-search"></i></span>
+          <input name="q" class="form-control" value="{{ search }}" placeholder="Search">
+        </div>
+        <button class="btn btn-sm btn-success"><i class="fas fa-filter me-1"></i>Filter</button>
+      </form>
+      <form method="POST" action="/admin/food-pricing/autofill-costs" class="w-100"
+            onsubmit="return confirm('Auto-fill ingredient costs from Item List? Existing auto/manual costs in mapped lines will be recalculated from current Item List prices.')">
+        <button class="btn btn-sm btn-outline-success w-100">
+          <i class="fas fa-wand-magic-sparkles me-1"></i>Auto Fill Costs from Item List
+        </button>
+      </form>
+    </div>
+
+    <details class="fp-add-panel">
+      <summary>
+        <span><i class="fas fa-plus-circle me-1 text-success"></i>Add Menu Item</span>
+        <i class="fas fa-chevron-down"></i>
+      </summary>
+      <form method="POST" action="/admin/food-pricing/item/add" class="row g-2 align-items-end">
+        <div class="col-12">
+          <div class="fp-section-title mb-0">New Menu Item</div>
+        </div>
+        <div class="col-7">
+          <label class="form-label small fw-semibold mb-1">Name</label>
+          <input name="name" class="form-control form-control-sm" required>
+        </div>
+        <div class="col-5">
+          <label class="form-label small fw-semibold mb-1">Category</label>
+          <input name="category" class="form-control form-control-sm" value="{{ selected_category if selected_category != 'All' else 'Menu' }}">
+        </div>
+        <div class="col-5">
+          <label class="form-label small fw-semibold mb-1">Margin %</label>
+          <input name="margin_pct" type="number" step="0.1" min="0" max="95" class="form-control form-control-sm" value="{{ default_margin_pct }}">
+        </div>
+        <div class="col-7">
+          <label class="form-label small fw-semibold mb-1">Notes</label>
+          <input name="notes" class="form-control form-control-sm">
+        </div>
+        <div class="col-12">
+          <button class="btn btn-sm btn-success w-100"><i class="fas fa-save me-1"></i>Add Item</button>
+        </div>
+      </form>
+    </details>
+
+    <div class="fp-item-list">
+      {% if not items %}
+      <div class="fp-empty m-3">
+        <i class="fas fa-bowl-food fa-2x mb-2 d-block opacity-25"></i>
+        <div class="fw-bold">No menu items</div>
+      </div>
+      {% else %}
+      {% set ns = namespace(category='') %}
+      {% for item in items %}
+        {% if item.category != ns.category %}
+          {% set ns.category = item.category %}
+          <div class="fp-category-label">{{ item.category }}</div>
+        {% endif %}
+        <a class="fp-item-card {{ 'active' if selected_item and item.id == selected_item.id else '' }}"
+           href="/admin/food-pricing/?category={{ selected_category|urlencode }}&q={{ search|urlencode }}&item_id={{ item.id }}">
+          <div class="d-flex gap-2 align-items-start">
+            <div class="me-auto">
+              <div class="fp-item-name">{{ item.name }}</div>
+              <div class="fp-item-meta">
+                {{ item.costed_count }}/{{ item.ingredient_count }} costed · {{ "%.1f"|format(item.margin_pct) }}% margin
+                {% if item.missing_cost_count %}
+                <span class="fp-missing ms-1"><i class="fas fa-triangle-exclamation"></i>{{ item.missing_cost_count }} missing</span>
+                {% endif %}
+              </div>
+            </div>
+            <div class="text-end">
+              {% if item.rounded_price %}
+              <div class="fp-price-mini">${{ "%.2f"|format(item.rounded_price) }}</div>
+              <div class="fp-muted">${{ "%.2f"|format(item.total_adjusted) }} cost+</div>
+              {% else %}
+              <div class="fp-muted">Not costed</div>
+              {% endif %}
+            </div>
+          </div>
+        </a>
+      {% endfor %}
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="fp-panel">
+    {% if not selected_item %}
+    <div class="fp-empty m-3">
+      <i class="fas fa-calculator fa-3x mb-3 d-block opacity-25"></i>
+      <h6>No item selected</h6>
+    </div>
+    {% else %}
+    <div class="fp-detail-head">
+      <div class="d-flex flex-wrap gap-2 align-items-start">
+        <div class="me-auto">
+          <h5 class="fp-title">{{ selected_item.name }}</h5>
+          <div class="fp-sub">
+            {{ selected_item.category }} · {{ selected_item.ingredient_count }} ingredient line{{ 's' if selected_item.ingredient_count != 1 }}
+          </div>
+        </div>
+        <span class="fp-chip"><i class="fas fa-list-ol"></i>Order {{ selected_item.sort_order + 1 }}</span>
+        <span class="fp-chip"><i class="fas fa-percent"></i>{{ "%.1f"|format(selected_item.margin_pct) }}% margin</span>
+        {% if selected_item.missing_cost_count %}
+        <span class="fp-missing"><i class="fas fa-triangle-exclamation"></i>{{ selected_item.missing_cost_count }} missing cost</span>
+        {% else %}
+        <span class="fp-chip text-success"><i class="fas fa-check-circle"></i>Costed</span>
+        {% endif %}
+      </div>
+      <div class="fp-feature-tabs" role="tablist" aria-label="Food pricing tools">
+        <button type="button" class="fp-tab-btn is-active" data-fp-tab="sheet">
+          <i class="fas fa-table me-1"></i>Cost Sheet
+        </button>
+        <button type="button" class="fp-tab-btn" data-fp-tab="ingredients">
+          <i class="fas fa-plus me-1"></i>Ingredients
+        </button>
+        <button type="button" class="fp-tab-btn" data-fp-tab="settings">
+          <i class="fas fa-sliders-h me-1"></i>Settings
+        </button>
+      </div>
+    </div>
+
+    <div class="fp-tab-panel is-active" data-fp-panel="sheet">
+    <div class="fp-summary-grid">
+      <div class="fp-summary">
+        <div class="fp-summary-label">Base Cost</div>
+        <div class="fp-summary-value" id="sum-base">${{ "%.2f"|format(selected_item.total_cost) }}</div>
+      </div>
+      <div class="fp-summary">
+        <div class="fp-summary-label">Khau Hao / Labour</div>
+        <div class="fp-summary-value" id="sum-overhead">${{ "%.2f"|format(selected_item.total_overhead) }}</div>
+      </div>
+      <div class="fp-summary">
+        <div class="fp-summary-label">Total Cost+</div>
+        <div class="fp-summary-value positive" id="sum-adjusted">${{ "%.2f"|format(selected_item.total_adjusted) }}</div>
+      </div>
+      <div class="fp-summary">
+        <div class="fp-summary-label">Final Sell Price</div>
+        <div class="fp-summary-value warning" id="sum-price">
+          {% if selected_item.rounded_price %}${{ "%.2f"|format(selected_item.rounded_price) }}{% else %}$0.00{% endif %}
+        </div>
+        <div class="fp-muted" id="sum-exact">
+          Exact: {% if selected_item.exact_price %}${{ "%.2f"|format(selected_item.exact_price) }}{% else %}$0.00{% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="fp-body">
+      {% if selected_item.missing_cost_count %}
+      <div class="alert alert-warning py-2 small mb-3">
+        <i class="fas fa-triangle-exclamation me-1"></i>
+        This price is partial: {{ selected_item.missing_cost_count }} ingredient cost line{{ 's' if selected_item.missing_cost_count != 1 }} still need cost.
+      </div>
+      {% endif %}
+      <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+        <div class="fp-section-title mb-0 me-auto"><i class="fas fa-list-check me-1 text-success"></i>Excel-style cost sheet</div>
+        <span class="badge bg-light text-dark border">Cost+ = Cost x (1 + %)</span>
+        <span class="badge bg-light text-dark border">Margin target: <span id="margin-badge">{{ "%.1f"|format(selected_item.margin_pct) }}</span>%</span>
+      </div>
+
+      <div class="fp-table-wrap mb-3">
+        <table class="fp-table">
+          <thead>
+            <tr>
+              <th style="width:42px">No</th>
+              <th style="min-width:180px">Ingredients</th>
+              <th style="width:100px">Weight</th>
+              <th style="width:70px">Unit</th>
+              <th style="width:115px" class="text-end">Cost $</th>
+              <th style="width:125px" class="text-end">Labour &amp; Expenses %</th>
+              <th style="width:110px" class="text-end">Cost +</th>
+              <th style="min-width:150px">Notes</th>
+              <th style="width:120px" class="text-end">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="ingredient-body">
+            {% for ing in selected_item.ingredients %}
+            <tr>
+              <td colspan="9" class="p-0">
+                <form method="POST" action="/admin/food-pricing/ingredient/{{ ing.id }}/update"
+                      class="fp-ing-row"
+                      data-cost-row
+                      data-adjusted="{{ ing.adjusted_cost or 0 }}">
+                  <input type="hidden" name="item_id" value="{{ selected_item.id }}">
+                  <div style="display:grid;grid-template-columns:42px minmax(180px,1fr) 100px 70px 115px 125px 110px minmax(150px,1fr) 120px;align-items:center">
+                    <div class="px-2 text-center text-muted">{{ loop.index }}</div>
+                    <div class="px-1 py-1"><input name="ingredient_name" class="form-control form-control-sm fp-input fp-ing-name" value="{{ ing.ingredient_name }}" required></div>
+                    <div class="px-1 py-1"><input name="weight_qty" type="number" step="0.01" min="0" class="form-control form-control-sm fp-input fp-number" value="{{ '' if ing.weight_qty is none else ing.weight_qty }}"></div>
+                    <div class="px-1 py-1"><input name="weight_unit" class="form-control form-control-sm fp-input fp-unit" value="{{ ing.weight_unit or 'g' }}"></div>
+                    <div class="px-1 py-1"><input name="cost_per_serve" type="number" step="0.0001" min="0" class="form-control form-control-sm fp-input fp-number cost-input" value="{{ '' if ing.cost_per_serve is none else ing.cost_per_serve }}"></div>
+                    <div class="px-1 py-1"><input name="overhead_pct" type="number" step="0.1" min="0" class="form-control form-control-sm fp-input fp-number overhead-input" value="{{ ing.overhead_pct }}"></div>
+                    <div class="px-2 py-1 text-end fp-cost-plus adjusted-output">${{ "%.2f"|format(ing.adjusted_cost or 0) }}</div>
+                    <div class="px-1 py-1">
+                      <input name="notes" class="form-control form-control-sm fp-input fp-notes" value="{{ ing.notes or '' }}">
+                      {% if ing.cost_source %}
+                      <div class="fp-muted mt-1"><i class="fas fa-link me-1"></i>{{ ing.cost_source }}</div>
+                      {% endif %}
+                    </div>
+                    <div class="px-2 py-1 fp-actions">
+                      <input type="hidden" name="sort_order" value="{{ ing.sort_order }}">
+                      <button class="btn btn-sm btn-success" title="Save"><i class="fas fa-save"></i></button>
+                      <button class="btn btn-sm btn-outline-danger" title="Delete"
+                              formaction="/admin/food-pricing/ingredient/{{ ing.id }}/delete"
+                              onclick="return confirm('Delete this ingredient line?')">
+                        <i class="fas fa-trash"></i>
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colspan="4" class="text-end">Total</td>
+              <td class="text-end" id="foot-base">${{ "%.2f"|format(selected_item.total_cost) }}</td>
+              <td class="text-end" id="foot-overhead">${{ "%.2f"|format(selected_item.total_overhead) }}</td>
+              <td class="text-end" id="foot-adjusted">${{ "%.2f"|format(selected_item.total_adjusted) }}</td>
+              <td>Sell Price</td>
+              <td class="text-end" id="foot-price">
+                {% if selected_item.rounded_price %}${{ "%.2f"|format(selected_item.rounded_price) }}{% else %}$0.00{% endif %}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+    </div>
+    </div>
+
+    <div class="fp-body fp-tab-panel" data-fp-panel="ingredients">
+      <div class="fp-form-card">
+        <form method="POST" action="/admin/food-pricing/ingredient/add" class="row g-2 align-items-end">
+          <input type="hidden" name="item_id" value="{{ selected_item.id }}">
+          <div class="col-12">
+            <div class="fp-section-title mb-0"><i class="fas fa-plus-circle me-1 text-success"></i>Add Ingredient Line</div>
+          </div>
+          <div class="col-12 col-md-3">
+            <label class="form-label small fw-semibold mb-1">Ingredient</label>
+            <input name="ingredient_name" class="form-control form-control-sm" required>
+          </div>
+          <div class="col-6 col-md-1">
+            <label class="form-label small fw-semibold mb-1">Weight</label>
+            <input name="weight_qty" type="number" step="0.01" min="0" class="form-control form-control-sm">
+          </div>
+          <div class="col-6 col-md-1">
+            <label class="form-label small fw-semibold mb-1">Unit</label>
+            <input name="weight_unit" class="form-control form-control-sm" value="g">
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label small fw-semibold mb-1">Cost $</label>
+            <input name="cost_per_serve" type="number" step="0.0001" min="0" class="form-control form-control-sm">
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label small fw-semibold mb-1">Labour &amp; Expenses %</label>
+            <input name="overhead_pct" type="number" step="0.1" min="0" class="form-control form-control-sm" value="{{ default_overhead_pct }}">
+          </div>
+          <div class="col-12 col-md-2">
+            <label class="form-label small fw-semibold mb-1">Notes</label>
+            <input name="notes" class="form-control form-control-sm">
+          </div>
+          <div class="col-12 col-md-1">
+            <button class="btn btn-sm btn-success w-100"><i class="fas fa-plus"></i></button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="fp-body fp-tab-panel" data-fp-panel="settings">
+      <div class="fp-form-card">
+        <form method="POST" action="/admin/food-pricing/item/{{ selected_item.id }}/update" class="row g-2 align-items-end" id="item-form">
+          <div class="col-12">
+            <div class="fp-section-title mb-0"><i class="fas fa-sliders-h me-1 text-success"></i>Menu Item Settings</div>
+          </div>
+          <div class="col-12 col-lg-5">
+            <label class="form-label small fw-semibold mb-1">Product</label>
+            <input name="name" class="form-control form-control-sm fw-bold" value="{{ selected_item.name }}" required>
+          </div>
+          <div class="col-6 col-lg-2">
+            <label class="form-label small fw-semibold mb-1">Category</label>
+            <input name="category" class="form-control form-control-sm" value="{{ selected_item.category }}">
+          </div>
+          <div class="col-6 col-lg-2">
+            <label class="form-label small fw-semibold mb-1">Margin %</label>
+            <input name="margin_pct" id="margin-pct" type="number" step="0.1" min="0" max="95"
+                   class="form-control form-control-sm" value="{{ selected_item.margin_pct }}">
+          </div>
+          <div class="col-6 col-lg-1">
+            <label class="form-label small fw-semibold mb-1">Order</label>
+            <input name="sort_order" type="number" step="1" class="form-control form-control-sm" value="{{ selected_item.sort_order }}">
+          </div>
+          <div class="col-6 col-lg-2 fp-actions">
+            <button class="btn btn-sm btn-success flex-fill"><i class="fas fa-save me-1"></i>Save</button>
+            <button type="submit" class="btn btn-sm btn-outline-danger flex-fill"
+                    formaction="/admin/food-pricing/item/{{ selected_item.id }}/delete"
+                    onclick="return confirm('Delete this menu item and all ingredient lines?')">
+              <i class="fas fa-trash"></i>
+            </button>
+          </div>
+          <div class="col-12">
+            <label class="form-label small fw-semibold mb-1">Notes</label>
+            <input name="notes" class="form-control form-control-sm" value="{{ selected_item.notes or '' }}">
+          </div>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function money(v) {
+  const n = Number.isFinite(v) ? v : 0;
+  return '$' + n.toFixed(2);
+}
+function roundUp(v, step = 0.5) {
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  return Math.ceil((v / step) - 1e-9) * step;
+}
+function recalcFoodPricing() {
+  let base = 0;
+  let overhead = 0;
+  let adjusted = 0;
+  document.querySelectorAll('[data-cost-row]').forEach(row => {
+    const cost = parseFloat(row.querySelector('.cost-input')?.value || '0') || 0;
+    const pct = parseFloat(row.querySelector('.overhead-input')?.value || '0') || 0;
+    const rowOverhead = cost * pct / 100;
+    const rowAdjusted = cost + rowOverhead;
+    base += cost;
+    overhead += rowOverhead;
+    adjusted += rowAdjusted;
+    row.dataset.adjusted = rowAdjusted;
+    const out = row.querySelector('.adjusted-output');
+    if (out) out.textContent = money(rowAdjusted);
+  });
+
+  const marginPct = parseFloat(document.getElementById('margin-pct')?.value || '50') || 0;
+  const exact = marginPct < 100 && adjusted > 0 ? adjusted / (1 - marginPct / 100) : 0;
+  const price = roundUp(exact);
+
+  [['sum-base', base], ['foot-base', base], ['sum-overhead', overhead], ['foot-overhead', overhead],
+   ['sum-adjusted', adjusted], ['foot-adjusted', adjusted], ['sum-price', price], ['foot-price', price]]
+    .forEach(([id, value]) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = money(value);
+    });
+
+  const exactEl = document.getElementById('sum-exact');
+  if (exactEl) exactEl.textContent = 'Exact: ' + money(exact);
+  const badge = document.getElementById('margin-badge');
+  if (badge) badge.textContent = marginPct.toFixed(1);
+}
+document.addEventListener('input', e => {
+  if (e.target.matches('.cost-input, .overhead-input, #margin-pct')) recalcFoodPricing();
+});
+document.addEventListener('click', e => {
+  const btn = e.target.closest('[data-fp-tab]');
+  if (!btn) return;
+  const tab = btn.dataset.fpTab;
+  document.querySelectorAll('[data-fp-tab]').forEach(el => {
+    el.classList.toggle('is-active', el.dataset.fpTab === tab);
+  });
+  document.querySelectorAll('[data-fp-panel]').forEach(el => {
+    el.classList.toggle('is-active', el.dataset.fpPanel === tab);
+  });
+});
+recalcFoodPricing();
+</script>
+{% endblock %}
