@@ -64,8 +64,8 @@ JACCUS_ITEMS_SEED = [
     ('Oven5',               'Nuoc rua lo nuong 5L',                       'Nước rửa lò nướng 5L',                             'can',    0),
     ('AF44/150',            'Foil — giay bac',                            'Giấy bạc',                                         'each',   0),
     ('CW45/600 Pro',        'Clingwrap 45cm x 600m',                      'Màng bọc thực phẩm 45cm x 600m',                   'each',   0),
-    ('BioR-500Y',           '500ml Clear Biocup',                         'Cốc Biocup 500ml trong',                           'each',   0),
-    ('BioC-96D(N)',         'Dome Lid (no hole) for 300-700ml BioCup',    'Nắp vòm BioCup 300-700ml',                         'each',   0),
+    ('BioR-500Y',           '500ml Clear Biocup',                         'Cốc Biocup 500ml trong',                           'carton', 0),
+    ('BioC-96D(N)',         'Dome Lid (no hole) for 300-700ml BioCup',    'Nắp vòm BioCup 300-700ml',                         'carton', 0),
     ('LWGP33x40',           'Wrap banh mi',                               'Túi gói bánh mì',                                  'bag',    0),
     ('Blitz5',              'Blitz Multi-Purpose Floor Cleaner & Degreaser','Blitz — chất tẩy đa năng',                       'can',    0),
 ]
@@ -85,6 +85,8 @@ JACCUS_SUPPLIER_SEED = {
 PACKAGING_ITEM_UNIT_FIXES = {
     'AF44/150': 'each',
     'CW45/600 Pro': 'each',
+    'BioR-500Y': 'carton',
+    'BioC-96D(N)': 'carton',
 }
 
 JACCUS_PRICE_DATA = {
