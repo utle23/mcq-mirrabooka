@@ -14,6 +14,8 @@ import sqlite3
 from datetime import datetime, date, timedelta
 from functools import wraps
 
+from store_scope import current_store_id, store_filter_clause, store_guard_clause
+
 try:
     import email_service
 except Exception:
@@ -148,7 +150,7 @@ def _get_db():
     return conn
 
 def _is_admin():
-    return session.get('role') == 'admin'
+    return session.get('role') in ('admin', 'super_admin')
 
 def _login_required(f):
     @wraps(f)
@@ -163,7 +165,7 @@ def _admin_required(f):
     def d(*a, **kw):
         if not session.get('logged_in'):
             return redirect(url_for('login_page'))
-        if session.get('role') != 'admin':
+        if session.get('role') not in ('admin', 'super_admin'):
             return render_template('access_denied.html'), 403
         return f(*a, **kw)
     return d
@@ -183,7 +185,8 @@ def _get_staff():
     try:
         with _get_db() as conn:
             rows = conn.execute(
-                'SELECT name FROM staff_members WHERE active=1 ORDER BY name').fetchall()
+                'SELECT name FROM staff_members WHERE active=1 AND store_id=? ORDER BY name',
+                (current_store_id(),)).fetchall()
             return [r['name'] for r in rows]
     except Exception:
         return []
@@ -381,9 +384,10 @@ def index():
 def order_list():
     """Upcoming / active orders for order staff."""
     status_f = request.args.get('status', '').strip()
+    scope, sp = store_filter_clause()
     with _get_db() as conn:
-        q = 'SELECT * FROM orders WHERE 1=1'
-        params = []
+        q = f'SELECT * FROM orders WHERE {scope}'
+        params = list(sp)
         if status_f and status_f in STATUSES:
             q += ' AND status=?'
             params.append(status_f)
@@ -417,8 +421,9 @@ def new_order():
 @orders.route('/<int:oid>/edit')
 @_staff_required
 def edit_order(oid):
+    guard, gp = store_guard_clause()
     with _get_db() as conn:
-        o = conn.execute('SELECT * FROM orders WHERE id=?', (oid,)).fetchone()
+        o = conn.execute(f'SELECT * FROM orders WHERE id=? AND {guard}', [oid] + gp).fetchone()
         if not o:
             flash('Order not found.', 'danger')
             return redirect(url_for('orders.order_list'))
@@ -510,24 +515,26 @@ def save_order():
     subtotal, disc_amt, total = _compute_totals(lines, disc_type, disc_val)
     now = datetime.now().strftime('%Y-%m-%d %H:%M')
 
+    guard, gp = store_guard_clause()
     with _get_db() as conn:
         if oid:
-            conn.execute('''UPDATE orders SET customer_name=?, phone=?, branch=?,
+            conn.execute(f'''UPDATE orders SET customer_name=?, phone=?, branch=?,
                 order_type=?, payment_method=?, pickup_date=?, pickup_time=?, notes=?,
                 subtotal=?, discount_type=?, discount_value=?, discount_amount=?,
-                total=?, updated_at=? WHERE id=?''',
-                (customer, phone, branch, otype, pay, pdate, ptime, notes,
-                 subtotal, disc_type, disc_val, disc_amt, total, now, int(oid)))
+                total=?, updated_at=? WHERE id=? AND {guard}''',
+                [customer, phone, branch, otype, pay, pdate, ptime, notes,
+                 subtotal, disc_type, disc_val, disc_amt, total, now, int(oid)] + gp)
             order_id = int(oid)
             conn.execute('DELETE FROM order_line_items WHERE order_id=?', (order_id,))
         else:
             cur = conn.execute('''INSERT INTO orders
                 (customer_name, phone, branch, order_type, payment_method, pickup_date, pickup_time,
                  notes, status, subtotal, discount_type, discount_value,
-                 discount_amount, total, created_by, created_at, updated_at)
-                VALUES (?,?,?,?,?,?,?,?,'confirmed',?,?,?,?,?,?,?,?)''',
+                 discount_amount, total, created_by, created_at, updated_at, store_id)
+                VALUES (?,?,?,?,?,?,?,?,'confirmed',?,?,?,?,?,?,?,?,?)''',
                 (customer, phone, branch, otype, pay, pdate, ptime, notes,
-                 subtotal, disc_type, disc_val, disc_amt, total, created_by, now, now))
+                 subtotal, disc_type, disc_val, disc_amt, total, created_by, now, now,
+                 current_store_id()))
             order_id = cur.lastrowid
         for ln in lines:
             conn.execute('''INSERT INTO order_line_items
@@ -543,8 +550,9 @@ def save_order():
 @orders.route('/<int:oid>')
 @_login_required
 def order_detail(oid):
+    guard, gp = store_guard_clause()
     with _get_db() as conn:
-        o = conn.execute('SELECT * FROM orders WHERE id=?', (oid,)).fetchone()
+        o = conn.execute(f'SELECT * FROM orders WHERE id=? AND {guard}', [oid] + gp).fetchone()
         if not o:
             flash('Order not found.', 'danger')
             return redirect(url_for('orders.order_list'))
@@ -566,6 +574,7 @@ def set_status(oid):
     if new_status not in STATUSES:
         return jsonify({'ok': False, 'error': 'bad status'}), 400
     now = datetime.now().strftime('%Y-%m-%d %H:%M')
+    guard, gp = store_guard_clause()
     with _get_db() as conn:
         extra, params = '', []
         if new_status == 'completed':
@@ -574,8 +583,8 @@ def set_status(oid):
         elif new_status == 'cancelled':
             extra = ', cancelled_at=?'
             params.append(now)
-        conn.execute(f'UPDATE orders SET status=?, updated_at=?{extra} WHERE id=?',
-                     [new_status, now] + params + [oid])
+        conn.execute(f'UPDATE orders SET status=?, updated_at=?{extra} WHERE id=? AND {guard}',
+                     [new_status, now] + params + [oid] + gp)
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return jsonify({'ok': True, 'status': new_status})
     flash(f'Order {_order_code(oid)} → {STATUS_LABELS[new_status]}', 'success')
@@ -585,9 +594,10 @@ def set_status(oid):
 @_login_required
 def cancel_order(oid):
     now = datetime.now().strftime('%Y-%m-%d %H:%M')
+    guard, gp = store_guard_clause()
     with _get_db() as conn:
-        conn.execute('UPDATE orders SET status=?, cancelled_at=?, updated_at=? WHERE id=?',
-                     ('cancelled', now, now, oid))
+        conn.execute(f'UPDATE orders SET status=?, cancelled_at=?, updated_at=? WHERE id=? AND {guard}',
+                     ['cancelled', now, now, oid] + gp)
     flash(f'Order {_order_code(oid)} cancelled.', 'warning')
     return redirect(request.referrer or url_for('orders.order_detail', oid=oid))
 
@@ -595,29 +605,33 @@ def cancel_order(oid):
 @_admin_required
 def restore_order(oid):
     now = datetime.now().strftime('%Y-%m-%d %H:%M')
+    guard, gp = store_guard_clause()
     with _get_db() as conn:
-        conn.execute('''UPDATE orders SET status='confirmed', cancelled_at=NULL,
-                        updated_at=? WHERE id=?''', (now, oid))
+        conn.execute(f'''UPDATE orders SET status='confirmed', cancelled_at=NULL,
+                        updated_at=? WHERE id=? AND {guard}''', [now, oid] + gp)
     flash(f'Order {_order_code(oid)} restored.', 'success')
     return redirect(request.referrer or url_for('orders.order_detail', oid=oid))
 
 @orders.route('/<int:oid>/delete', methods=['POST'])
 @_admin_required
 def delete_order(oid):
+    guard, gp = store_guard_clause()
     with _get_db() as conn:
-        conn.execute('DELETE FROM orders WHERE id=?', (oid,))
+        conn.execute(f'DELETE FROM orders WHERE id=? AND {guard}', [oid] + gp)
     flash(f'Order {_order_code(oid)} permanently deleted.', 'danger')
     return redirect(url_for('orders.order_list'))
 
 # ── Kitchen display ──────────────────────────────────────────────────────────
 
 def _kitchen_orders(conn):
-    """Active orders still within their pickup window, sorted by pickup time."""
+    """Active orders still within their pickup window, sorted by pickup time.
+    Scoped to the current store's kitchen."""
     grace = _grace_minutes(conn)
     cutoff = datetime.now() - timedelta(minutes=grace)
+    scope, sp = store_filter_clause()
     rows = [dict(r) for r in conn.execute(
-        "SELECT * FROM orders WHERE status IN ('confirmed','preparing','ready') "
-        "ORDER BY pickup_date, pickup_time").fetchall()]
+        f"SELECT * FROM orders WHERE status IN ('confirmed','preparing','ready') AND {scope} "
+        "ORDER BY pickup_date, pickup_time", sp).fetchall()]
     out = []
     for o in rows:
         pdt = _pickup_dt(o)
@@ -666,8 +680,9 @@ def history():
         'staff':     request.args.get('staff', '').strip(),
         'q':         request.args.get('q', '').strip(),
     }
-    q = 'SELECT * FROM orders WHERE 1=1'
-    params = []
+    scope, sp = store_filter_clause()
+    q = f'SELECT * FROM orders WHERE {scope}'
+    params = list(sp)
     if f['date_from']:
         q += ' AND pickup_date >= ?'; params.append(f['date_from'])
     if f['date_to']:
@@ -717,31 +732,37 @@ def reports():
 
         today_s = today.isoformat()
         week_s = week_start.isoformat()
-        not_cancelled = "status <> 'cancelled'"
+        scope, sp = store_filter_clause()
+        oscope, osp = store_filter_clause('o')
+        not_cancelled = f"status <> 'cancelled' AND {scope}"
 
-        today_orders = scalar(f"SELECT COUNT(*) FROM orders WHERE pickup_date=? AND {not_cancelled}", (today_s,))
-        week_orders  = scalar(f"SELECT COUNT(*) FROM orders WHERE pickup_date>=? AND {not_cancelled}", (week_s,))
-        today_rev = scalar(f"SELECT SUM(total) FROM orders WHERE pickup_date=? AND {not_cancelled}", (today_s,))
-        week_rev  = scalar(f"SELECT SUM(total) FROM orders WHERE pickup_date>=? AND {not_cancelled}", (week_s,))
-        total_rev = scalar(f"SELECT SUM(total) FROM orders WHERE {not_cancelled}")
-        cancelled = scalar("SELECT COUNT(*) FROM orders WHERE status='cancelled'")
+        today_orders = scalar(f"SELECT COUNT(*) FROM orders WHERE pickup_date=? AND {not_cancelled}", [today_s] + sp)
+        week_orders  = scalar(f"SELECT COUNT(*) FROM orders WHERE pickup_date>=? AND {not_cancelled}", [week_s] + sp)
+        today_rev = scalar(f"SELECT SUM(total) FROM orders WHERE pickup_date=? AND {not_cancelled}", [today_s] + sp)
+        week_rev  = scalar(f"SELECT SUM(total) FROM orders WHERE pickup_date>=? AND {not_cancelled}", [week_s] + sp)
+        total_rev = scalar(f"SELECT SUM(total) FROM orders WHERE {not_cancelled}", sp)
+        cancelled = scalar(f"SELECT COUNT(*) FROM orders WHERE status='cancelled' AND {scope}", sp)
 
-        popular = [dict(r) for r in conn.execute('''
+        popular = [dict(r) for r in conn.execute(f'''
             SELECT li.name, SUM(li.qty) qty, SUM(li.line_total) revenue
             FROM order_line_items li JOIN orders o ON o.id=li.order_id
-            WHERE o.status <> 'cancelled'
-            GROUP BY li.name ORDER BY qty DESC LIMIT 10''').fetchall()]
+            WHERE o.status <> 'cancelled' AND {oscope}
+            GROUP BY li.name ORDER BY qty DESC LIMIT 10''', osp).fetchall()]
 
-        by_store = [dict(r) for r in conn.execute('''
-            SELECT branch, COUNT(*) orders, COALESCE(SUM(total),0) revenue
-            FROM orders WHERE status <> 'cancelled' AND branch <> ''
-            GROUP BY branch ORDER BY revenue DESC''').fetchall()]
+        # Per-branch revenue: super_admin sees every store; a normal admin sees
+        # just their own. Join to stores so the real store name shows.
+        by_store = [dict(r) for r in conn.execute(f'''
+            SELECT COALESCE(s.name, o.branch) AS branch, COUNT(*) orders,
+                   COALESCE(SUM(o.total),0) revenue
+            FROM orders o LEFT JOIN stores s ON s.id=o.store_id
+            WHERE o.status <> 'cancelled' AND {oscope}
+            GROUP BY o.store_id ORDER BY revenue DESC''', osp).fetchall()]
 
         # last 7 days revenue trend
         trend = []
         for i in range(6, -1, -1):
             d = (today - timedelta(days=i)).isoformat()
-            rev = scalar(f"SELECT SUM(total) FROM orders WHERE pickup_date=? AND {not_cancelled}", (d,))
+            rev = scalar(f"SELECT SUM(total) FROM orders WHERE pickup_date=? AND {not_cancelled}", [d] + sp)
             trend.append({'date': d, 'revenue': round(rev, 2)})
 
     return render_template('orders_reports.html',

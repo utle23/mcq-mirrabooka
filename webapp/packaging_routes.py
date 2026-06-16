@@ -22,6 +22,8 @@ from functools import wraps
 from flask import (Blueprint, render_template, request, redirect, url_for,
                    session, jsonify)
 
+from store_scope import current_store_id, store_filter_clause
+
 packaging_bp = Blueprint('packaging', __name__, url_prefix='/packaging')
 DB_PATH: str | None = None
 
@@ -208,7 +210,7 @@ def _admin_required(f):
     def d(*a, **kw):
         if not session.get('logged_in'):
             return redirect(url_for('login_page'))
-        if session.get('role') != 'admin':
+        if session.get('role') not in ('admin', 'super_admin'):
             return render_template('access_denied.html'), 403
         return f(*a, **kw)
     return d
@@ -472,7 +474,7 @@ def packaging_home():
 
     return render_template('packaging.html',
         supplier=supplier, suppliers=suppliers, items=items,
-        delivery_default=deliv_default, is_admin=session.get('role')=='admin')
+        delivery_default=deliv_default, is_admin=session.get('role') in ('admin','super_admin'))
 
 
 @packaging_bp.route('/compose', methods=['POST'])
@@ -596,11 +598,11 @@ def packaging_send():
     import json as _json
     with _conn() as c:
         c.execute('''INSERT INTO packaging_orders
-            (supplier_id, delivery_date, composed_by, send_channel, subject, body, payload_json)
-            VALUES (?,?,?,?,?,?,?)''',
+            (supplier_id, delivery_date, composed_by, send_channel, subject, body, payload_json, store_id)
+            VALUES (?,?,?,?,?,?,?,?)''',
             (sid, delivery_date, composed_by,
              'brevo' if ok else f'brevo_failed',
-             subject, body, _json.dumps(chosen)))
+             subject, body, _json.dumps(chosen), current_store_id()))
 
     if not ok:
         # Friendlier hint when Brevo bounces
@@ -630,9 +632,9 @@ def packaging_log_action():
     composed_by = request.form.get('composed_by', session.get('role','')).strip()
     with _conn() as c:
         c.execute('''INSERT INTO packaging_orders
-            (supplier_id, delivery_date, composed_by, send_channel, subject, body)
-            VALUES (?,?,?,?,?,?)''',
-            (sid, delivery_date, composed_by, channel, subject, body))
+            (supplier_id, delivery_date, composed_by, send_channel, subject, body, store_id)
+            VALUES (?,?,?,?,?,?,?)''',
+            (sid, delivery_date, composed_by, channel, subject, body, current_store_id()))
     return jsonify({'ok': True})
 
 
@@ -766,12 +768,14 @@ def item_delete(iid):
 @_login_required
 def packaging_history():
     sid = request.args.get('supplier', '')
+    scope, sp = store_filter_clause('o')
     with _conn() as c:
         q = ('SELECT o.*, s.name AS supplier_name FROM packaging_orders o '
-             'LEFT JOIN packaging_suppliers s ON s.id=o.supplier_id')
-        params = []
+             'LEFT JOIN packaging_suppliers s ON s.id=o.supplier_id '
+             f'WHERE {scope}')
+        params = list(sp)
         if sid:
-            q += ' WHERE o.supplier_id=?'; params.append(int(sid))
+            q += ' AND o.supplier_id=?'; params.append(int(sid))
         q += ' ORDER BY o.id DESC LIMIT 50'
         rows = [dict(r) for r in c.execute(q, params).fetchall()]
     return render_template('packaging_history.html', orders=rows)

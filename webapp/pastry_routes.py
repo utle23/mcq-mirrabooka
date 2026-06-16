@@ -1,5 +1,7 @@
 from flask import Blueprint, render_template, request, redirect, url_for, session, jsonify
 
+from store_scope import current_store_id
+
 try:
     import email_service
 except Exception:
@@ -56,7 +58,7 @@ def _get_db():
     return conn
 
 def _is_admin():
-    return session.get('role') == 'admin'
+    return session.get('role') in ('admin', 'super_admin')
 
 def _login_required(f):
     @wraps(f)
@@ -71,7 +73,7 @@ def _admin_required(f):
     def d(*a, **kw):
         if not session.get('logged_in'):
             return redirect(url_for('login_page'))
-        if session.get('role') != 'admin':
+        if session.get('role') not in ('admin', 'super_admin'):
             return render_template('access_denied.html'), 403
         return f(*a, **kw)
     return d
@@ -236,15 +238,15 @@ def record_delivery(item_id):
     now         = datetime.now().strftime('%Y-%m-%d %H:%M')
     with _get_db() as conn:
         conn.execute('''INSERT INTO pastry_delivery
-            (item_id, date, qty_received, received_by, received_at, condition, notes)
-            VALUES (?,?,?,?,?,?,?)
-            ON CONFLICT(item_id, date) DO UPDATE SET
+            (item_id, date, qty_received, received_by, received_at, condition, notes, store_id)
+            VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(item_id, date, store_id) DO UPDATE SET
             qty_received=excluded.qty_received,
             received_by=excluded.received_by,
             received_at=excluded.received_at,
             condition=excluded.condition,
             notes=excluded.notes''',
-            (item_id, today, qty, received_by, now, condition, notes))
+            (item_id, today, qty, received_by, now, condition, notes, current_store_id()))
         item_row = conn.execute('SELECT name FROM pastry_items WHERE id=?', (item_id,)).fetchone()
 
     # Only notify when condition is not "good" — keep the inbox quiet.
@@ -278,16 +280,16 @@ def record_sales(item_id):
     now         = datetime.now().strftime('%Y-%m-%d %H:%M')
     with _get_db() as conn:
         conn.execute('''INSERT INTO pastry_sales
-            (item_id, date, qty_sold, qty_returned, qty_wasted, recorded_by, recorded_at, notes)
-            VALUES (?,?,?,?,?,?,?,?)
-            ON CONFLICT(item_id, date) DO UPDATE SET
+            (item_id, date, qty_sold, qty_returned, qty_wasted, recorded_by, recorded_at, notes, store_id)
+            VALUES (?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(item_id, date, store_id) DO UPDATE SET
             qty_sold=excluded.qty_sold,
             qty_returned=excluded.qty_returned,
             qty_wasted=excluded.qty_wasted,
             recorded_by=excluded.recorded_by,
             recorded_at=excluded.recorded_at,
             notes=excluded.notes''',
-            (item_id, today, qty_sold, qty_returned, qty_wasted, recorded_by, now, notes))
+            (item_id, today, qty_sold, qty_returned, qty_wasted, recorded_by, now, notes, current_store_id()))
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return jsonify({'ok': True})
     return redirect(url_for('pastry.pastry_today'))
@@ -312,15 +314,16 @@ def pastry_returns():
 
     with _get_db() as conn:
         items = _get_items_with_supplier(conn)
+        sid = current_store_id()
         # Today's deliveries — gives the actual qty_received per item
         delivery_rows = conn.execute(
-            'SELECT item_id, qty_received, condition, notes FROM pastry_delivery WHERE date=?',
-            (date_str,)).fetchall()
+            'SELECT item_id, qty_received, condition, notes FROM pastry_delivery WHERE date=? AND store_id=?',
+            (date_str, sid)).fetchall()
         deliveries = {r['item_id']: dict(r) for r in delivery_rows}
 
         sales_rows = conn.execute(
             'SELECT item_id, qty_returned, qty_sold, qty_wasted, recorded_by, notes, recorded_at '
-            'FROM pastry_sales WHERE date=?', (date_str,)).fetchall()
+            'FROM pastry_sales WHERE date=? AND store_id=?', (date_str, sid)).fetchall()
         sales = {r['item_id']: dict(r) for r in sales_rows}
 
     rows = []
@@ -395,21 +398,21 @@ def pastry_returns_save():
             # Upsert into pastry_sales — keep existing qty_sold/wasted so we
             # don't clobber data entered on the daily sales screen.
             existing = conn.execute(
-                'SELECT qty_sold, qty_wasted FROM pastry_sales WHERE item_id=? AND date=?',
-                (iid_int, target_date)).fetchone()
+                'SELECT qty_sold, qty_wasted FROM pastry_sales WHERE item_id=? AND date=? AND store_id=?',
+                (iid_int, target_date, current_store_id())).fetchone()
             qty_sold   = (existing['qty_sold']   if existing else 0) or 0
             qty_wasted = (existing['qty_wasted'] if existing else 0) or 0
             conn.execute('''INSERT INTO pastry_sales
                 (item_id, date, qty_sold, qty_returned, qty_wasted,
-                 recorded_by, recorded_at, notes)
-                VALUES (?,?,?,?,?,?,?,?)
-                ON CONFLICT(item_id, date) DO UPDATE SET
+                 recorded_by, recorded_at, notes, store_id)
+                VALUES (?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(item_id, date, store_id) DO UPDATE SET
                   qty_returned = excluded.qty_returned,
                   recorded_by  = excluded.recorded_by,
                   recorded_at  = excluded.recorded_at,
                   notes        = excluded.notes''',
                 (iid_int, target_date, qty_sold, qty_ret_int, qty_wasted,
-                 recorded_by, now, note))
+                 recorded_by, now, note, current_store_id()))
     return redirect(url_for('pastry.pastry_returns', date=target_date, saved=1))
 
 
@@ -449,10 +452,10 @@ def pastry_returns_report():
             FROM pastry_sales ps
             JOIN pastry_items i ON i.id = ps.item_id
             LEFT JOIN pastry_suppliers s ON s.id = i.supplier_id
-            WHERE ps.date BETWEEN ? AND ? AND ps.qty_returned > 0
+            WHERE ps.date BETWEEN ? AND ? AND ps.qty_returned > 0 AND ps.store_id=?
             GROUP BY i.id
             ORDER BY total_returned DESC, i.name_en
-        ''', (date_from, date_to)).fetchall()]
+        ''', (date_from, date_to, current_store_id())).fetchall()]
 
     for r in rows:
         r['refund_amount'] = (r['total_returned'] or 0) * (r['cost_price'] or 0)
@@ -464,8 +467,8 @@ def pastry_returns_report():
     with _get_db() as conn:
         daily_rows = [dict(r) for r in conn.execute('''
             SELECT date, SUM(qty_returned) AS qty
-            FROM pastry_sales WHERE date BETWEEN ? AND ? AND qty_returned > 0
-            GROUP BY date ORDER BY date''', (date_from, date_to)).fetchall()]
+            FROM pastry_sales WHERE date BETWEEN ? AND ? AND qty_returned > 0 AND store_id=?
+            GROUP BY date ORDER BY date''', (date_from, date_to, current_store_id())).fetchall()]
     max_day_qty = max((d['qty'] for d in daily_rows), default=1)
 
     return render_template('pastry_returns_report.html',
@@ -501,20 +504,21 @@ def pastry_dashboard():
     ws        = date.today() - timedelta(days=date.today().weekday())
     week_dates= [(ws + timedelta(days=i)).isoformat() for i in range(7)]
 
+    sid = current_store_id()
     with _get_db() as conn:
         items = _get_items_with_supplier(conn)
         # Today stats
         today_del = conn.execute('''
             SELECT SUM(d.qty_received) as total_recv,
                    COUNT(DISTINCT d.item_id) as items_recv
-            FROM pastry_delivery d WHERE d.date=?''', (today,)).fetchone()
+            FROM pastry_delivery d WHERE d.date=? AND d.store_id=?''', (today, sid)).fetchone()
         today_sales = conn.execute('''
             SELECT SUM(s.qty_sold) as total_sold,
                    SUM(s.qty_sold * i.selling_price) as revenue,
                    SUM(s.qty_sold * i.margin_calc) as profit
             FROM pastry_sales s
             JOIN (SELECT id, selling_price, (selling_price-cost_price) as margin_calc FROM pastry_items) i
-            ON i.id=s.item_id WHERE s.date=?''', (today,)).fetchone()
+            ON i.id=s.item_id WHERE s.date=? AND s.store_id=?''', (today, sid)).fetchone()
 
         # Week stats
         week_sales = conn.execute('''
@@ -523,8 +527,8 @@ def pastry_dashboard():
                    SUM(s.qty_sold * i.margin_calc) as profit
             FROM pastry_sales s
             JOIN (SELECT id, selling_price, (selling_price-cost_price) as margin_calc FROM pastry_items) i
-            ON i.id=s.item_id WHERE s.date>=? AND s.date<=?''',
-            (week_dates[0], week_dates[-1])).fetchone()
+            ON i.id=s.item_id WHERE s.date>=? AND s.date<=? AND s.store_id=?''',
+            (week_dates[0], week_dates[-1], sid)).fetchone()
 
         # Per-item performance this week
         item_perf = conn.execute('''
@@ -537,10 +541,10 @@ def pastry_dashboard():
                    COALESCE(SUM(sl.qty_sold*i.selling_price),0) as week_revenue
             FROM pastry_items i
             LEFT JOIN pastry_suppliers s ON s.id=i.supplier_id
-            LEFT JOIN pastry_sales sl ON sl.item_id=i.id AND sl.date>=? AND sl.date<=?
+            LEFT JOIN pastry_sales sl ON sl.item_id=i.id AND sl.date>=? AND sl.date<=? AND sl.store_id=?
             WHERE i.active=1
             GROUP BY i.id ORDER BY week_revenue DESC''',
-            (week_dates[0], week_dates[-1])).fetchall()
+            (week_dates[0], week_dates[-1], sid)).fetchall()
         item_perf = [dict(r) for r in item_perf]
 
         # Recent deliveries
@@ -549,8 +553,8 @@ def pastry_dashboard():
             FROM pastry_delivery d
             JOIN pastry_items i ON i.id=d.item_id
             LEFT JOIN pastry_suppliers s ON s.id=i.supplier_id
-            WHERE d.date>=? ORDER BY d.received_at DESC LIMIT 20''',
-            (week_dates[0],)).fetchall()
+            WHERE d.date>=? AND d.store_id=? ORDER BY d.received_at DESC LIMIT 20''',
+            (week_dates[0], sid)).fetchall()
 
     return render_template('pastry_dashboard.html',
         today=today, today_day=today_day,

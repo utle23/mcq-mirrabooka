@@ -17,6 +17,19 @@ import sqlite3
 from datetime import datetime, date, timedelta
 from functools import wraps
 
+from store_scope import current_store_id, store_guard_clause
+
+
+def _ensure_units_for_store(conn, store_id):
+    """Each store has its own equipment list. Seed the standard units the first
+    time a store opens the equipment screen (so new branches aren't blank)."""
+    n = conn.execute('SELECT COUNT(*) c FROM equipment_units WHERE store_id=?',
+                     (store_id,)).fetchone()['c']
+    if n == 0:
+        for i, (name, kind) in enumerate(UNITS_SEED):
+            conn.execute('INSERT INTO equipment_units(name, kind, sort_order, store_id) '
+                         'VALUES(?,?,?,?)', (name, kind, i, store_id))
+
 try:
     import email_service
 except Exception:
@@ -57,7 +70,7 @@ def _get_db():
     return conn
 
 def _is_admin():
-    return session.get('role') == 'admin'
+    return session.get('role') in ('admin', 'super_admin')
 
 def _login_required(f):
     @wraps(f)
@@ -72,7 +85,7 @@ def _admin_required(f):
     def d(*a, **kw):
         if not session.get('logged_in'):
             return redirect(url_for('login_page'))
-        if session.get('role') != 'admin':
+        if session.get('role') not in ('admin', 'super_admin'):
             return render_template('access_denied.html'), 403
         return f(*a, **kw)
     return d
@@ -209,14 +222,18 @@ def init_equipment_tables(db_path):
 
 # ── Shared collector (used by the daily share) ───────────────────────────────
 
-def collect_equipment_for_date(conn, date_str):
-    """Return equipment readings for one date, with safety flags.
+def collect_equipment_for_date(conn, date_str, store_id=None):
+    """Return equipment readings for one date, with safety flags, for one store.
     Shape: {'units':[{name,kind,checks:{morning,closing},status}],
             'recorded':n, 'total_checks':n, 'alerts':n, 'missing':n}"""
+    if store_id is None:
+        store_id = current_store_id()
     units = conn.execute(
-        'SELECT * FROM equipment_units WHERE active=1 ORDER BY sort_order, id').fetchall()
+        'SELECT * FROM equipment_units WHERE active=1 AND store_id=? ORDER BY sort_order, id',
+        (store_id,)).fetchall()
     rows = conn.execute(
-        'SELECT * FROM equipment_temp_readings WHERE date=?', (date_str,)).fetchall()
+        'SELECT * FROM equipment_temp_readings WHERE date=? AND store_id=?',
+        (date_str, store_id)).fetchall()
     by_unit = {r['unit_id']: r for r in rows}
     due_keys = _due_check_keys(date_str)
     out, recorded, alerts, missing, missing_due, recorded_by = [], 0, 0, 0, 0, ''
@@ -298,11 +315,15 @@ def today_view():
     """Daily entry screen — only TODAY's morning + closing readings."""
     today = date.today()
     today_iso = today.isoformat()
+    sid = current_store_id()
     with _get_db() as conn:
+        _ensure_units_for_store(conn, sid)
         units = [dict(r) for r in conn.execute(
-            'SELECT * FROM equipment_units WHERE active=1 ORDER BY sort_order, id').fetchall()]
+            'SELECT * FROM equipment_units WHERE active=1 AND store_id=? ORDER BY sort_order, id',
+            (sid,)).fetchall()]
         rows = conn.execute(
-            'SELECT * FROM equipment_temp_readings WHERE date=?', (today_iso,)).fetchall()
+            'SELECT * FROM equipment_temp_readings WHERE date=? AND store_id=?',
+            (today_iso, sid)).fetchall()
     rmap = {r['unit_id']: r for r in rows}
     grid = []
     for u in units:
@@ -325,12 +346,13 @@ def save_today():
     now = datetime.now().strftime('%Y-%m-%d %H:%M')
     alerts = []
     saved_count = 0
+    sid = current_store_id()
     with _get_db() as conn:
         units = {r['id']: r for r in conn.execute(
-            'SELECT * FROM equipment_units WHERE active=1').fetchall()}
+            'SELECT * FROM equipment_units WHERE active=1 AND store_id=?', (sid,)).fetchall()}
         for uid in units:
-            conn.execute('INSERT OR IGNORE INTO equipment_temp_readings (unit_id, date) VALUES (?,?)',
-                         (uid, today_iso))
+            conn.execute('INSERT OR IGNORE INTO equipment_temp_readings (unit_id, date, store_id) VALUES (?,?,?)',
+                         (uid, today_iso, sid))
             # Defrosting flag for this unit today (cold/freezer units only).
             defrosted = 'Y' if request.form.get(f'defrosted_{uid}', '') == 'Y' else 'N'
             conn.execute('UPDATE equipment_temp_readings SET defrosted=? WHERE unit_id=? AND date=?',
@@ -416,12 +438,15 @@ def report_view():
         label = f"{dates[0].strftime('%d %b')} – {dates[6].strftime('%d %b %Y')}"
 
     date_iso = [d.isoformat() for d in dates]
+    sid = current_store_id()
     with _get_db() as conn:
+        _ensure_units_for_store(conn, sid)
         units = [dict(r) for r in conn.execute(
-            'SELECT * FROM equipment_units WHERE active=1 ORDER BY sort_order, id').fetchall()]
+            'SELECT * FROM equipment_units WHERE active=1 AND store_id=? ORDER BY sort_order, id',
+            (sid,)).fetchall()]
         readings = conn.execute(
-            'SELECT * FROM equipment_temp_readings WHERE date >= ? AND date <= ?',
-            (date_iso[0], date_iso[-1])).fetchall()
+            'SELECT * FROM equipment_temp_readings WHERE date >= ? AND date <= ? AND store_id=?',
+            (date_iso[0], date_iso[-1], sid)).fetchall()
     rmap = {}
     for r in readings:
         rmap.setdefault(r['unit_id'], {})[r['date']] = r
@@ -473,13 +498,14 @@ def save_week():
     week_iso = [(ws + timedelta(days=i)).isoformat() for i in range(7)]
 
     alerts = []
+    sid = current_store_id()
     with _get_db() as conn:
         units = {r['id']: r for r in conn.execute(
-            'SELECT * FROM equipment_units WHERE active=1').fetchall()}
+            'SELECT * FROM equipment_units WHERE active=1 AND store_id=?', (sid,)).fetchall()}
         for uid in units:
             for diso in week_iso:
                 conn.execute('''INSERT OR IGNORE INTO equipment_temp_readings
-                    (unit_id, date) VALUES (?,?)''', (uid, diso))
+                    (unit_id, date, store_id) VALUES (?,?,?)''', (uid, diso, sid))
                 for check in CHECK_TYPES:
                     raw = request.form.get(
                         f'{check["key"]}_temp_{uid}_{diso}', '').strip()
@@ -547,10 +573,12 @@ def unit_add():
     if kind not in KIND_META:
         kind = 'cold'
     if name:
+        sid = current_store_id()
         with _get_db() as conn:
-            nxt = conn.execute('SELECT COALESCE(MAX(sort_order),0)+1 n FROM equipment_units').fetchone()['n']
-            conn.execute('INSERT INTO equipment_units(name, kind, sort_order) VALUES(?,?,?)',
-                         (name, kind, nxt))
+            nxt = conn.execute('SELECT COALESCE(MAX(sort_order),0)+1 n FROM equipment_units '
+                               'WHERE store_id=?', (sid,)).fetchone()['n']
+            conn.execute('INSERT INTO equipment_units(name, kind, sort_order, store_id) VALUES(?,?,?,?)',
+                         (name, kind, nxt, sid))
         flash(f'Equipment "{name}" added.', 'success')
     return redirect(request.referrer or url_for('equipment.index'))
 
@@ -562,16 +590,18 @@ def unit_update(uid):
     active = 1 if request.form.get('active', '1') == '1' else 0
     if kind not in KIND_META:
         kind = 'cold'
+    guard, gp = store_guard_clause()
     with _get_db() as conn:
-        conn.execute('UPDATE equipment_units SET name=?, kind=?, active=? WHERE id=?',
-                     (name, kind, active, uid))
+        conn.execute(f'UPDATE equipment_units SET name=?, kind=?, active=? WHERE id=? AND {guard}',
+                     [name, kind, active, uid] + gp)
     flash('Equipment updated.', 'success')
     return redirect(request.referrer or url_for('equipment.index'))
 
 @equipment.route('/unit/<int:uid>/delete', methods=['POST'])
 @_admin_required
 def unit_delete(uid):
+    guard, gp = store_guard_clause()
     with _get_db() as conn:
-        conn.execute('DELETE FROM equipment_units WHERE id=?', (uid,))
+        conn.execute(f'DELETE FROM equipment_units WHERE id=? AND {guard}', [uid] + gp)
     flash('Equipment deleted.', 'warning')
     return redirect(request.referrer or url_for('equipment.index'))

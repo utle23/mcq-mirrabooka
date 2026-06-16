@@ -4,6 +4,8 @@ from io import BytesIO
 from datetime import datetime, date, timedelta
 from functools import wraps
 
+from store_scope import current_store_id
+
 try:
     import email_service
 except Exception:
@@ -92,7 +94,7 @@ def _get_db():
     return conn
 
 def _is_admin():
-    return session.get('role') == 'admin'
+    return session.get('role') in ('admin', 'super_admin')
 
 def _login_required(f):
     @wraps(f)
@@ -107,7 +109,7 @@ def _admin_required(f):
     def d(*a, **kw):
         if not session.get('logged_in'):
             return redirect(url_for('login_page'))
-        if session.get('role') != 'admin':
+        if session.get('role') not in ('admin', 'super_admin'):
             return render_template('access_denied.html'), 403
         return f(*a, **kw)
     return d
@@ -274,16 +276,20 @@ def init_prep_tables(db_path, staff_list):
     _refresh_stations()
 
 def _ensure_schedule(week_start_str, conn):
-    """Auto-create schedule from templates if it doesn't exist yet. Always called — no manual step needed."""
-    sched = conn.execute('SELECT id FROM prep_weekly_schedules WHERE week_start=?',(week_start_str,)).fetchone()
+    """Auto-create schedule from templates if it doesn't exist yet (per store)."""
+    sid = current_store_id()
+    sched = conn.execute('SELECT id FROM prep_weekly_schedules WHERE week_start=? AND store_id=?',
+                         (week_start_str, sid)).fetchone()
     if not sched:
         _build_schedule(week_start_str, conn)
 
 def _build_schedule(week_start_str, conn):
     ws = datetime.strptime(week_start_str, '%Y-%m-%d').date()
-    conn.execute('INSERT OR IGNORE INTO prep_weekly_schedules (week_start,created_by) VALUES (?,?)',
-                 (week_start_str, session.get('role','admin')))
-    sched = conn.execute('SELECT id FROM prep_weekly_schedules WHERE week_start=?', (week_start_str,)).fetchone()
+    store_id = current_store_id()
+    conn.execute('INSERT OR IGNORE INTO prep_weekly_schedules (week_start,created_by,store_id) VALUES (?,?,?)',
+                 (week_start_str, session.get('role','admin'), store_id))
+    sched = conn.execute('SELECT id FROM prep_weekly_schedules WHERE week_start=? AND store_id=?',
+                         (week_start_str, store_id)).fetchone()
     sid = sched['id']
     if conn.execute('SELECT COUNT(*) as c FROM prep_weekly_tasks WHERE schedule_id=?', (sid,)).fetchone()['c']:
         return sid
@@ -291,20 +297,20 @@ def _build_schedule(week_start_str, conn):
             'SELECT * FROM prep_task_templates WHERE active=1 ORDER BY station_id,sort_order').fetchall()):
         cur = conn.execute('''INSERT INTO prep_weekly_tasks
             (schedule_id,template_id,task_name_en,task_name_vi,station_id,
-             scheduled_time,assigned_to,active_days,is_supplier,supplier_name,sort_order)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
+             scheduled_time,assigned_to,active_days,is_supplier,supplier_name,sort_order,store_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
             (sid,t['id'],t['task_name_en'],t['task_name_vi'],t['station_id'],
              t['default_time'],t['default_assignee'],t['active_days'],
-             t['is_supplier'],t['supplier_name'],i))
+             t['is_supplier'],t['supplier_name'],i,store_id))
         wt_id = cur.lastrowid
         active = (t['active_days'] or '').split(',')
         for di, day in enumerate(DAYS):
             d = (ws + timedelta(days=di)).isoformat()
             req = 1 if day in active else 0
             conn.execute('''INSERT OR IGNORE INTO prep_daily_status
-                (weekly_task_id,date,day_of_week,is_required,scheduled_time,status)
-                VALUES (?,?,?,?,?,?)''',
-                (wt_id,d,day,req,t['default_time'],'na' if not req else 'pending'))
+                (weekly_task_id,date,day_of_week,is_required,scheduled_time,status,store_id)
+                VALUES (?,?,?,?,?,?,?)''',
+                (wt_id,d,day,req,t['default_time'],'na' if not req else 'pending',store_id))
             if t['is_supplier'] and req:
                 conn.execute('INSERT OR IGNORE INTO prep_supplier_status (weekly_task_id,date) VALUES (?,?)',
                              (wt_id,d))
@@ -317,8 +323,8 @@ def _sync_week_from_templates(week_start_str, conn):
     week_dates = [(ws + timedelta(days=i)).isoformat() for i in range(7)]
     _ensure_schedule(week_start_str, conn)
     sched = conn.execute(
-        'SELECT * FROM prep_weekly_schedules WHERE week_start=?',
-        (week_start_str,)).fetchone()
+        'SELECT * FROM prep_weekly_schedules WHERE week_start=? AND store_id=?',
+        (week_start_str, current_store_id())).fetchone()
     if not sched:
         return {'updated': 0, 'added': 0, 'inactive': 0}
     if sched['locked']:
@@ -356,11 +362,11 @@ def _sync_week_from_templates(week_start_str, conn):
         else:
             cur = conn.execute('''INSERT INTO prep_weekly_tasks
                 (schedule_id,template_id,task_name_en,task_name_vi,station_id,
-                 scheduled_time,assigned_to,active_days,is_supplier,supplier_name,sort_order)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
+                 scheduled_time,assigned_to,active_days,is_supplier,supplier_name,sort_order,store_id)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
                 (schedule_id, t['id'], t['task_name_en'], t['task_name_vi'], t['station_id'],
                  t['default_time'], t['default_assignee'], ','.join(active_days),
-                 t['is_supplier'], t['supplier_name'], order))
+                 t['is_supplier'], t['supplier_name'], order, current_store_id()))
             wt_id = cur.lastrowid
             added += 1
 
@@ -387,10 +393,10 @@ def _sync_week_from_templates(week_start_str, conn):
                         (day, t['default_time'], row['id']))
             else:
                 conn.execute('''INSERT INTO prep_daily_status
-                    (weekly_task_id,date,day_of_week,is_required,scheduled_time,status)
-                    VALUES (?,?,?,?,?,?)''',
+                    (weekly_task_id,date,day_of_week,is_required,scheduled_time,status,store_id)
+                    VALUES (?,?,?,?,?,?,?)''',
                     (wt_id, d, day, required, t['default_time'],
-                     'pending' if required else 'na'))
+                     'pending' if required else 'na', current_store_id()))
 
             if t['is_supplier'] and required:
                 conn.execute('INSERT OR IGNORE INTO prep_supplier_status (weekly_task_id,date) VALUES (?,?)',
@@ -437,9 +443,9 @@ def _sync_all_unlocked_weeks_from_templates(conn):
     totals = {'weeks': 0, 'updated': 0, 'added': 0, 'inactive': 0}
     schedules = conn.execute('''
         SELECT week_start FROM prep_weekly_schedules
-        WHERE locked=0
+        WHERE locked=0 AND store_id=?
         ORDER BY week_start
-    ''').fetchall()
+    ''', (current_store_id(),)).fetchall()
     for sched in schedules:
         stats = _sync_week_from_templates(sched['week_start'], conn)
         if stats.get('locked'):
@@ -463,30 +469,31 @@ def prep_index():
 @_admin_required
 def prep_dashboard():
     today_str = date.today().isoformat()
+    sid = current_store_id()
     with _get_db() as conn:
-        total  = conn.execute("SELECT COUNT(*) as c FROM prep_daily_status WHERE date=? AND is_required=1",(today_str,)).fetchone()['c']
-        done   = conn.execute("SELECT COUNT(*) as c FROM prep_daily_status WHERE date=? AND status='done'",(today_str,)).fetchone()['c']
-        issues = conn.execute("SELECT COUNT(*) as c FROM prep_daily_status WHERE date=? AND issue_flag=1",(today_str,)).fetchone()['c']
+        total  = conn.execute("SELECT COUNT(*) as c FROM prep_daily_status WHERE date=? AND is_required=1 AND store_id=?",(today_str, sid)).fetchone()['c']
+        done   = conn.execute("SELECT COUNT(*) as c FROM prep_daily_status WHERE date=? AND status='done' AND store_id=?",(today_str, sid)).fetchone()['c']
+        issues = conn.execute("SELECT COUNT(*) as c FROM prep_daily_status WHERE date=? AND issue_flag=1 AND store_id=?",(today_str, sid)).fetchone()['c']
         station_stats = {}
         for s in PREP_STATIONS:
             r = conn.execute('''SELECT COUNT(*) as tot,SUM(CASE WHEN ds.status='done' THEN 1 ELSE 0 END) as dn
                 FROM prep_daily_status ds JOIN prep_weekly_tasks wt ON wt.id=ds.weekly_task_id
-                WHERE ds.date=? AND ds.is_required=1 AND wt.station_id=?''',(today_str,s['id'])).fetchone()
+                WHERE ds.date=? AND ds.is_required=1 AND wt.station_id=? AND ds.store_id=?''',(today_str,s['id'], sid)).fetchone()
             station_stats[s['id']] = {'total':r['tot'] or 0,'done':r['dn'] or 0,
                 'pct': round((r['dn'] or 0)/max(r['tot'] or 1,1)*100)}
         staff_stats = [dict(r) for r in conn.execute('''
             SELECT wt.assigned_to as name,COUNT(*) as total,
                    SUM(CASE WHEN ds.status='done' THEN 1 ELSE 0 END) as done
             FROM prep_daily_status ds JOIN prep_weekly_tasks wt ON wt.id=ds.weekly_task_id
-            WHERE ds.date=? AND ds.is_required=1 AND wt.assigned_to!=''
-            GROUP BY wt.assigned_to ORDER BY total DESC''',(today_str,)).fetchall()]
+            WHERE ds.date=? AND ds.is_required=1 AND wt.assigned_to!='' AND ds.store_id=?
+            GROUP BY wt.assigned_to ORDER BY total DESC''',(today_str, sid)).fetchall()]
         for s in staff_stats:
             s['pct'] = round(s['done']/max(s['total'],1)*100)
         recent_issues = [dict(r) for r in conn.execute('''
             SELECT ds.*,wt.task_name_en,wt.assigned_to,wt.station_id
             FROM prep_daily_status ds JOIN prep_weekly_tasks wt ON wt.id=ds.weekly_task_id
-            WHERE ds.date=? AND (ds.issue_flag=1 OR (ds.note IS NOT NULL AND ds.note!=''))
-            ORDER BY ds.id DESC LIMIT 10''',(today_str,)).fetchall()]
+            WHERE ds.date=? AND (ds.issue_flag=1 OR (ds.note IS NOT NULL AND ds.note!='')) AND ds.store_id=?
+            ORDER BY ds.id DESC LIMIT 10''',(today_str, sid)).fetchall()]
     for r in recent_issues:
         r['station'] = STATIONS_MAP.get(r['station_id'],{})
     return render_template('prep_dashboard.html',
@@ -521,7 +528,7 @@ def prep_weekly_view(week_start):
     today          = date.today().isoformat()
     with _get_db() as conn:
         _ensure_schedule(week_start, conn)
-        sched = conn.execute('SELECT * FROM prep_weekly_schedules WHERE week_start=?',(week_start,)).fetchone()
+        sched = conn.execute('SELECT * FROM prep_weekly_schedules WHERE week_start=? AND store_id=?',(week_start, current_store_id())).fetchone()
         sched = dict(sched) if sched else None
         tasks = []
         if sched:
@@ -557,8 +564,8 @@ def prep_create_schedule(week_start):
         _build_schedule(week_start, conn)
         task_count = conn.execute(
             'SELECT COUNT(*) c FROM prep_weekly_tasks WHERE schedule_id IN '
-            '(SELECT id FROM prep_weekly_schedules WHERE week_start=?)',
-            (week_start,)).fetchone()['c']
+            '(SELECT id FROM prep_weekly_schedules WHERE week_start=? AND store_id=?)',
+            (week_start, current_store_id())).fetchone()['c']
     if email_service:
         email_service.send_notification(
             'prep',
@@ -583,7 +590,7 @@ def apply_templates_to_week(week_start):
     week_start = get_week_start(ws_date).isoformat()
     with _get_db() as conn:
         _ensure_schedule(week_start, conn)
-        sched = conn.execute('SELECT locked FROM prep_weekly_schedules WHERE week_start=?', (week_start,)).fetchone()
+        sched = conn.execute('SELECT locked FROM prep_weekly_schedules WHERE week_start=? AND store_id=?', (week_start, current_store_id())).fetchone()
         if sched and sched['locked']:
             return redirect(url_for('prep.prep_weekly_view', week_start=week_start, template_locked=1))
         stats = _sync_all_unlocked_weeks_from_templates(conn)
@@ -739,8 +746,8 @@ def weekly_bulk_delete_tasks(week_start):
     with _get_db() as conn:
         _ensure_schedule(week_start, conn)
         sched = conn.execute(
-            'SELECT * FROM prep_weekly_schedules WHERE week_start=?',
-            (week_start,)).fetchone()
+            'SELECT * FROM prep_weekly_schedules WHERE week_start=? AND store_id=?',
+            (week_start, current_store_id())).fetchone()
         if not sched:
             return jsonify({'error': 'Weekly schedule not found.'}), 404
         if sched['locked']:
@@ -800,7 +807,7 @@ def weekly_report(week_start):
     today      = date.today().isoformat()
     with _get_db() as conn:
         _ensure_schedule(week_start, conn)
-        sched = conn.execute('SELECT * FROM prep_weekly_schedules WHERE week_start=?', (week_start,)).fetchone()
+        sched = conn.execute('SELECT * FROM prep_weekly_schedules WHERE week_start=? AND store_id=?', (week_start, current_store_id())).fetchone()
         sched = dict(sched) if sched else None
         tasks = []
         if sched:
@@ -856,7 +863,7 @@ def weekly_export_pdf(week_start):
 
     with _get_db() as conn:
         _ensure_schedule(week_start, conn)
-        sched = conn.execute('SELECT * FROM prep_weekly_schedules WHERE week_start=?', (week_start,)).fetchone()
+        sched = conn.execute('SELECT * FROM prep_weekly_schedules WHERE week_start=? AND store_id=?', (week_start, current_store_id())).fetchone()
         sched = dict(sched) if sched else None
         tasks = []
         if sched:
@@ -1402,7 +1409,7 @@ def prep_suppliers():
     week_start = request.args.get('week', get_week_start().isoformat())
     week_dates = get_week_dates(week_start)
     with _get_db() as conn:
-        sched = conn.execute('SELECT id FROM prep_weekly_schedules WHERE week_start=?',(week_start,)).fetchone()
+        sched = conn.execute('SELECT id FROM prep_weekly_schedules WHERE week_start=? AND store_id=?',(week_start, current_store_id())).fetchone()
         items = []
         if sched:
             rows = conn.execute('''
