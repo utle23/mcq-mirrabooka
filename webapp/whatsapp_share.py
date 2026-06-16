@@ -12,6 +12,8 @@ from io import BytesIO
 from flask import Blueprint, render_template, request, send_file, redirect, url_for, session
 from functools import wraps
 
+from store_scope import current_store_id
+
 whatsapp_bp = Blueprint('whatsapp', __name__, url_prefix='/whatsapp')
 
 DB_PATH: str | None = None
@@ -141,6 +143,7 @@ def _collect_today(date_str: str, period: str | None = None) -> dict:
     out = {'date': date_str, 'checklists': [], 'temperatures': [],
            'equipment': None, 'violations': [], 'issues': [], 'prep_timetable': {},
            'period': period, 'period_meta': period_meta}
+    sid = current_store_id()
     with _conn() as conn:
         # Checklists — one entry per (type, section) combination submitted today
         chk_rows = conn.execute('''
@@ -148,9 +151,9 @@ def _collect_today(date_str: str, period: str | None = None) -> dict:
                    (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id) AS total_tasks,
                    (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id AND done=1) AS done_tasks
             FROM checklist_sessions cs
-            WHERE cs.date=? AND cs.section=?
+            WHERE cs.date=? AND cs.section=? AND cs.store_id=?
             ORDER BY cs.type, cs.section
-        ''', (date_str, period)).fetchall()
+        ''', (date_str, period, sid)).fetchall()
 
         for r in chk_rows:
             r = dict(r)
@@ -172,9 +175,9 @@ def _collect_today(date_str: str, period: str | None = None) -> dict:
                        (SELECT COUNT(*) FROM temp_readings WHERE session_id=ts.id) AS reading_count,
                        (SELECT COUNT(*) FROM temp_readings WHERE session_id=ts.id AND discarded='Y') AS discarded
                 FROM temp_sessions ts
-                WHERE ts.date=? AND ts.type IN ({placeholders})
+                WHERE ts.date=? AND ts.store_id=? AND ts.type IN ({placeholders})
                 ORDER BY ts.type
-            ''', (date_str, *sorted(OPENING_TEMPERATURE_TYPES))).fetchall()
+            ''', (date_str, sid, *sorted(OPENING_TEMPERATURE_TYPES))).fetchall()
         for r in temp_rows:
             r = dict(r)
             meta = TEMPERATURES_META.get(r['type'], {})
@@ -210,21 +213,23 @@ def _collect_today(date_str: str, period: str | None = None) -> dict:
         try:
             import equipment_routes
             equipment_routes.DB_PATH = DB_PATH
-            equip = equipment_routes.collect_equipment_for_date(conn, date_str)
+            equip = equipment_routes.collect_equipment_for_date(conn, date_str, sid)
             out['equipment'] = _filter_equipment_for_period(equip, period)
         except Exception:
             out['equipment'] = None
 
         # Prep timetable for the day — shared by the opening & closing reports.
-        out['prep_timetable'] = _collect_prep_timetable(conn, date_str)
+        out['prep_timetable'] = _collect_prep_timetable(conn, date_str, sid)
 
     return out
 
 
-def _collect_prep_timetable(conn, date_str):
+def _collect_prep_timetable(conn, date_str, store_id=None):
     """Per-station prep tasks for this weekday, linked to the weekly prep
     schedule's real done / not-done status. Same content for the AM & PM share
-    (prep is one shared list per day, not split by period)."""
+    (prep is one shared list per day, not split by period). Scoped to one store."""
+    if store_id is None:
+        store_id = current_store_id()
     empty = {'stations': [], 'total': 0, 'done': 0, 'not_done': 0, 'has_schedule': False}
     try:
         d = datetime.strptime(date_str, '%Y-%m-%d').date()
@@ -247,7 +252,8 @@ def _collect_prep_timetable(conn, date_str):
     # 1) Prefer the actual weekly schedule → real per-task done status for the date.
     try:
         sched = conn.execute(
-            'SELECT id FROM prep_weekly_schedules WHERE week_start=?', (week_start,)).fetchone()
+            'SELECT id FROM prep_weekly_schedules WHERE week_start=? AND store_id=?',
+            (week_start, store_id)).fetchone()
         if sched:
             has_schedule = True
             rows = conn.execute('''
@@ -256,8 +262,8 @@ def _collect_prep_timetable(conn, date_str):
                        ds.status AS status, ds.done_by AS done_by, ds.note AS note
                 FROM prep_daily_status ds
                 JOIN prep_weekly_tasks wt ON wt.id = ds.weekly_task_id
-                WHERE ds.date=? AND ds.is_required=1 AND COALESCE(wt.is_supplier,0)=0
-                ORDER BY wt.station_id, wt.sort_order, wt.id''', (date_str,)).fetchall()
+                WHERE ds.date=? AND ds.is_required=1 AND COALESCE(wt.is_supplier,0)=0 AND ds.store_id=?
+                ORDER BY wt.station_id, wt.sort_order, wt.id''', (date_str, store_id)).fetchall()
             for r in rows:
                 is_done = (r['status'] == 'done')
                 by_station.setdefault(r['sid'], []).append(
@@ -2263,40 +2269,41 @@ def _pdf_signature(date_str: str, period: str) -> str:
     served from cache."""
     period = _resolve_share_period(period)
     meta = SHARE_PERIODS[period]
-    parts: list = []
+    sid = current_store_id()
+    parts: list = [('store', sid)]   # never share a cached PDF across stores
     try:
         with _conn() as conn:
             parts.append(tuple(conn.execute(
                 "SELECT COUNT(*), COALESCE(MAX(submitted_at),''), "
                 "COALESCE(MAX(verified_at),''), COALESCE(SUM(verified),0) "
-                "FROM checklist_sessions WHERE date=? AND section=?",
-                (date_str, period)).fetchone()))
+                "FROM checklist_sessions WHERE date=? AND section=? AND store_id=?",
+                (date_str, period, sid)).fetchone()))
             parts.append(tuple(conn.execute(
                 "SELECT COUNT(*), COALESCE(SUM(t.done),0), COALESCE(MAX(t.id),0) "
                 "FROM checklist_tasks t JOIN checklist_sessions s ON s.id=t.session_id "
-                "WHERE s.date=? AND s.section=?", (date_str, period)).fetchone()))
+                "WHERE s.date=? AND s.section=? AND s.store_id=?", (date_str, period, sid)).fetchone()))
             parts.append(tuple(conn.execute(
                 "SELECT COUNT(*), COALESCE(MAX(p.id),0) "
                 "FROM checklist_photos p JOIN checklist_sessions s ON s.id=p.session_id "
-                "WHERE s.date=? AND s.section=?", (date_str, period)).fetchone()))
+                "WHERE s.date=? AND s.section=? AND s.store_id=?", (date_str, period, sid)).fetchone()))
             if meta.get('includes_food_temps'):
                 parts.append(tuple(conn.execute(
                     "SELECT COUNT(*), COALESCE(MAX(submitted_at),'') "
-                    "FROM temp_sessions WHERE date=?", (date_str,)).fetchone()))
+                    "FROM temp_sessions WHERE date=? AND store_id=?", (date_str, sid)).fetchone()))
                 parts.append(tuple(conn.execute(
                     "SELECT COUNT(*), COALESCE(MAX(r.id),0), "
                     "COALESCE(SUM(COALESCE(r.c1_temp,0)+COALESCE(r.c2_temp,0)+COALESCE(r.c3_temp,0)"
                     "+COALESCE(r.c4_temp,0)+COALESCE(r.c5_temp,0)),0) "
                     "FROM temp_readings r JOIN temp_sessions ts ON ts.id=r.session_id "
-                    "WHERE ts.date=?", (date_str,)).fetchone()))
+                    "WHERE ts.date=? AND ts.store_id=?", (date_str, sid)).fetchone()))
             parts.append(tuple(conn.execute(
                 "SELECT COUNT(*), COALESCE(MAX(morning_recorded_at),''), "
                 "COALESCE(MAX(closing_recorded_at),''), "
                 "COALESCE(SUM(COALESCE(morning_temp,0)+COALESCE(closing_temp,0)),0) "
-                "FROM equipment_temp_readings WHERE date=?", (date_str,)).fetchone()))
+                "FROM equipment_temp_readings WHERE date=? AND store_id=?", (date_str, sid)).fetchone()))
             parts.append(tuple(conn.execute(
                 "SELECT COUNT(*), COALESCE(MAX(id),0) "
-                "FROM equipment_units WHERE active=1").fetchone()))
+                "FROM equipment_units WHERE active=1 AND store_id=?", (sid,)).fetchone()))
             # Prep timetable status — ticking a prep task OR editing a not-done
             # reason/note must refresh the PDF.
             try:
@@ -2304,18 +2311,18 @@ def _pdf_signature(date_str: str, period: str) -> str:
                     "SELECT COUNT(*), COALESCE(SUM(CASE WHEN status='done' THEN 1 ELSE 0 END),0), "
                     "COALESCE(MAX(done_at),''), COALESCE(SUM(issue_flag),0), "
                     "COALESCE(SUM(LENGTH(COALESCE(note,''))),0) "
-                    "FROM prep_daily_status WHERE date=?",
-                    (date_str,)).fetchone()))
+                    "FROM prep_daily_status WHERE date=? AND store_id=?",
+                    (date_str, sid)).fetchone()))
             except Exception:
                 parts.append(('prep?',))
             # Violations + issues rendered on the report.
             try:
                 parts.append(tuple(conn.execute(
-                    "SELECT COUNT(*), COALESCE(MAX(id),0) FROM staff_violations WHERE incident_date=?",
-                    (date_str,)).fetchone()))
+                    "SELECT COUNT(*), COALESCE(MAX(id),0) FROM staff_violations WHERE incident_date=? AND store_id=?",
+                    (date_str, sid)).fetchone()))
                 parts.append(tuple(conn.execute(
-                    "SELECT COUNT(*), COALESCE(MAX(id),0) FROM issue_reports WHERE date=?",
-                    (date_str,)).fetchone()))
+                    "SELECT COUNT(*), COALESCE(MAX(id),0) FROM issue_reports WHERE date=? AND store_id=?",
+                    (date_str, sid)).fetchone()))
             except Exception:
                 parts.append(('vi?',))
     except Exception:

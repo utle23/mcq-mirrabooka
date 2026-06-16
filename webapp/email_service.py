@@ -633,8 +633,12 @@ def _prep_fmt_time(value: str | None) -> str:
         return value
 
 
-def collect_weekly_prep(week_start: str | date | None = None) -> dict:
-    """Collect one full weekly prep schedule. `week_start` can be any date in the week."""
+def collect_weekly_prep(week_start: str | date | None = None, store_id: int | None = None) -> dict:
+    """Collect one full weekly prep schedule for one store. `week_start` can be
+    any date in the week."""
+    if store_id is None:
+        from store_scope import current_store_id
+        store_id = current_store_id()
     ws = _prep_week_start(week_start)
     week_start_str = ws.isoformat()
     week_dates = [(ws + timedelta(days=i)).isoformat() for i in range(7)]
@@ -656,8 +660,8 @@ def collect_weekly_prep(week_start: str | date | None = None) -> dict:
     try:
         with _conn() as conn:
             sched = conn.execute(
-                'SELECT * FROM prep_weekly_schedules WHERE week_start=?',
-                (week_start_str,)).fetchone()
+                'SELECT * FROM prep_weekly_schedules WHERE week_start=? AND store_id=?',
+                (week_start_str, store_id)).fetchone()
             if not sched:
                 return empty
 
@@ -984,15 +988,20 @@ def regenerate_digest_token() -> str:
 
 def collect_daily_digest(target_date: str, checklists_meta: dict | None = None,
                           temperatures_meta: dict | None = None,
-                          issue_categories: dict | None = None) -> dict:
-    """Aggregate everything that happened on `target_date` (YYYY-MM-DD).
+                          issue_categories: dict | None = None,
+                          store_id: int | None = None) -> dict:
+    """Aggregate everything that happened on `target_date` (YYYY-MM-DD) for one store.
 
     `*_meta` dicts are the same CHECKLISTS / TEMPERATURES / ISSUE_CATEGORIES
     constants from app.py — passed in so this module doesn't depend on app.
+    `store_id` defaults to the session store (1 when run head-less by cron).
     """
     checklists_meta   = checklists_meta or {}
     temperatures_meta = temperatures_meta or {}
     issue_categories  = issue_categories or {}
+    if store_id is None:
+        from store_scope import current_store_id
+        store_id = current_store_id()
 
     with _conn() as conn:
         # ── Checklists: per (type, section) ──
@@ -1001,8 +1010,8 @@ def collect_daily_digest(target_date: str, checklists_meta: dict | None = None,
                    (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id) as total_tasks,
                    (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id AND done=1) as done_tasks,
                    (SELECT COUNT(*) FROM checklist_photos WHERE session_id=cs.id) as photo_count
-            FROM checklist_sessions cs WHERE cs.date=? ORDER BY cs.type, cs.section
-        ''', (target_date,)).fetchall()]
+            FROM checklist_sessions cs WHERE cs.date=? AND cs.store_id=? ORDER BY cs.type, cs.section
+        ''', (target_date, store_id)).fetchall()]
 
         # Build matrix: which (type, section) pairs got done, which didn't.
         checklist_matrix = []
@@ -1030,8 +1039,8 @@ def collect_daily_digest(target_date: str, checklists_meta: dict | None = None,
             SELECT ts.*,
                    (SELECT COUNT(*) FROM temp_readings WHERE session_id=ts.id) AS reading_count,
                    (SELECT COUNT(*) FROM temp_readings tr WHERE tr.session_id=ts.id AND tr.discarded='Y') AS discarded
-            FROM temp_sessions ts WHERE ts.date=? ORDER BY ts.type
-        ''', (target_date,)).fetchall()]
+            FROM temp_sessions ts WHERE ts.date=? AND ts.store_id=? ORDER BY ts.type
+        ''', (target_date, store_id)).fetchall()]
 
         # Out-of-zone readings — kind-aware (cold>5 OR hot<60)
         oos = [dict(r) for r in conn.execute('''
@@ -1082,8 +1091,8 @@ def collect_daily_digest(target_date: str, checklists_meta: dict | None = None,
 
         # ── Issues reported today ──
         issues_today = [dict(r) for r in conn.execute(
-            'SELECT * FROM issue_reports WHERE date=? ORDER BY priority DESC, id DESC',
-            (target_date,)).fetchall()]
+            'SELECT * FROM issue_reports WHERE date=? AND store_id=? ORDER BY priority DESC, id DESC',
+            (target_date, store_id)).fetchall()]
         for it in issues_today:
             it['category_label'] = issue_categories.get(it['category'], {}).get('label', it['category'])
 
@@ -1091,8 +1100,8 @@ def collect_daily_digest(target_date: str, checklists_meta: dict | None = None,
         violations_today = [dict(r) for r in conn.execute('''
             SELECT sv.*, vr.title as rule_title, vr.category as rule_category
             FROM staff_violations sv LEFT JOIN violation_rules vr ON vr.id = sv.rule_id
-            WHERE sv.incident_date=? ORDER BY sv.severity DESC, sv.id DESC
-        ''', (target_date,)).fetchall()]
+            WHERE sv.incident_date=? AND sv.store_id=? ORDER BY sv.severity DESC, sv.id DESC
+        ''', (target_date, store_id)).fetchall()]
 
         # ── Training sessions today ──
         training_today = []
@@ -1112,9 +1121,9 @@ def collect_daily_digest(target_date: str, checklists_meta: dict | None = None,
             pastry_alerts = [dict(r) for r in conn.execute('''
                 SELECT pd.*, pi.name as item_name
                 FROM pastry_delivery pd LEFT JOIN pastry_items pi ON pi.id=pd.item_id
-                WHERE pd.date=? AND pd.condition NOT IN ('', 'good')
+                WHERE pd.date=? AND pd.store_id=? AND pd.condition NOT IN ('', 'good')
                 ORDER BY pd.id DESC
-            ''', (target_date,)).fetchall()]
+            ''', (target_date, store_id)).fetchall()]
         except sqlite3.OperationalError:
             pass
 
@@ -1123,11 +1132,11 @@ def collect_daily_digest(target_date: str, checklists_meta: dict | None = None,
         try:
             import equipment_routes
             equipment_routes.DB_PATH = DB_PATH
-            equipment = equipment_routes.collect_equipment_for_date(conn, target_date)
+            equipment = equipment_routes.collect_equipment_for_date(conn, target_date, store_id)
         except Exception:
             equipment = None
 
-    prep_week = collect_weekly_prep(target_date)
+    prep_week = collect_weekly_prep(target_date, store_id=store_id)
 
     return {
         'date': target_date,
