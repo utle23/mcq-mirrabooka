@@ -78,7 +78,7 @@ JACCUS_SUPPLIER_SEED = {
     'delivery_days':  'WED,FRI',
     'cafe_name':      'MCQ Vietnamese Street Food — MIRRABOOKA',
     'cafe_address':   'Shop MM4/43 Yirrigan Dr, Mirrabooka WA 6061',
-    'cafe_contacts':  '0433 916 386 — Kate\n0449 624 146 — Tommy',
+    'cafe_contacts':  'Khoi: 0449819235',
     'notes':          '',
 }
 
@@ -269,6 +269,10 @@ def init_packaging(db_path: str):
         # Backfill the MCQ Mirrabooka delivery address where it's still blank.
         c.execute("UPDATE packaging_suppliers SET cafe_address=? WHERE COALESCE(cafe_address,'')=''",
                   (JACCUS_SUPPLIER_SEED['cafe_address'],))
+        c.execute(
+            "UPDATE packaging_suppliers SET cafe_contacts=? WHERE name=? AND active=1",
+            (JACCUS_SUPPLIER_SEED['cafe_contacts'], JACCUS_SUPPLIER_SEED['name'])
+        )
         for product_code, unit in PACKAGING_ITEM_UNIT_FIXES.items():
             c.execute(
                 "UPDATE packaging_items SET unit=? WHERE product_code=? AND active=1",
@@ -366,7 +370,7 @@ def _compose_order(supplier: dict, items_with_qty: list[dict],
         bullet = f"• {it['qty']} × {it['unit']} — {it['name_en']}"
         if code:
             bullet += f"  (code: {code})"
-        bullet += f"  @ {_money(unit_price)} = {_money(line_total)}"
+        bullet += f"  | Price per {it['unit']}: {_money(unit_price)} | Line total: {_money(line_total)}"
         parts.append(bullet)
 
     parts.extend([
