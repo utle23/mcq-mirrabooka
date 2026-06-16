@@ -49,6 +49,8 @@
 .items-table tbody tr.has-qty:hover { background: #FFF3CD; }
 .code-cell { font-family: ui-monospace, Menlo, monospace; font-size: 0.82rem; color: #555; }
 .unit-cell { font-size: 0.78rem; color: #888; text-transform: lowercase; }
+.money-cell { font-size: 0.82rem; font-weight: 800; color: #263238; white-space: nowrap; }
+.measure-cell { font-size: 0.76rem; color: #6f7a73; white-space: nowrap; }
 
 .preview-card {
   background: #f7f9fb; border: 1px solid #eef0f3; border-radius: 10px;
@@ -163,7 +165,7 @@
              placeholder="Your name" style="width:160px">
     </div>
     <span class="qty-summary ms-auto">
-      <span id="lineCount">0</span> line(s) · <span id="qtyTotal">0</span> unit(s)
+      <span id="lineCount">0</span> line(s) · <span id="qtyTotal">0</span> unit(s) · <span id="moneyTotal">$0.00</span>
     </span>
   </div>
 
@@ -176,12 +178,21 @@
           <th style="width:60px">Unit</th>
           <th>Item</th>
           <th style="width:160px" class="d-none d-md-table-cell">Code</th>
+          <th style="width:90px" class="d-none d-lg-table-cell">Measure</th>
+          <th style="width:90px" class="text-end">Price</th>
+          <th style="width:100px" class="text-end">Total</th>
           {% if is_admin %}<th style="width:80px"></th>{% endif %}
         </tr>
       </thead>
       <tbody id="itemBody">
         {% for it in items %}
-        <tr id="row-{{ it.id }}" data-qty="{{ it.default_qty }}">
+        <tr id="row-{{ it.id }}" data-qty="{{ it.default_qty }}"
+            data-code="{{ it.product_code|e }}"
+            data-name-en="{{ it.name_en|e }}"
+            data-name-vi="{{ it.name_vi|e }}"
+            data-unit="{{ it.unit|e }}"
+            data-unit-measure="{{ it.unit_measure|e }}"
+            data-unit-price="{{ it.unit_price or 0 }}">
           <td>
             <input type="number" name="qty_{{ it.id }}" class="form-control form-control-sm qty-input"
                    min="0" max="999" value="{{ it.default_qty }}"
@@ -193,6 +204,9 @@
             {% if it.name_vi %}<div class="text-muted small">{{ it.name_vi }}</div>{% endif %}
           </td>
           <td class="code-cell d-none d-md-table-cell">{{ it.product_code }}</td>
+          <td class="measure-cell d-none d-lg-table-cell">{{ it.unit_measure or '—' }}</td>
+          <td class="money-cell text-end">${{ "%.2f"|format(it.unit_price or 0) }}</td>
+          <td class="money-cell text-end line-total">$0.00</td>
           {% if is_admin %}
           <td class="text-center">
             <button type="button" class="btn btn-sm btn-link p-0 text-secondary"
@@ -225,6 +239,8 @@
       <option>can</option>
       <option>each</option>
     </select>
+    <input type="text" id="add_unit_measure" class="form-control form-control-sm" placeholder="Measure" style="width:100px">
+    <input type="number" id="add_unit_price" class="form-control form-control-sm" placeholder="Price" value="0" min="0" step="0.01" style="width:95px">
     <input type="number" id="add_qty" class="form-control form-control-sm" placeholder="Default qty" value="0" min="0" style="width:110px">
     <button type="button" class="btn btn-sm btn-success" onclick="addItem()">
       <i class="fas fa-plus me-1"></i>Add
@@ -410,6 +426,14 @@
               <label class="form-label small fw-semibold">Default qty</label>
               <input type="number" id="ie_qty" class="form-control form-control-sm" min="0" value="0">
             </div>
+            <div class="col-md-4">
+              <label class="form-label small fw-semibold">Unit measure</label>
+              <input type="text" id="ie_unit_measure" class="form-control form-control-sm">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label small fw-semibold">Price $</label>
+              <input type="number" id="ie_unit_price" class="form-control form-control-sm" min="0" step="0.01" value="0">
+            </div>
             <div class="col-md-6">
               <label class="form-label small fw-semibold">Name EN *</label>
               <input type="text" id="ie_en" class="form-control form-control-sm" required>
@@ -442,20 +466,32 @@ function toast(msg, isErr=false) {
   setTimeout(() => { t.style.display = 'none'; }, 3500);
 }
 
+function money(v) {
+  const n = Number.isFinite(v) ? v : 0;
+  return '$' + n.toFixed(2);
+}
+
 function updateRowState(input) {
   const tr = input.closest('tr');
   if (!tr) return;
   const v = parseInt(input.value || '0', 10) || 0;
+  const price = parseFloat(tr.dataset.unitPrice || '0') || 0;
+  const totalEl = tr.querySelector('.line-total');
+  if (totalEl) totalEl.textContent = money(v * price);
   tr.classList.toggle('has-qty', v > 0);
 }
 function refreshSummary() {
-  let lines = 0, total = 0;
+  let lines = 0, total = 0, totalMoney = 0;
   document.querySelectorAll('.qty-input').forEach(i => {
     const v = parseInt(i.value || '0', 10) || 0;
-    if (v > 0) { lines++; total += v; }
+    const tr = i.closest('tr');
+    const price = parseFloat(tr?.dataset.unitPrice || '0') || 0;
+    if (v > 0) { lines++; total += v; totalMoney += v * price; }
+    updateRowState(i);
   });
   document.getElementById('lineCount').textContent = lines;
   document.getElementById('qtyTotal').textContent = total;
+  document.getElementById('moneyTotal').textContent = money(totalMoney);
 }
 document.querySelectorAll('.qty-input').forEach(i => updateRowState(i));
 refreshSummary();
@@ -620,7 +656,7 @@ async function composeOrder(channel) {
       window.location.href = data.mailto;
     }
 
-    toast(`${data.item_count} item(s), ${data.total_qty} unit(s) — ready`);
+    toast(`${data.item_count} item(s), ${data.total_qty} unit(s), ${money(data.total_money || 0)} — ready`);
   } catch (e) {
     if (e.message && !e.toastShown) toast(e.message, true);
   }
@@ -678,6 +714,8 @@ async function addItem() {
   fd.append('name_en', en);
   fd.append('name_vi', document.getElementById('add_name_vi').value.trim());
   fd.append('unit', document.getElementById('add_unit').value);
+  fd.append('unit_measure', document.getElementById('add_unit_measure').value.trim());
+  fd.append('unit_price', document.getElementById('add_unit_price').value || '0');
   fd.append('default_qty', document.getElementById('add_qty').value || '0');
   const resp = await fetch('/packaging/item/add', { method:'POST', body:fd });
   const data = await resp.json();
@@ -688,14 +726,14 @@ async function addItem() {
 function openItemEdit(id) {
   const tr = document.getElementById('row-' + id);
   if (!tr) return;
-  const cells = tr.querySelectorAll('td');
   document.getElementById('ie_id').value = id;
   document.getElementById('ie_qty').value = tr.dataset.qty || '0';
-  document.getElementById('ie_unit').value = cells[1].textContent.trim();
-  document.getElementById('ie_en').value = cells[2].querySelector('.fw-semibold').textContent.trim();
-  const vi = cells[2].querySelector('.text-muted');
-  document.getElementById('ie_vi').value = vi ? vi.textContent.trim() : '';
-  document.getElementById('ie_code').value = cells[3] ? cells[3].textContent.trim() : '';
+  document.getElementById('ie_unit').value = tr.dataset.unit || 'carton';
+  document.getElementById('ie_unit_measure').value = tr.dataset.unitMeasure || '';
+  document.getElementById('ie_unit_price').value = tr.dataset.unitPrice || '0';
+  document.getElementById('ie_en').value = tr.dataset.nameEn || '';
+  document.getElementById('ie_vi').value = tr.dataset.nameVi || '';
+  document.getElementById('ie_code').value = tr.dataset.code || '';
   new bootstrap.Modal(document.getElementById('itemEditModal')).show();
 }
 
@@ -707,6 +745,8 @@ async function saveItem(ev) {
   fd.append('name_en', document.getElementById('ie_en').value.trim());
   fd.append('name_vi', document.getElementById('ie_vi').value.trim());
   fd.append('unit', document.getElementById('ie_unit').value);
+  fd.append('unit_measure', document.getElementById('ie_unit_measure').value.trim());
+  fd.append('unit_price', document.getElementById('ie_unit_price').value || '0');
   fd.append('default_qty', document.getElementById('ie_qty').value || '0');
   const resp = await fetch('/packaging/item/' + id + '/edit', { method:'POST', body:fd });
   const data = await resp.json();

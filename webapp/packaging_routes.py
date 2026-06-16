@@ -30,6 +30,7 @@ DB_PATH: str | None = None
 
 JACCUS_ITEMS_SEED = [
     # (product_code, name_en, name_vi, unit, default_qty)
+    ('NapQBES',             'Quilted Brown Express (Tork Xpress Dispenser) Napkin', 'Khăn giấy dispenser Tork Xpress', 'carton', 0),
     ('1WFB',                'Tui banh ngot',                              'Túi bánh ngọt',                                    'bag',    4),
     ('KCB-M',               'Hop nho — catering box',                     'Hộp nhỏ — catering box',                           'carton', 0),
     ('KCBWLid-M',           'Nap hop nho — catering box',                 'Nắp hộp nhỏ — catering box',                       'carton', 0),
@@ -86,6 +87,47 @@ PACKAGING_ITEM_UNIT_FIXES = {
     'CW45/600 Pro': 'each',
 }
 
+JACCUS_PRICE_DATA = {
+    # product_code: (unit_of_measure from Jaccus price list, price per order unit)
+    'NapQBES': ('6000', 49.90),
+    '1WFB': ('1000', 19.90),
+    'KCB-M': ('100', 60.90),
+    'KCBWLid-M': ('100', 49.00),
+    'KCB-L': ('50', 44.90),
+    'KCBWLid-L': ('50', 37.00),
+    'KDTR-4-PLA': ('400', 69.90),
+    'KDTR-4Lid': ('400', 53.00),
+    'P200': ('3000', 87.90),
+    'P200Lid': ('3000', 74.00),
+    'Rec1000-PLA-K': ('300', 51.90),
+    'RecPaper-PPLid': ('300', 25.00),
+    'Rd24-PLA-W': ('500', 76.90),
+    'RdPPLid-115-F': ('500', 31.00),
+    'PaperBowl-Extra Large': ('300', 78.90),
+    'BPB-PETLid184': ('300', 47.00),
+    'EC-DCC390': ('1000', 109.90),
+    'EC-DCC500': ('1000', 124.90),
+    'BioBCL-90C-Pulp-F': ('1000', 66.00),
+    'DSPaperBlk': ('2500', 36.90),
+    'ChopstickBam': ('3000', 49.90),
+    'WoodenFrk': ('1000', 21.90),
+    'WoodenKnf': ('1000', 18.90),
+    'WoodenSpn': ('1000', 22.90),
+    'PulpCSpn': ('1000', 49.90),
+    'NitrileBluPF-Md': ('10 Box', 69.90),
+    'NitrileBluPF-Lg': ('10 Box', 69.90),
+    'BL82/35': ('200', 38.90),
+    'HTSlimline': ('4000', 44.90),
+    'Surplus20': ('20lt', 33.90),
+    'Oven5': ('5lt', 29.90),
+    'AF44/150': ('Each', 22.90),
+    'CW45/600 Pro': ('1 Roll', 23.90),
+    'BioR-500Y': ('1000', 219.90),
+    'BioC-96D(N)': ('1000', 94.90),
+    'LWGP33x40': ('800', 19.90),
+    'Blitz5': ('5lt', 22.90),
+}
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -93,6 +135,61 @@ def _conn():
     c = sqlite3.connect(DB_PATH)
     c.row_factory = sqlite3.Row
     return c
+
+
+def _money(amount) -> str:
+    try:
+        return f"${float(amount or 0):,.2f}"
+    except (TypeError, ValueError):
+        return "$0.00"
+
+
+def _float_form(value, default=0.0):
+    try:
+        return max(0.0, float(value or default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _sync_jaccus_catalog_prices(c):
+    supplier = c.execute(
+        "SELECT id FROM packaging_suppliers WHERE name=? AND active=1 ORDER BY id LIMIT 1",
+        (JACCUS_SUPPLIER_SEED['name'],)
+    ).fetchone()
+    if not supplier:
+        return
+    sid = supplier['id']
+    existing_codes = {
+        r['product_code']
+        for r in c.execute(
+            "SELECT product_code FROM packaging_items WHERE supplier_id=? AND active=1",
+            (sid,)
+        ).fetchall()
+    }
+    next_sort = c.execute(
+        "SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM packaging_items WHERE supplier_id=?",
+        (sid,)
+    ).fetchone()['n']
+
+    for code, en, vi, unit, qty in JACCUS_ITEMS_SEED:
+        if code in existing_codes:
+            continue
+        c.execute(
+            '''INSERT INTO packaging_items
+               (supplier_id, product_code, name_en, name_vi, unit, default_qty, sort_order)
+               VALUES (?,?,?,?,?,?,?)''',
+            (sid, code, en, vi, unit, qty, next_sort)
+        )
+        existing_codes.add(code)
+        next_sort += 1
+
+    for product_code, (unit_measure, unit_price) in JACCUS_PRICE_DATA.items():
+        c.execute(
+            '''UPDATE packaging_items
+               SET unit_measure=?, unit_price=?
+               WHERE supplier_id=? AND product_code=? AND active=1''',
+            (unit_measure, unit_price, sid, product_code)
+        )
 
 
 def _login_required(f):
@@ -141,6 +238,8 @@ def init_packaging(db_path: str):
                 name_en       TEXT NOT NULL,
                 name_vi       TEXT NOT NULL DEFAULT '',
                 unit          TEXT NOT NULL DEFAULT 'carton',
+                unit_measure  TEXT NOT NULL DEFAULT '',
+                unit_price    REAL NOT NULL DEFAULT 0,
                 default_qty   INTEGER NOT NULL DEFAULT 0,
                 sort_order    INTEGER NOT NULL DEFAULT 0,
                 active        INTEGER NOT NULL DEFAULT 1
@@ -162,6 +261,11 @@ def init_packaging(db_path: str):
         cols = [r['name'] for r in c.execute("PRAGMA table_info(packaging_suppliers)").fetchall()]
         if 'cafe_address' not in cols:
             c.execute("ALTER TABLE packaging_suppliers ADD COLUMN cafe_address TEXT NOT NULL DEFAULT ''")
+        item_cols = [r['name'] for r in c.execute("PRAGMA table_info(packaging_items)").fetchall()]
+        if 'unit_measure' not in item_cols:
+            c.execute("ALTER TABLE packaging_items ADD COLUMN unit_measure TEXT NOT NULL DEFAULT ''")
+        if 'unit_price' not in item_cols:
+            c.execute("ALTER TABLE packaging_items ADD COLUMN unit_price REAL NOT NULL DEFAULT 0")
         # Backfill the MCQ Mirrabooka delivery address where it's still blank.
         c.execute("UPDATE packaging_suppliers SET cafe_address=? WHERE COALESCE(cafe_address,'')=''",
                   (JACCUS_SUPPLIER_SEED['cafe_address'],))
@@ -190,6 +294,7 @@ def init_packaging(db_path: str):
                     (supplier_id, product_code, name_en, name_vi, unit, default_qty, sort_order)
                     VALUES (?,?,?,?,?,?,?)''',
                     (sid, code, en, vi, unit, qty, i))
+        _sync_jaccus_catalog_prices(c)
 
 
 # ── Data helpers ─────────────────────────────────────────────────────────────
@@ -236,6 +341,7 @@ def _compose_order(supplier: dict, items_with_qty: list[dict],
     subject = f"MCQ Restaurant Mirrabooka — Packaging order — delivery {deliv_pretty}"
 
     total_units = sum(i['qty'] for i in items_with_qty)
+    total_money = sum(i['qty'] * float(i.get('unit_price') or 0) for i in items_with_qty)
     line_count  = len(items_with_qty)
     s = 's' if total_units != 1 else ''
     ls = 's' if line_count != 1 else ''
@@ -255,12 +361,19 @@ def _compose_order(supplier: dict, items_with_qty: list[dict],
     ]
     for it in items_with_qty:
         code = it.get('product_code') or ''
+        unit_price = float(it.get('unit_price') or 0)
+        line_total = it['qty'] * unit_price
         bullet = f"• {it['qty']} × {it['unit']} — {it['name_en']}"
         if code:
             bullet += f"  (code: {code})"
+        bullet += f"  @ {_money(unit_price)} = {_money(line_total)}"
         parts.append(bullet)
 
-    parts.extend(["", f"TOTAL: {total_units} unit{s} across {line_count} line{ls}."])
+    parts.extend([
+        "",
+        f"TOTAL: {total_units} unit{s} across {line_count} line{ls}.",
+        f"TOTAL MONEY: {_money(total_money)}",
+    ])
 
     if extra_note.strip():
         parts += ["", "Note:", extra_note.strip()]
@@ -399,6 +512,7 @@ def packaging_compose():
         'cc':            cc,
         'item_count':    len(chosen),
         'total_qty':     sum(i['qty'] for i in chosen),
+        'total_money':   sum(i['qty'] * float(i.get('unit_price') or 0) for i in chosen),
     })
 
 
@@ -594,13 +708,16 @@ def item_add():
         except ValueError:
             qty = 0
         cur = c.execute('''INSERT INTO packaging_items
-            (supplier_id, product_code, name_en, name_vi, unit, default_qty, sort_order)
-            VALUES (?,?,?,?,?,?,?)''',
+            (supplier_id, product_code, name_en, name_vi, unit, unit_measure,
+             unit_price, default_qty, sort_order)
+            VALUES (?,?,?,?,?,?,?,?,?)''',
             (sid,
              request.form.get('product_code', '').strip(),
              name_en,
              request.form.get('name_vi', '').strip(),
              request.form.get('unit', 'carton').strip() or 'carton',
+             request.form.get('unit_measure', '').strip(),
+             _float_form(request.form.get('unit_price'), 0.0),
              qty, n))
         new_id = cur.lastrowid
     return jsonify({'ok': True, 'id': new_id})
@@ -618,12 +735,15 @@ def item_edit(iid):
         qty = 0
     with _conn() as c:
         c.execute('''UPDATE packaging_items SET
-            product_code=?, name_en=?, name_vi=?, unit=?, default_qty=?
+            product_code=?, name_en=?, name_vi=?, unit=?, unit_measure=?,
+            unit_price=?, default_qty=?
             WHERE id=?''',
             (request.form.get('product_code', '').strip(),
              name_en,
              request.form.get('name_vi', '').strip(),
              request.form.get('unit', 'carton').strip() or 'carton',
+             request.form.get('unit_measure', '').strip(),
+             _float_form(request.form.get('unit_price'), 0.0),
              qty, iid))
     return jsonify({'ok': True})
 
