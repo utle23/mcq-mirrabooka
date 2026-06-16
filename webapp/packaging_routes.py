@@ -81,6 +81,11 @@ JACCUS_SUPPLIER_SEED = {
     'notes':          '',
 }
 
+PACKAGING_ITEM_UNIT_FIXES = {
+    'AF44/150': 'each',
+    'CW45/600 Pro': 'each',
+}
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -160,6 +165,11 @@ def init_packaging(db_path: str):
         # Backfill the MCQ Mirrabooka delivery address where it's still blank.
         c.execute("UPDATE packaging_suppliers SET cafe_address=? WHERE COALESCE(cafe_address,'')=''",
                   (JACCUS_SUPPLIER_SEED['cafe_address'],))
+        for product_code, unit in PACKAGING_ITEM_UNIT_FIXES.items():
+            c.execute(
+                "UPDATE packaging_items SET unit=? WHERE product_code=? AND active=1",
+                (unit, product_code)
+            )
 
         # Seed Jaccus if no suppliers exist yet
         if c.execute('SELECT COUNT(*) c FROM packaging_suppliers').fetchone()['c'] == 0:
