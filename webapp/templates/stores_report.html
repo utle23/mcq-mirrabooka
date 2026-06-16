@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}All Stores{% endblock %}
+{% block topbar_title %}<span class="fw-bold"><i class="fas fa-store me-2 text-success"></i>All Stores — Owner Overview</span>{% endblock %}
+
+{% block content %}
+<div class="card shadow-sm mb-4">
+  <div class="card-body py-2">
+    <form method="GET" class="row g-2 align-items-end">
+      <div class="col-auto"><label class="form-label small fw-semibold mb-1">From</label><input type="date" name="date_from" class="form-control form-control-sm" value="{{ date_from }}"></div>
+      <div class="col-auto"><label class="form-label small fw-semibold mb-1">To</label><input type="date" name="date_to" class="form-control form-control-sm" value="{{ date_to }}"></div>
+      <div class="col-auto"><button class="btn btn-sm btn-success"><i class="fas fa-filter me-1"></i>Apply</button></div>
+      <div class="col-auto text-muted small">Revenue & checklist/temperature counts use this range · open issues/violations are live totals.</div>
+    </form>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3"><div class="stat-card stat-green"><div class="stat-icon"><i class="fas fa-store"></i></div><div class="stat-value">{{ rows|length }}</div><div class="stat-label">Active Stores</div></div></div>
+  <div class="col-6 col-md-3"><div class="stat-card stat-blue"><div class="stat-icon"><i class="fas fa-dollar-sign"></i></div><div class="stat-value">${{ '%.0f'|format(totals.revenue) }}</div><div class="stat-label">Total Revenue</div></div></div>
+  <div class="col-6 col-md-3"><div class="stat-card stat-orange"><div class="stat-icon"><i class="fas fa-triangle-exclamation"></i></div><div class="stat-value">{{ totals.issues_open }}</div><div class="stat-label">Open Issues</div></div></div>
+  <div class="col-6 col-md-3"><div class="stat-card stat-red"><div class="stat-icon"><i class="fas fa-user-shield"></i></div><div class="stat-value">{{ totals.violations_open }}</div><div class="stat-label">Open Violations</div></div></div>
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-header py-2"><h6 class="mb-0"><i class="fas fa-table-columns me-2 text-success"></i>Per-store breakdown</h6></div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead class="table-dark">
+        <tr>
+          <th>Store</th>
+          <th class="text-center">Staff</th>
+          <th class="text-center">Checklists</th>
+          <th class="text-center">Verified</th>
+          <th class="text-center">Verify %</th>
+          <th class="text-center">Temp logs</th>
+          <th class="text-center">Open issues</th>
+          <th class="text-center">Open violations</th>
+          <th class="text-end">Revenue</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td><span class="fw-bold">{{ r.name }}</span><div class="text-muted small">{{ r.code }}</div></td>
+          <td class="text-center">{{ r.staff_count }}</td>
+          <td class="text-center">{{ r.chk_total }}</td>
+          <td class="text-center">{{ r.chk_verified }}</td>
+          <td class="text-center">
+            <span class="badge bg-{{ 'success' if r.verify_rate >= 90 else 'warning text-dark' if r.verify_rate >= 60 else 'danger' }}">{{ r.verify_rate }}%</span>
+          </td>
+          <td class="text-center">{{ r.temp_total }}</td>
+          <td class="text-center">{% if r.issues_open %}<span class="badge bg-warning text-dark">{{ r.issues_open }}</span>{% else %}0{% endif %}</td>
+          <td class="text-center">{% if r.violations_open %}<span class="badge bg-danger">{{ r.violations_open }}</span>{% else %}0{% endif %}</td>
+          <td class="text-end fw-semibold">${{ '%.2f'|format(r.revenue) }}</td>
+          <td>
+            <a href="/manager?store={{ r.id }}" class="btn btn-sm btn-outline-primary" title="Open this store's manager panel">View</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot class="table-light fw-bold">
+        <tr>
+          <td>All stores</td>
+          <td class="text-center">{{ totals.staff_count }}</td>
+          <td class="text-center">{{ totals.chk_total }}</td>
+          <td class="text-center">{{ totals.chk_verified }}</td>
+          <td></td>
+          <td class="text-center">{{ totals.temp_total }}</td>
+          <td class="text-center">{{ totals.issues_open }}</td>
+          <td class="text-center">{{ totals.violations_open }}</td>
+          <td class="text-end">${{ '%.2f'|format(totals.revenue) }}</td>
+          <td></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</div>
+
+<!-- Manage stores -->
+<div class="d-flex align-items-center mt-4 mb-2">
+  <h6 class="mb-0 me-auto"><i class="fas fa-gear me-2 text-secondary"></i>Manage Branches</h6>
+  <button class="btn btn-sm btn-success" type="button" data-bs-toggle="collapse" data-bs-target="#addStoreBox">
+    <i class="fas fa-plus me-1"></i>Add Branch
+  </button>
+</div>
+
+<div class="collapse mb-3" id="addStoreBox">
+  <div class="card card-body shadow-sm">
+    <form method="POST" action="/admin/stores/add" class="row g-2 align-items-end">
+      <div class="col-md-3"><label class="form-label small fw-semibold">Name</label><input name="name" class="form-control form-control-sm" placeholder="MCQ Joondalup" required></div>
+      <div class="col-md-2"><label class="form-label small fw-semibold">Code (login key)</label><input name="code" class="form-control form-control-sm" placeholder="joondalup"></div>
+      <div class="col-md-4"><label class="form-label small fw-semibold">Address</label><input name="address" class="form-control form-control-sm"></div>
+      <div class="col-md-3"><label class="form-label small fw-semibold">Phone</label><input name="phone" class="form-control form-control-sm"></div>
+      <div class="col-md-3"><label class="form-label small fw-semibold">Staff password</label><input name="user_password" class="form-control form-control-sm" placeholder="default 7777"></div>
+      <div class="col-md-3"><label class="form-label small fw-semibold">Admin password</label><input name="admin_password" class="form-control form-control-sm" placeholder="default 77771"></div>
+      <div class="col-md-3"><label class="form-label small fw-semibold">Kitchen password</label><input name="kitchen_password" class="form-control form-control-sm" placeholder="default 8888"></div>
+      <div class="col-md-3"><button class="btn btn-sm btn-success w-100"><i class="fas fa-save me-1"></i>Create Branch</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="row g-3">
+  {% for s in all_store_rows %}
+  <div class="col-12 col-lg-6">
+    <div class="card shadow-sm h-100 {% if not s.active %}opacity-75{% endif %}">
+      <div class="card-header py-2 d-flex align-items-center gap-2">
+        <span class="fw-bold">{{ s.name }}</span>
+        <span class="badge bg-light text-dark border">{{ s.code }}</span>
+        <span class="badge bg-{{ 'success' if s.active else 'secondary' }} ms-auto">{{ 'Active' if s.active else 'Inactive' }}</span>
+      </div>
+      <div class="card-body">
+        <form method="POST" action="/admin/stores/{{ s.id }}/update" class="row g-2 align-items-end">
+          <div class="col-md-6"><label class="form-label small fw-semibold">Name</label><input name="name" class="form-control form-control-sm" value="{{ s.name }}"></div>
+          <div class="col-md-6"><label class="form-label small fw-semibold">Phone</label><input name="phone" class="form-control form-control-sm" value="{{ s.phone or '' }}"></div>
+          <div class="col-12"><label class="form-label small fw-semibold">Address</label><input name="address" class="form-control form-control-sm" value="{{ s.address or '' }}"></div>
+          <div class="col-md-4"><label class="form-label small fw-semibold">Staff pw</label><input name="user_password" class="form-control form-control-sm" value="{{ s.user_password or '' }}"></div>
+          <div class="col-md-4"><label class="form-label small fw-semibold">Admin pw</label><input name="admin_password" class="form-control form-control-sm" value="{{ s.admin_password or '' }}"></div>
+          <div class="col-md-4"><label class="form-label small fw-semibold">Kitchen pw</label><input name="kitchen_password" class="form-control form-control-sm" value="{{ s.kitchen_password or '' }}"></div>
+          <div class="col-md-6 form-check ms-2 mt-3"><input type="checkbox" name="active" class="form-check-input" id="act{{ s.id }}" {% if s.active %}checked{% endif %}><label class="form-check-label small" for="act{{ s.id }}">Active (shown on login)</label></div>
+          <div class="col-md-6 text-end"><button class="btn btn-sm btn-primary"><i class="fas fa-save me-1"></i>Save</button></div>
+        </form>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

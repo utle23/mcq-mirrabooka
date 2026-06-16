@@ -342,17 +342,75 @@ STAFF = [
 BRANCHES = ['Mirrabooka', 'Subiaco', 'Morley']
 MANAGERS = ['MA, THANH PHUNG', 'Khoi']
 
+# ── Multi-store foundation ────────────────────────────────────────────────────
+# One shared SQLite DB; each store's operational data is isolated by store_id.
+# stores.id is the canonical key; branch text is display/back-compat only.
+# Seed order fixes ids: mirrabooka=1, morley=2, subiaco=3.
+STORES_SEED = [
+    ('mirrabooka', 'MCQ Mirrabooka'),
+    ('morley',     'MCQ Morley'),
+    ('subiaco',    'MCQ Subiaco'),
+]
 
-def get_active_staff():
+# Operational (store-specific) tables that carry store_id. Reference/template
+# tables (menus, task templates, rules, pricing) stay chain-wide on purpose.
+STORE_SCOPED_TABLES = [
+    'staff_members', 'checklist_sessions', 'temp_sessions', 'packaging_orders',
+    'staff_violations', 'issue_reports', 'equipment_units', 'equipment_temp_readings',
+    'prep_weekly_schedules', 'prep_weekly_tasks', 'prep_daily_status',
+    'pastry_delivery', 'pastry_sales', 'orders',
+]
+
+
+# Session/request-based store scoping helpers live in store_scope.py so the
+# blueprints can share them without importing app.py (circular import).
+from store_scope import (is_super_admin, current_store_id, selected_store_scope,
+                         store_filter_clause, store_guard_clause)
+
+
+def get_stores(active_only=True):
+    """All stores as list of dicts (id, code, name, ...), ordered by id."""
+    try:
+        with get_db() as conn:
+            q = 'SELECT * FROM stores'
+            if active_only:
+                q += ' WHERE active=1'
+            q += ' ORDER BY id'
+            return [dict(r) for r in conn.execute(q).fetchall()]
+    except Exception:
+        return []
+
+
+def store_id_for_branch(branch):
+    """Map a branch display name to stores.id via its code (lowercased name).
+    Falls back to 1 (Mirrabooka) so logins never break during migration."""
+    code = (branch or '').strip().lower()
+    try:
+        with get_db() as conn:
+            row = conn.execute('SELECT id FROM stores WHERE code=?', (code,)).fetchone()
+        if row:
+            return row['id']
+    except Exception:
+        pass
+    return 1
+
+
+def get_active_staff(store_id=None):
     """Single source of truth for staff dropdowns: the live staff_members table
-    (active members only). Adding a member on the Staff page makes them show up
-    in every checklist / temperature / report picker; deleting or deactivating
-    them removes the name everywhere. Falls back to the seed STAFF list only if
-    the table is unavailable or empty (e.g. very first boot before seeding)."""
+    (active members only) for the CURRENT store. Adding a member on the Staff
+    page makes them show up in every checklist / temperature / report picker;
+    deleting or deactivating them removes the name everywhere. Falls back to the
+    seed STAFF list only if the table is unavailable or empty.
+
+    Dropdowns always need a concrete store, so this uses the session store by
+    default (not the super_admin all-stores view)."""
+    if store_id is None:
+        store_id = current_store_id()
     try:
         with get_db() as conn:
             names = [r['name'] for r in conn.execute(
-                'SELECT name FROM staff_members WHERE active=1 ORDER BY name').fetchall()]
+                'SELECT name FROM staff_members WHERE active=1 AND store_id=? '
+                'ORDER BY name', (store_id,)).fetchall()]
         return names or list(STAFF)
     except Exception:
         return list(STAFF)
@@ -477,6 +535,170 @@ def get_db():
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA foreign_keys = ON')
     return conn
+
+
+def _add_store_to_unique(conn, table, old_unique, new_unique):
+    """Rebuild `table` so its natural-key UNIQUE constraint also includes
+    store_id. Safe + idempotent: no-op if already migrated or the old
+    constraint isn't present. Preserves all rows, columns, ids and indexes.
+
+    SQLite can't ALTER a constraint, so we copy into a new table. The caller
+    MUST pass an autocommit connection (isolation_level=None) so the
+    PRAGMA foreign_keys=OFF below actually takes effect — otherwise the
+    implicit DELETE that DROP TABLE performs on a parent would CASCADE into
+    child tables (e.g. checklist_tasks) and wipe them."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+    if not row or not row[0]:
+        return
+    create_sql = row[0]
+    norm = create_sql.replace(' ', '')
+    if new_unique.replace(' ', '') in norm:
+        return  # already migrated
+    if old_unique.replace(' ', '') not in norm:
+        return  # constraint shape unexpected — leave it alone, do not risk data
+    cols = [r[1] for r in conn.execute(f'PRAGMA table_info({table})')]
+    collist = ', '.join(cols)
+    # Preserve user-defined indexes (auto-indexes have NULL sql and are rebuilt
+    # automatically from the UNIQUE/PK definitions).
+    index_sqls = [r[0] for r in conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL",
+        (table,)).fetchall()]
+    tmp = f'{table}__mig'
+    new_create = (create_sql
+                  .replace(old_unique, new_unique)
+                  .replace(f'IF NOT EXISTS {table}', tmp)
+                  .replace(f'EXISTS {table}', tmp))
+    if tmp not in new_create:
+        new_create = create_sql.replace(old_unique, new_unique).replace(
+            f' {table} ', f' {tmp} ', 1).replace(f' {table}(', f' {tmp}(', 1)
+    if tmp not in new_create:
+        return  # couldn't safely rename target — bail without touching data
+
+    conn.execute('PRAGMA foreign_keys = OFF')   # effective only outside a txn
+    conn.execute('BEGIN')
+    try:
+        conn.execute(f'DROP TABLE IF EXISTS {tmp}')
+        conn.execute(new_create)
+        conn.execute(f'INSERT INTO {tmp} ({collist}) SELECT {collist} FROM {table}')
+        conn.execute(f'DROP TABLE {table}')
+        conn.execute(f'ALTER TABLE {tmp} RENAME TO {table}')
+        for isql in index_sqls:   # recreate the indexes we dropped with the table
+            try:
+                conn.execute(isql)
+            except Exception:
+                pass
+        conn.execute('COMMIT')
+    except Exception:
+        conn.execute('ROLLBACK')
+        raise
+    finally:
+        conn.execute('PRAGMA foreign_keys = ON')
+
+
+def migrate_multistore(db_path):
+    """All multi-store schema work on a dedicated AUTOCOMMIT connection so the
+    UNIQUE-constraint rebuilds can safely toggle foreign_keys. Idempotent."""
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.isolation_level = None   # autocommit
+    try:
+        # 1) stores table + seed (fixed ids: mirrabooka=1, morley=2, subiaco=3)
+        conn.execute('''CREATE TABLE IF NOT EXISTS stores (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            code    TEXT UNIQUE NOT NULL,
+            name    TEXT NOT NULL,
+            address TEXT DEFAULT '',
+            phone   TEXT DEFAULT '',
+            active  INTEGER DEFAULT 1
+        )''')
+        for sid, (scode, sname) in enumerate(STORES_SEED, start=1):
+            conn.execute('INSERT OR IGNORE INTO stores (id,code,name) VALUES (?,?,?)',
+                         (sid, scode, sname))
+        # 1b) per-store login passwords (seed with the chain defaults so existing
+        #     logins keep working until an owner changes them per store).
+        for col in ('user_password', 'admin_password', 'kitchen_password'):
+            try:
+                conn.execute(f"ALTER TABLE stores ADD COLUMN {col} TEXT DEFAULT ''")
+            except Exception:
+                pass
+        conn.execute("UPDATE stores SET user_password=?    WHERE COALESCE(user_password,'')=''",    (USER_PASSWORD,))
+        conn.execute("UPDATE stores SET admin_password=?   WHERE COALESCE(admin_password,'')=''",   (ADMIN_PASSWORD,))
+        conn.execute("UPDATE stores SET kitchen_password=? WHERE COALESCE(kitchen_password,'')=''", (KITCHEN_PASSWORD,))
+        # 2) add store_id to operational tables + backfill existing rows to
+        #    Mirrabooka (store_id=1). Legacy branch TEXT columns are left intact.
+        for tbl in STORE_SCOPED_TABLES:
+            try:
+                conn.execute(f'ALTER TABLE {tbl} ADD COLUMN store_id INTEGER DEFAULT 1')
+            except Exception:
+                pass
+            try:
+                conn.execute(f'UPDATE {tbl} SET store_id=1 WHERE store_id IS NULL')
+            except Exception:
+                pass
+        # 3) widen natural-key UNIQUE constraints to include store_id (only the
+        #    tables whose key columns are chain-wide need it).
+        _add_store_to_unique(conn, 'checklist_sessions',
+                             'UNIQUE(type, section, date)',
+                             'UNIQUE(type, section, date, store_id)')
+        _add_store_to_unique(conn, 'temp_sessions',
+                             'UNIQUE(type, date)', 'UNIQUE(type, date, store_id)')
+        _add_store_to_unique(conn, 'pastry_delivery',
+                             'UNIQUE(item_id, date)', 'UNIQUE(item_id, date, store_id)')
+        _add_store_to_unique(conn, 'pastry_sales',
+                             'UNIQUE(item_id, date)', 'UNIQUE(item_id, date, store_id)')
+        # 3b) staff names are unique PER STORE, not globally, so two branches can
+        #     each have a "John". Rebuild the inline UNIQUE on name → composite.
+        _rebuild_staff_unique_per_store(conn)
+        # 4) index store_id on every scoped table (after any rebuild above)
+        for tbl in STORE_SCOPED_TABLES:
+            try:
+                conn.execute(f'CREATE INDEX IF NOT EXISTS idx_{tbl}_store_id ON {tbl}(store_id)')
+            except Exception:
+                pass
+    finally:
+        conn.close()
+
+
+def _rebuild_staff_unique_per_store(conn):
+    """staff_members.name has an inline column-level UNIQUE; rebuild the table so
+    uniqueness is UNIQUE(name, store_id) instead. Autocommit conn + FK off.
+    Idempotent: skips if already migrated or the expected shape isn't present."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='staff_members'").fetchone()
+    if not row or not row[0]:
+        return
+    sql = row[0]
+    norm = sql.replace(' ', '')
+    if 'UNIQUE(name,store_id)' in norm:
+        return  # already migrated
+    if 'nameTEXTNOTNULLUNIQUE' not in norm:
+        return  # unexpected shape — leave data untouched
+    import re
+    new_inner = re.sub(r'(name\s+TEXT\s+NOT\s+NULL)\s+UNIQUE', r'\1', sql, count=1, flags=re.I)
+    idx = new_inner.rstrip().rfind(')')
+    new_inner = new_inner[:idx] + ', UNIQUE(name, store_id)' + new_inner[idx:]
+    new_create = new_inner.replace('staff_members', 'staff_members__mig', 1)
+    if 'staff_members__mig' not in new_create:
+        return
+    cols = [r[1] for r in conn.execute('PRAGMA table_info(staff_members)')]
+    collist = ', '.join(cols)
+    conn.execute('PRAGMA foreign_keys = OFF')
+    conn.execute('BEGIN')
+    try:
+        conn.execute('DROP TABLE IF EXISTS staff_members__mig')
+        conn.execute(new_create)
+        conn.execute(f'INSERT INTO staff_members__mig ({collist}) SELECT {collist} FROM staff_members')
+        conn.execute('DROP TABLE staff_members')
+        conn.execute('ALTER TABLE staff_members__mig RENAME TO staff_members')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_staff_members_store_id ON staff_members(store_id)')
+        conn.execute('COMMIT')
+    except Exception:
+        conn.execute('ROLLBACK')
+        raise
+    finally:
+        conn.execute('PRAGMA foreign_keys = ON')
+
 
 def init_db():
     with get_db() as conn:
@@ -1029,20 +1251,24 @@ def base_staff_score(name, role=''):
         'recommendation': 'Needs more data',
     }
 
-def calculate_monthly_reward_scores(conn, month_value=None):
+def calculate_monthly_reward_scores(conn, month_value=None, store_id=None):
     month_value, start_date, end_date, month_label = month_bounds(month_value)
+    # Scope all scoring to one store (None = all stores, super_admin).
+    sc = '' if store_id is None else ' AND store_id=?'
+    sp = [] if store_id is None else [store_id]
     staff_rows = [dict(r) for r in conn.execute(
-        'SELECT name, role FROM staff_members WHERE active=1 ORDER BY name').fetchall()]
+        f'SELECT name, role FROM staff_members WHERE active=1{sc} ORDER BY name',
+        sp).fetchall()]
     staff_lookup = {r['name'].strip().lower(): r['name'] for r in staff_rows}
     scores = {r['name']: base_staff_score(r['name'], r.get('role') or '') for r in staff_rows}
 
-    checklist_rows = conn.execute('''
+    checklist_rows = conn.execute(f'''
         SELECT cs.*,
                (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id AND done=1) as done_count,
                (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id) as total_count
         FROM checklist_sessions cs
-        WHERE cs.date BETWEEN ? AND ?
-    ''', (start_date, end_date)).fetchall()
+        WHERE cs.date BETWEEN ? AND ?{(' AND cs.store_id=?' if store_id is not None else '')}
+    ''', [start_date, end_date] + sp).fetchall()
     for row in checklist_rows:
         d = dict(row)
         names = set()
@@ -1076,10 +1302,10 @@ def calculate_monthly_reward_scores(conn, month_value=None):
                 points = 0        # not verified = no points
             s['checklist_points'] += round(points, 2)
 
-    temp_rows = conn.execute('''
+    temp_rows = conn.execute(f'''
         SELECT * FROM temp_sessions
-        WHERE date BETWEEN ? AND ?
-    ''', (start_date, end_date)).fetchall()
+        WHERE date BETWEEN ? AND ?{sc}
+    ''', [start_date, end_date] + sp).fetchall()
     for row in temp_rows:
         d = dict(row)
         names = set()
@@ -1089,10 +1315,10 @@ def calculate_monthly_reward_scores(conn, month_value=None):
             scores[name]['temp_sessions'] += 1
             scores[name]['temperature_points'] += 5
 
-    report_rows = conn.execute('''
+    report_rows = conn.execute(f'''
         SELECT * FROM issue_reports
-        WHERE date BETWEEN ? AND ?
-    ''', (start_date, end_date)).fetchall()
+        WHERE date BETWEEN ? AND ?{sc}
+    ''', [start_date, end_date] + sp).fetchall()
     for row in report_rows:
         d = dict(row)
         names = staff_matches(d.get('reported_by'), staff_lookup)
@@ -1105,10 +1331,10 @@ def calculate_monthly_reward_scores(conn, month_value=None):
                 scores[name]['report_points'] += 2
 
     penalty_map = {'minor': 5, 'moderate': 12, 'serious': 25, 'critical': 40}
-    violation_rows = conn.execute('''
+    violation_rows = conn.execute(f'''
         SELECT * FROM staff_violations
-        WHERE incident_date BETWEEN ? AND ?
-    ''', (start_date, end_date)).fetchall()
+        WHERE incident_date BETWEEN ? AND ?{sc}
+    ''', [start_date, end_date] + sp).fetchall()
     for row in violation_rows:
         d = dict(row)
         name = staff_lookup.get((d.get('staff_name') or '').strip().lower())
@@ -1181,13 +1407,15 @@ def calculate_monthly_reward_scores(conn, month_value=None):
         'adjustments': adjustments,
     }
 
-def raise_review_snapshot(conn, staff_name, month_value):
-    current = calculate_monthly_reward_scores(conn, month_value)
+def raise_review_snapshot(conn, staff_name, month_value, store_id=None):
+    sc = '' if store_id is None else ' AND store_id=?'
+    sp = [] if store_id is None else [store_id]
+    current = calculate_monthly_reward_scores(conn, month_value, store_id=store_id)
     current_score = next((s for s in current['scores'] if s['staff_name'] == staff_name), base_staff_score(staff_name))
     months = [shift_month(month_value, -i) for i in range(3)]
     monthly = []
     for m in months:
-        data = calculate_monthly_reward_scores(conn, m)
+        data = calculate_monthly_reward_scores(conn, m, store_id=store_id)
         row = next((s for s in data['scores'] if s['staff_name'] == staff_name), base_staff_score(staff_name))
         monthly.append({
             'month': m,
@@ -1198,25 +1426,25 @@ def raise_review_snapshot(conn, staff_name, month_value):
     avg_3m = round(sum(r['employee_score'] for r in monthly) / len(monthly), 1) if monthly else 0
     today_iso = date.today().isoformat()
     start_90 = (date.today() - timedelta(days=90)).isoformat()
-    violations = [dict(r) for r in conn.execute('''
+    violations = [dict(r) for r in conn.execute(f'''
         SELECT sv.*, vr.title as rule_title, vr.category as rule_category, vr.color as rule_color
         FROM staff_violations sv
         LEFT JOIN violation_rules vr ON vr.id=sv.rule_id
-        WHERE sv.staff_name=? AND sv.incident_date BETWEEN ? AND ?
+        WHERE sv.staff_name=? AND sv.incident_date BETWEEN ? AND ?{(' AND sv.store_id=?' if store_id is not None else '')}
         ORDER BY sv.incident_date DESC, sv.submitted_at DESC
-    ''', (staff_name, start_90, today_iso)).fetchall()]
-    submitted_reports = [dict(r) for r in conn.execute('''
+    ''', [staff_name, start_90, today_iso] + sp).fetchall()]
+    submitted_reports = [dict(r) for r in conn.execute(f'''
         SELECT * FROM issue_reports
-        WHERE reported_by=? AND date BETWEEN ? AND ?
+        WHERE reported_by=? AND date BETWEEN ? AND ?{sc}
         ORDER BY date DESC, submitted_at DESC
-    ''', (staff_name, start_90, today_iso)).fetchall()]
+    ''', [staff_name, start_90, today_iso] + sp).fetchall()]
     like_name = f'%{staff_name}%'
-    related_reports = [dict(r) for r in conn.execute('''
+    related_reports = [dict(r) for r in conn.execute(f'''
         SELECT * FROM issue_reports
         WHERE (title LIKE ? OR description LIKE ? OR COALESCE(admin_notes,'') LIKE ?)
-          AND date BETWEEN ? AND ?
+          AND date BETWEEN ? AND ?{sc}
         ORDER BY date DESC, submitted_at DESC
-    ''', (like_name, like_name, like_name, start_90, today_iso)).fetchall()]
+    ''', [like_name, like_name, like_name, start_90, today_iso] + sp).fetchall()]
     reward_history = [dict(r) for r in conn.execute('''
         SELECT * FROM monthly_reward_decisions
         WHERE staff_name=?
@@ -1311,9 +1539,10 @@ def register_pdf_fonts():
 
 # ─── Auth ──────────────────────────────────────────────────────────────────────
 
-USER_PASSWORD    = '7777'
-ADMIN_PASSWORD   = '77771'
-KITCHEN_PASSWORD = '8888'
+USER_PASSWORD        = '7777'
+ADMIN_PASSWORD       = '77771'
+KITCHEN_PASSWORD     = '8888'
+SUPER_ADMIN_PASSWORD = '999999'   # cross-store owner view (all branches)
 LOCATION         = 'mirrabooka'
 
 def is_admin():
@@ -1332,7 +1561,19 @@ def admin_required(f):
     def decorated(*args, **kwargs):
         if not session.get('logged_in'):
             return redirect(url_for('login_page'))
-        if session.get('role') != 'admin':
+        if session.get('role') not in ('admin', 'super_admin'):
+            return render_template('access_denied.html'), 403
+        return f(*args, **kwargs)
+    return decorated
+
+
+def super_admin_required(f):
+    """Routes that show/operate across all stores (cross-store reports)."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get('logged_in'):
+            return redirect(url_for('login_page'))
+        if session.get('role') != 'super_admin':
             return render_template('access_denied.html'), 403
         return f(*args, **kwargs)
     return decorated
@@ -1348,10 +1589,15 @@ def inject_globals():
         week_start_nav=_week_start,
         day_name=_today.strftime('%A'),
         current_ep=request.endpoint or '',
-        is_admin=session.get('role') == 'admin',
+        is_admin=session.get('role') in ('admin', 'super_admin'),
+        is_super_admin=session.get('role') == 'super_admin',
         user_role=session.get('role', ''),
         photos_required=PHOTOS_REQUIRED,
         branch=session.get('branch', ''),
+        store_id=session.get('store_id', 1),
+        store_code=session.get('store_code', ''),
+        all_stores=(get_stores() if session.get('role') == 'super_admin' else []),
+        selected_store=(request.args.get('store', 'all') if session.get('role') == 'super_admin' else None),
         issue_categories=ISSUE_CATEGORIES,
         temp_kind_rules=TEMP_KIND_RULES,
     )
@@ -1405,35 +1651,45 @@ def _enforce_session_timeout():
 @app.route('/login', methods=['GET', 'POST'])
 def login_page():
     error = None
+    stores = get_stores()   # active stores (dynamic — supports any number of branches)
     if request.method == 'POST':
         pw     = request.form.get('password', '')
-        branch = request.form.get('branch', '').strip()
-        if branch not in BRANCHES:
+        code   = request.form.get('branch', '').strip()   # store CODE
+        store  = next((s for s in stores if s['code'] == code), None)
+        if not store:
             error = 'Please select a valid branch.'
-        elif pw in (USER_PASSWORD, ADMIN_PASSWORD, KITCHEN_PASSWORD):
-            now = datetime.now()
-            if pw == ADMIN_PASSWORD:
-                role = 'admin'
-            elif pw == KITCHEN_PASSWORD:
-                role = 'kitchen'
-            else:
-                role = 'user'
-            session.clear()
-            session.update({
-                'logged_in':     True,
-                'role':          role,
-                'branch':        branch,
-                'login_time':    now.strftime('%Y-%m-%d %H:%M'),
-                'login_ts':      now.isoformat(timespec='seconds'),
-                'last_activity': now.isoformat(timespec='seconds'),
-            })
-            session.permanent = True
-            # Kitchen staff go straight to the Kitchen Display.
-            if role == 'kitchen':
-                return redirect(url_for('orders.kitchen'))
-            return redirect(url_for('dashboard'))
         else:
-            error = 'Incorrect password. Please try again.'
+            # Per-store passwords (fall back to chain defaults if a store hasn't
+            # set its own). The owner/super_admin password is global.
+            role = None
+            if pw and pw == SUPER_ADMIN_PASSWORD:
+                role = 'super_admin'
+            elif pw and pw == (store.get('admin_password') or ADMIN_PASSWORD):
+                role = 'admin'
+            elif pw and pw == (store.get('kitchen_password') or KITCHEN_PASSWORD):
+                role = 'kitchen'
+            elif pw and pw == (store.get('user_password') or USER_PASSWORD):
+                role = 'user'
+            if role is None:
+                error = 'Incorrect password. Please try again.'
+            else:
+                now = datetime.now()
+                display = store['name'][4:] if store['name'].startswith('MCQ ') else store['name']
+                session.clear()
+                session.update({
+                    'logged_in':     True,
+                    'role':          role,
+                    'branch':        display,         # short display name
+                    'store_id':      store['id'],     # canonical key for all filtering
+                    'store_code':    store['code'],
+                    'login_time':    now.strftime('%Y-%m-%d %H:%M'),
+                    'login_ts':      now.isoformat(timespec='seconds'),
+                    'last_activity': now.isoformat(timespec='seconds'),
+                })
+                session.permanent = True
+                if role == 'kitchen':
+                    return redirect(url_for('orders.kitchen'))
+                return redirect(url_for('dashboard'))
 
     # Friendly notice when redirected here by the timeout middleware
     notice = None
@@ -1443,7 +1699,7 @@ def login_page():
     elif tk == 'session':
         notice = 'Your 8-hour session expired. Please sign in again.'
 
-    return render_template('login.html', error=error, notice=notice, branches=BRANCHES)
+    return render_template('login.html', error=error, notice=notice, stores=stores)
 
 
 @app.route('/logout')
@@ -1459,15 +1715,16 @@ def dashboard():
     today_str = date.today().isoformat()
     week_ago  = (date.today() - timedelta(days=7)).isoformat()
 
+    sid = current_store_id()
     with get_db() as conn:
         chk_status = {}
         for t in CHECKLISTS:
             op = conn.execute(
-                'SELECT id,verified,(SELECT COUNT(*) FROM checklist_tasks WHERE session_id=checklist_sessions.id AND done=1) as done_count,(SELECT COUNT(*) FROM checklist_tasks WHERE session_id=checklist_sessions.id) as total FROM checklist_sessions WHERE type=? AND section="opening" AND date=?',
-                (t, today_str)).fetchone()
+                'SELECT id,verified,(SELECT COUNT(*) FROM checklist_tasks WHERE session_id=checklist_sessions.id AND done=1) as done_count,(SELECT COUNT(*) FROM checklist_tasks WHERE session_id=checklist_sessions.id) as total FROM checklist_sessions WHERE type=? AND section="opening" AND date=? AND store_id=?',
+                (t, today_str, sid)).fetchone()
             cl = conn.execute(
-                'SELECT id,verified,(SELECT COUNT(*) FROM checklist_tasks WHERE session_id=checklist_sessions.id AND done=1) as done_count,(SELECT COUNT(*) FROM checklist_tasks WHERE session_id=checklist_sessions.id) as total FROM checklist_sessions WHERE type=? AND section="closing" AND date=?',
-                (t, today_str)).fetchone()
+                'SELECT id,verified,(SELECT COUNT(*) FROM checklist_tasks WHERE session_id=checklist_sessions.id AND done=1) as done_count,(SELECT COUNT(*) FROM checklist_tasks WHERE session_id=checklist_sessions.id) as total FROM checklist_sessions WHERE type=? AND section="closing" AND date=? AND store_id=?',
+                (t, today_str, sid)).fetchone()
             chk_status[t] = {
                 'opening': dict(op) if op else None,
                 'closing': dict(cl) if cl else None,
@@ -1475,27 +1732,33 @@ def dashboard():
 
         temp_status = {}
         for t in TEMPERATURES:
-            rec = conn.execute('SELECT id FROM temp_sessions WHERE type=? AND date=?', (t, today_str)).fetchone()
+            rec = conn.execute('SELECT id FROM temp_sessions WHERE type=? AND date=? AND store_id=?',
+                               (t, today_str, sid)).fetchone()
             temp_status[t] = dict(rec) if rec else None
 
         recent = [dict(r) for r in conn.execute(
             'SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 15').fetchall()]
 
         pending_count = conn.execute(
-            'SELECT COUNT(*) as c FROM checklist_sessions WHERE verified=0').fetchone()['c']
+            'SELECT COUNT(*) as c FROM checklist_sessions WHERE verified=0 AND store_id=?',
+            (sid,)).fetchone()['c']
 
         total_week_chk = conn.execute(
-            'SELECT COUNT(*) as c FROM checklist_sessions WHERE date>=?', (week_ago,)).fetchone()['c']
+            'SELECT COUNT(*) as c FROM checklist_sessions WHERE date>=? AND store_id=?',
+            (week_ago, sid)).fetchone()['c']
         total_week_temp = conn.execute(
-            'SELECT COUNT(*) as c FROM temp_sessions WHERE date>=?', (week_ago,)).fetchone()['c']
+            'SELECT COUNT(*) as c FROM temp_sessions WHERE date>=? AND store_id=?',
+            (week_ago, sid)).fetchone()['c']
 
         # Alerts: missing today's records
         alerts = []
         total_expected = len(CHECKLISTS) * 2 + len(TEMPERATURES)
         submitted_today = conn.execute(
-            'SELECT COUNT(*) as c FROM checklist_sessions WHERE date=?', (today_str,)).fetchone()['c']
+            'SELECT COUNT(*) as c FROM checklist_sessions WHERE date=? AND store_id=?',
+            (today_str, sid)).fetchone()['c']
         temp_today = conn.execute(
-            'SELECT COUNT(*) as c FROM temp_sessions WHERE date=?', (today_str,)).fetchone()['c']
+            'SELECT COUNT(*) as c FROM temp_sessions WHERE date=? AND store_id=?',
+            (today_str, sid)).fetchone()['c']
         if submitted_today < len(CHECKLISTS) * 2:
             alerts.append({'type': 'warning', 'msg': f'{len(CHECKLISTS)*2 - submitted_today} checklist section(s) not yet submitted today'})
         if temp_today < len(TEMPERATURES):
@@ -1536,8 +1799,8 @@ def checklist_form(chk_type):
             tasks = chk_data.get(section, [])
 
         existing = conn.execute(
-            'SELECT * FROM checklist_sessions WHERE type=? AND section=? AND date=?',
-            (chk_type, section, chk_date)).fetchone()
+            'SELECT * FROM checklist_sessions WHERE type=? AND section=? AND date=? AND store_id=?',
+            (chk_type, section, chk_date, current_store_id())).fetchone()
         existing_tasks = []
         if existing:
             existing_tasks = [dict(r) for r in conn.execute(
@@ -1665,12 +1928,14 @@ def checklist_save(chk_type):
                 request.form.get(f'note_{i}', ''),
             ))
 
-        # UPSERT — avoids UNIQUE constraint race condition
+        # UPSERT — avoids UNIQUE constraint race condition. Scoped per store:
+        # the UNIQUE key is (type, section, date, store_id).
+        store_id = current_store_id()
         conn.execute('''
             INSERT INTO checklist_sessions
-                (type,section,date,day_of_week,responsible,submitted_by,general_done_by,manager_submit,general_note,is_late)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(type,section,date) DO UPDATE SET
+                (type,section,date,day_of_week,responsible,submitted_by,general_done_by,manager_submit,general_note,is_late,store_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(type,section,date,store_id) DO UPDATE SET
                 responsible=excluded.responsible,
                 submitted_by=excluded.submitted_by,
                 submitted_at=datetime('now','localtime'),
@@ -1680,10 +1945,10 @@ def checklist_save(chk_type):
                 general_note=excluded.general_note,
                 is_late=excluded.is_late
         ''', (chk_type, section, chk_date, day_name, responsible, submitted_by,
-              general_done_by, manager_submit, general_note, is_late))
+              general_done_by, manager_submit, general_note, is_late, store_id))
         row = conn.execute(
-            'SELECT id FROM checklist_sessions WHERE type=? AND section=? AND date=?',
-            (chk_type, section, chk_date)).fetchone()
+            'SELECT id FROM checklist_sessions WHERE type=? AND section=? AND date=? AND store_id=?',
+            (chk_type, section, chk_date, store_id)).fetchone()
         sid = row['id']
 
         conn.execute('DELETE FROM checklist_tasks WHERE session_id=?', (sid,))
@@ -1749,8 +2014,10 @@ def checklist_save(chk_type):
 @app.route('/checklist/view/<int:session_id>')
 @login_required
 def checklist_view(session_id):
+    guard, gp = store_guard_clause()
     with get_db() as conn:
-        sess = conn.execute('SELECT * FROM checklist_sessions WHERE id=?', (session_id,)).fetchone()
+        sess = conn.execute(f'SELECT * FROM checklist_sessions WHERE id=? AND {guard}',
+                            [session_id] + gp).fetchone()
         if not sess:
             return redirect(url_for('dashboard'))
         tasks = [dict(r) for r in conn.execute(
@@ -1772,10 +2039,11 @@ def checklist_verify(session_id):
     issues_found   = request.form.get('issues_found','')
     action_resp    = request.form.get('action_responsible','')
     manager_notes  = request.form.get('manager_notes','')
+    guard, gp = store_guard_clause()
     with get_db() as conn:
         conn.execute(
-            "UPDATE checklist_sessions SET verified=1,verified_by=?,verified_at=datetime('now','localtime'),overall_result=?,issues_found=?,action_responsible=?,manager_notes=? WHERE id=?",
-            (verified_by, overall_result, issues_found, action_resp, manager_notes, session_id))
+            f"UPDATE checklist_sessions SET verified=1,verified_by=?,verified_at=datetime('now','localtime'),overall_result=?,issues_found=?,action_responsible=?,manager_notes=? WHERE id=? AND {guard}",
+            [verified_by, overall_result, issues_found, action_resp, manager_notes, session_id] + gp)
         log_action_conn(conn, 'VERIFY', 'checklist', session_id, verified_by,
                         f'Result: {overall_result}')
         sess = conn.execute('SELECT * FROM checklist_sessions WHERE id=?', (session_id,)).fetchone()
@@ -1815,8 +2083,8 @@ def temperature_form(temp_type):
     with get_db() as conn:
         temp_data = get_temp_data_for_form(conn, temp_type)
         existing = conn.execute(
-            'SELECT * FROM temp_sessions WHERE type=? AND date=?',
-            (temp_type, temp_date)).fetchone()
+            'SELECT * FROM temp_sessions WHERE type=? AND date=? AND store_id=?',
+            (temp_type, temp_date, current_store_id())).fetchone()
         existing_readings = []
         if existing:
             existing_readings = [dict(r) for r in conn.execute(
@@ -1921,9 +2189,11 @@ def temperature_save(temp_type):
             'notes':     request.form.get(f'food_notes_{i}', '').strip(),
         })
 
+    store_id = current_store_id()
     with get_db() as conn:
         existing = conn.execute(
-            'SELECT id FROM temp_sessions WHERE type=? AND date=?', (temp_type, temp_date)).fetchone()
+            'SELECT id FROM temp_sessions WHERE type=? AND date=? AND store_id=?',
+            (temp_type, temp_date, store_id)).fetchone()
         if existing:
             sid = existing['id']
             conn.execute(
@@ -1932,8 +2202,8 @@ def temperature_save(temp_type):
             conn.execute('DELETE FROM temp_readings WHERE session_id=?', (sid,))
         else:
             cur = conn.execute(
-                'INSERT INTO temp_sessions (type,date,recorded_by,checked_by,notes) VALUES (?,?,?,?,?)',
-                (temp_type, temp_date, recorded_by, checked_by, notes))
+                'INSERT INTO temp_sessions (type,date,recorded_by,checked_by,notes,store_id) VALUES (?,?,?,?,?,?)',
+                (temp_type, temp_date, recorded_by, checked_by, notes, store_id))
             sid = cur.lastrowid
         for r in readings:
             conn.execute(
@@ -1987,8 +2257,10 @@ def temperature_save(temp_type):
 @app.route('/temperature/view/<int:session_id>')
 @login_required
 def temperature_view(session_id):
+    guard, gp = store_guard_clause()
     with get_db() as conn:
-        sess = conn.execute('SELECT * FROM temp_sessions WHERE id=?', (session_id,)).fetchone()
+        sess = conn.execute(f'SELECT * FROM temp_sessions WHERE id=? AND {guard}',
+                            [session_id] + gp).fetchone()
         if not sess:
             return redirect(url_for('dashboard'))
         readings = [dict(r) for r in conn.execute(
@@ -2009,13 +2281,15 @@ def history():
     rec_type     = request.args.get('type', 'all')
     staff_filter = request.args.get('staff', '')
 
+    chk_scope, chk_sp = store_filter_clause('cs')
+    temp_scope, temp_sp = store_filter_clause()
     with get_db() as conn:
         # Checklist records
-        q = '''SELECT cs.*,
+        q = f'''SELECT cs.*,
                (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id AND done=1) as done_count,
                (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id) as total_count
-               FROM checklist_sessions cs WHERE cs.date BETWEEN ? AND ?'''
-        p = [date_from, date_to]
+               FROM checklist_sessions cs WHERE cs.date BETWEEN ? AND ? AND {chk_scope}'''
+        p = [date_from, date_to] + chk_sp
         if staff_filter:
             q += ' AND (cs.submitted_by=? OR cs.responsible=?)'
             p += [staff_filter, staff_filter]
@@ -2023,8 +2297,8 @@ def history():
         chk_records = [dict(r) for r in conn.execute(q, p).fetchall()] if rec_type in ('all','checklist') else []
 
         # Temperature records
-        q2 = 'SELECT * FROM temp_sessions WHERE date BETWEEN ? AND ?'
-        p2 = [date_from, date_to]
+        q2 = f'SELECT * FROM temp_sessions WHERE date BETWEEN ? AND ? AND {temp_scope}'
+        p2 = [date_from, date_to] + temp_sp
         if staff_filter:
             q2 += ' AND (recorded_by=? OR checked_by=?)'
             p2 += [staff_filter, staff_filter]
@@ -2053,21 +2327,22 @@ def manager():
         sel_date = today_str
     prev_date = (d - timedelta(days=1)).isoformat()
     next_date = (d + timedelta(days=1)).isoformat()
+    scope, sp = store_filter_clause('cs')
     with get_db() as conn:
-        pending = [dict(r) for r in conn.execute('''
+        pending = [dict(r) for r in conn.execute(f'''
             SELECT cs.*,
               (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id AND done=1) as done_count,
               (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id) as total_count
-            FROM checklist_sessions cs WHERE cs.verified=0 AND cs.date=?
+            FROM checklist_sessions cs WHERE cs.verified=0 AND cs.date=? AND {scope}
             ORDER BY cs.type, cs.section
-        ''', (sel_date,)).fetchall()]
-        issues = [dict(r) for r in conn.execute('''
-            SELECT * FROM checklist_sessions WHERE overall_result='issues_found' AND date=?
-            ORDER BY type, section LIMIT 50
-        ''', (sel_date,)).fetchall()]
+        ''', [sel_date] + sp).fetchall()]
+        issues = [dict(r) for r in conn.execute(f'''
+            SELECT * FROM checklist_sessions cs WHERE cs.overall_result='issues_found' AND cs.date=? AND {scope}
+            ORDER BY cs.type, cs.section LIMIT 50
+        ''', [sel_date] + sp).fetchall()]
         verified_today = conn.execute(
-            "SELECT COUNT(*) as c FROM checklist_sessions WHERE verified=1 AND date=?",
-            (sel_date,)).fetchone()['c']
+            f"SELECT COUNT(*) as c FROM checklist_sessions cs WHERE cs.verified=1 AND cs.date=? AND {scope}",
+            [sel_date] + sp).fetchone()['c']
         recent_log = [dict(r) for r in conn.execute(
             "SELECT * FROM audit_log WHERE substr(timestamp,1,10)=? "
             "ORDER BY timestamp DESC LIMIT 50", (sel_date,)).fetchall()]
@@ -2092,32 +2367,33 @@ def analytics_data():
     start_date = (date.today()-timedelta(days=days-1)).isoformat()
     end_date   = date.today().isoformat()
 
+    cscope, csp = store_filter_clause()      # bare store_id clause
     with get_db() as conn:
-        daily_chk = conn.execute('''
+        daily_chk = conn.execute(f'''
             SELECT date, COUNT(*) as total,
                    SUM(CASE WHEN verified=1 THEN 1 ELSE 0 END) as verified
-            FROM checklist_sessions WHERE date BETWEEN ? AND ?
+            FROM checklist_sessions WHERE date BETWEEN ? AND ? AND {cscope}
             GROUP BY date ORDER BY date
-        ''', (start_date, end_date)).fetchall()
+        ''', [start_date, end_date] + csp).fetchall()
 
-        daily_temp = conn.execute('''
+        daily_temp = conn.execute(f'''
             SELECT date, COUNT(*) as total FROM temp_sessions
-            WHERE date BETWEEN ? AND ?
+            WHERE date BETWEEN ? AND ? AND {cscope}
             GROUP BY date ORDER BY date
-        ''', (start_date, end_date)).fetchall()
+        ''', [start_date, end_date] + csp).fetchall()
 
-        staff_act = conn.execute('''
+        staff_act = conn.execute(f'''
             SELECT submitted_by as name, COUNT(*) as cnt
-            FROM checklist_sessions WHERE date BETWEEN ? AND ? AND submitted_by!=''
+            FROM checklist_sessions WHERE date BETWEEN ? AND ? AND submitted_by!='' AND {cscope}
             GROUP BY submitted_by ORDER BY cnt DESC LIMIT 13
-        ''', (start_date, end_date)).fetchall()
+        ''', [start_date, end_date] + csp).fetchall()
 
-        type_comp = conn.execute('''
+        type_comp = conn.execute(f'''
             SELECT type, COUNT(*) as total,
                    SUM(CASE WHEN verified=1 THEN 1 ELSE 0 END) as verified
-            FROM checklist_sessions WHERE date BETWEEN ? AND ?
+            FROM checklist_sessions WHERE date BETWEEN ? AND ? AND {cscope}
             GROUP BY type
-        ''', (start_date, end_date)).fetchall()
+        ''', [start_date, end_date] + csp).fetchall()
 
     labels = []
     cur = date.today()-timedelta(days=days-1)
@@ -2140,17 +2416,121 @@ def analytics_data():
         'type_verified':  [r['verified'] for r in type_comp],
     })
 
+# ─── Cross-store reports (super_admin) ───────────────────────────────────────
+
+@app.route('/admin/stores')
+@super_admin_required
+def stores_report():
+    """Owner overview: key operational + revenue metrics per store, side by side.
+    Foundation for cross-store reporting; date range defaults to this month."""
+    date_from = request.args.get('date_from', date.today().replace(day=1).isoformat())
+    date_to   = request.args.get('date_to', date.today().isoformat())
+    with get_db() as conn:
+        rows = [dict(r) for r in conn.execute('''
+            SELECT s.id, s.code, s.name,
+              (SELECT COUNT(*) FROM checklist_sessions cs
+                 WHERE cs.store_id=s.id AND cs.date BETWEEN ? AND ?) AS chk_total,
+              (SELECT COUNT(*) FROM checklist_sessions cs
+                 WHERE cs.store_id=s.id AND cs.date BETWEEN ? AND ? AND cs.verified=1) AS chk_verified,
+              (SELECT COUNT(*) FROM temp_sessions ts
+                 WHERE ts.store_id=s.id AND ts.date BETWEEN ? AND ?) AS temp_total,
+              (SELECT COUNT(*) FROM issue_reports ir
+                 WHERE ir.store_id=s.id AND ir.status != 'resolved') AS issues_open,
+              (SELECT COUNT(*) FROM staff_violations sv
+                 WHERE sv.store_id=s.id AND sv.status='open') AS violations_open,
+              (SELECT COALESCE(SUM(o.total),0) FROM orders o
+                 WHERE o.store_id=s.id AND o.status != 'cancelled'
+                   AND substr(o.created_at,1,10) BETWEEN ? AND ?) AS revenue,
+              (SELECT COUNT(*) FROM staff_members sm
+                 WHERE sm.store_id=s.id AND sm.active=1) AS staff_count
+            FROM stores s WHERE s.active=1 ORDER BY s.id
+        ''', [date_from, date_to, date_from, date_to, date_from, date_to,
+              date_from, date_to]).fetchall()]
+    for r in rows:
+        r['verify_rate'] = round(r['chk_verified'] / r['chk_total'] * 100, 1) if r['chk_total'] else 0
+    totals = {
+        'chk_total':       sum(r['chk_total'] for r in rows),
+        'chk_verified':    sum(r['chk_verified'] for r in rows),
+        'temp_total':      sum(r['temp_total'] for r in rows),
+        'issues_open':     sum(r['issues_open'] for r in rows),
+        'violations_open': sum(r['violations_open'] for r in rows),
+        'revenue':         sum(r['revenue'] for r in rows),
+        'staff_count':     sum(r['staff_count'] for r in rows),
+    }
+    return render_template('stores_report.html',
+        rows=rows, totals=totals, date_from=date_from, date_to=date_to,
+        all_store_rows=get_stores(active_only=False))
+
+
+@app.route('/admin/stores/add', methods=['POST'])
+@super_admin_required
+def stores_add():
+    """Create a new branch. code is the login key (lowercase, no spaces)."""
+    name = request.form.get('name', '').strip()
+    code = (request.form.get('code', '').strip().lower()
+            or ''.join(ch for ch in name.lower() if ch.isalnum()))
+    if not name or not code:
+        flash('Store name and code are required.', 'danger')
+        return redirect(url_for('stores_report'))
+    with get_db() as conn:
+        exists = conn.execute('SELECT 1 FROM stores WHERE code=?', (code,)).fetchone()
+        if exists:
+            flash(f'A store with code "{code}" already exists.', 'danger')
+            return redirect(url_for('stores_report'))
+        conn.execute('''INSERT INTO stores
+            (code,name,address,phone,active,user_password,admin_password,kitchen_password)
+            VALUES (?,?,?,?,1,?,?,?)''',
+            (code, name,
+             request.form.get('address', '').strip(),
+             request.form.get('phone', '').strip(),
+             request.form.get('user_password', '').strip() or USER_PASSWORD,
+             request.form.get('admin_password', '').strip() or ADMIN_PASSWORD,
+             request.form.get('kitchen_password', '').strip() or KITCHEN_PASSWORD))
+    flash(f'Store "{name}" added.', 'success')
+    return redirect(url_for('stores_report'))
+
+
+@app.route('/admin/stores/<int:store_id>/update', methods=['POST'])
+@super_admin_required
+def stores_update(store_id):
+    """Edit a branch's details, per-store passwords, and active flag.
+    Blank password fields keep the existing value (not cleared)."""
+    with get_db() as conn:
+        cur = conn.execute('SELECT * FROM stores WHERE id=?', (store_id,)).fetchone()
+        if not cur:
+            flash('Store not found.', 'danger')
+            return redirect(url_for('stores_report'))
+        cur = dict(cur)
+        conn.execute('''UPDATE stores
+            SET name=?, address=?, phone=?, active=?,
+                user_password=?, admin_password=?, kitchen_password=?
+            WHERE id=?''',
+            (request.form.get('name', '').strip() or cur['name'],
+             request.form.get('address', '').strip(),
+             request.form.get('phone', '').strip(),
+             1 if request.form.get('active') else 0,
+             request.form.get('user_password', '').strip() or cur.get('user_password') or USER_PASSWORD,
+             request.form.get('admin_password', '').strip() or cur.get('admin_password') or ADMIN_PASSWORD,
+             request.form.get('kitchen_password', '').strip() or cur.get('kitchen_password') or KITCHEN_PASSWORD,
+             store_id))
+    flash('Store updated.', 'success')
+    return redirect(url_for('stores_report'))
+
+
 # ─── HR Rewards & Reviews ─────────────────────────────────────────────────────
 
 @app.route('/admin/monthly-rewards')
 @admin_required
 def monthly_rewards():
     reward_month = request.args.get('month', date.today().strftime('%Y-%m'))
+    scope_id = selected_store_scope()   # int store, or None=all (super_admin)
+    clause, cp = store_filter_clause()
     with get_db() as conn:
-        data = calculate_monthly_reward_scores(conn, reward_month)
+        data = calculate_monthly_reward_scores(conn, reward_month, store_id=scope_id)
         staff = [dict(r) for r in conn.execute(
-            'SELECT * FROM staff_members WHERE active=1 ORDER BY name').fetchall()]
-        strike_map = {s['staff_name']: s for s in staff_strike_standings(conn)}
+            f'SELECT * FROM staff_members WHERE active=1 AND {clause} ORDER BY name',
+            cp).fetchall()]
+        strike_map = {s['staff_name']: s for s in staff_strike_standings(conn, store_id=scope_id)}
     decision_map = {d['award_type']: d for d in data['decisions']}
     return render_template('monthly_rewards.html',
         reward=data, staff=staff, decision_map=decision_map,
@@ -2272,17 +2652,20 @@ def raise_reviews():
             return redirect(url_for('raise_reviews', staff=staff_name, month=review_month))
 
     selected_month = request.args.get('month', date.today().strftime('%Y-%m'))
+    scope_id = selected_store_scope()
+    clause, cp = store_filter_clause()
     with get_db() as conn:
         staff = [dict(r) for r in conn.execute(
-            'SELECT * FROM staff_members WHERE active=1 ORDER BY name').fetchall()]
+            f'SELECT * FROM staff_members WHERE active=1 AND {clause} ORDER BY name',
+            cp).fetchall()]
         selected_staff = request.args.get('staff') or (staff[0]['name'] if staff else '')
-        snapshot = raise_review_snapshot(conn, selected_staff, selected_month) if selected_staff else None
+        snapshot = raise_review_snapshot(conn, selected_staff, selected_month, store_id=scope_id) if selected_staff else None
         reviews = [dict(r) for r in conn.execute('''
             SELECT * FROM salary_raise_reviews
             ORDER BY created_at DESC, id DESC
             LIMIT 40
         ''').fetchall()]
-        strike_map = {s['staff_name']: s for s in staff_strike_standings(conn)}
+        strike_map = {s['staff_name']: s for s in staff_strike_standings(conn, store_id=scope_id)}
     selected_month, _, _, month_label = month_bounds(selected_month)
     return render_template('raise_reviews.html',
         staff=staff, selected_staff=selected_staff, selected_month=selected_month,
@@ -2394,8 +2777,10 @@ def export_checklist_excel(session_id):
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
+    guard, gp = store_guard_clause()
     with get_db() as conn:
-        sess  = conn.execute('SELECT * FROM checklist_sessions WHERE id=?', (session_id,)).fetchone()
+        sess  = conn.execute(f'SELECT * FROM checklist_sessions WHERE id=? AND {guard}',
+                             [session_id] + gp).fetchone()
         if not sess: return redirect(url_for('dashboard'))
         tasks = [dict(r) for r in conn.execute(
             'SELECT * FROM checklist_tasks WHERE session_id=? ORDER BY task_order', (session_id,)).fetchall()]
@@ -2608,8 +2993,10 @@ def export_checklist_pdf(session_id):
     from reportlab.lib.units import mm
     from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+    guard, gp = store_guard_clause()
     with get_db() as conn:
-        sess = conn.execute('SELECT * FROM checklist_sessions WHERE id=?', (session_id,)).fetchone()
+        sess = conn.execute(f'SELECT * FROM checklist_sessions WHERE id=? AND {guard}',
+                            [session_id] + gp).fetchone()
         if not sess:
             return redirect(url_for('dashboard'))
         tasks = [dict(r) for r in conn.execute(
@@ -2793,8 +3180,10 @@ def export_temperature_excel(session_id):
     from openpyxl.styles import Font, PatternFill, Alignment
     from openpyxl.utils import get_column_letter
 
+    guard, gp = store_guard_clause()
     with get_db() as conn:
-        sess = conn.execute('SELECT * FROM temp_sessions WHERE id=?', (session_id,)).fetchone()
+        sess = conn.execute(f'SELECT * FROM temp_sessions WHERE id=? AND {guard}',
+                            [session_id] + gp).fetchone()
         if not sess: return redirect(url_for('dashboard'))
         readings = [dict(r) for r in conn.execute(
             'SELECT * FROM temp_readings WHERE session_id=? ORDER BY food_order', (session_id,)).fetchall()]
@@ -2875,8 +3264,10 @@ def export_temperature_pdf(session_id):
     from reportlab.lib.units import mm
     from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+    guard, gp = store_guard_clause()
     with get_db() as conn:
-        sess = conn.execute('SELECT * FROM temp_sessions WHERE id=?', (session_id,)).fetchone()
+        sess = conn.execute(f'SELECT * FROM temp_sessions WHERE id=? AND {guard}',
+                            [session_id] + gp).fetchone()
         if not sess:
             return redirect(url_for('dashboard'))
         readings = [dict(r) for r in conn.execute(
@@ -2974,17 +3365,19 @@ def export_bulk_excel():
     date_from = request.args.get('date_from', (date.today()-timedelta(days=30)).isoformat())
     date_to   = request.args.get('date_to', date.today().isoformat())
 
+    scope, sp = store_filter_clause('cs')
+    tscope, tsp = store_filter_clause()
     with get_db() as conn:
-        chk_recs = [dict(r) for r in conn.execute('''
+        chk_recs = [dict(r) for r in conn.execute(f'''
             SELECT cs.*,
               (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id AND done=1) as done_count,
               (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id) as total_count
-            FROM checklist_sessions cs WHERE date BETWEEN ? AND ?
+            FROM checklist_sessions cs WHERE date BETWEEN ? AND ? AND {scope}
             ORDER BY date DESC, type, section
-        ''', (date_from, date_to)).fetchall()]
+        ''', [date_from, date_to] + sp).fetchall()]
         temp_recs = [dict(r) for r in conn.execute(
-            'SELECT * FROM temp_sessions WHERE date BETWEEN ? AND ? ORDER BY date DESC, type',
-            (date_from, date_to)).fetchall()]
+            f'SELECT * FROM temp_sessions WHERE date BETWEEN ? AND ? AND {tscope} ORDER BY date DESC, type',
+            [date_from, date_to] + tsp).fetchall()]
 
     wb = Workbook()
     gfill = PatternFill(start_color='1B4332', end_color='1B4332', fill_type='solid')
@@ -3054,19 +3447,21 @@ def export_bulk_pdf():
     date_from = request.args.get('date_from', (date.today()-timedelta(days=30)).isoformat())
     date_to   = request.args.get('date_to', date.today().isoformat())
 
+    scope, sp = store_filter_clause('cs')
+    tscope, tsp = store_filter_clause()
     with get_db() as conn:
-        chk_recs = [dict(r) for r in conn.execute('''
+        chk_recs = [dict(r) for r in conn.execute(f'''
             SELECT cs.*,
               (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id AND done=1) as done_count,
               (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id) as total_count
-            FROM checklist_sessions cs WHERE date BETWEEN ? AND ?
+            FROM checklist_sessions cs WHERE date BETWEEN ? AND ? AND {scope}
             ORDER BY date DESC, type, section
-        ''', (date_from, date_to)).fetchall()]
-        temp_recs = [dict(r) for r in conn.execute('''
+        ''', [date_from, date_to] + sp).fetchall()]
+        temp_recs = [dict(r) for r in conn.execute(f'''
             SELECT * FROM temp_sessions
-            WHERE date BETWEEN ? AND ?
+            WHERE date BETWEEN ? AND ? AND {tscope}
             ORDER BY date DESC, type
-        ''', (date_from, date_to)).fetchall()]
+        ''', [date_from, date_to] + tsp).fetchall()]
 
     font_name, bold_font = register_pdf_fonts()
     buf = BytesIO()
@@ -3161,20 +3556,25 @@ def export_bulk_pdf():
 @app.route('/api/staff')
 @login_required
 def api_staff():
+    # Pickers always need a concrete store → use the session store.
     with get_db() as conn:
         staff = [dict(r) for r in conn.execute(
-            'SELECT * FROM staff_members WHERE active=1 ORDER BY name').fetchall()]
+            'SELECT * FROM staff_members WHERE active=1 AND store_id=? ORDER BY name',
+            (current_store_id(),)).fetchall()]
     return jsonify(staff)
 
 @app.route('/staff', methods=['GET'])
 @login_required
 def staff_page():
+    clause, params = store_filter_clause()
     with get_db() as conn:
         staff = [dict(r) for r in conn.execute(
-            'SELECT * FROM staff_members ORDER BY active DESC, name').fetchall()]
+            f'SELECT * FROM staff_members WHERE {clause} ORDER BY active DESC, name',
+            params).fetchall()]
         birthdays = birthday_rows(conn)
     birthday_map = {b['staff_name']: b for b in birthdays}
-    return render_template('staff.html', staff=staff, birthdays=birthdays, birthday_map=birthday_map)
+    return render_template('staff.html', staff=staff, birthdays=birthdays,
+                           birthday_map=birthday_map, stores=get_stores())
 
 @app.route('/staff/add', methods=['POST'])
 @login_required
@@ -3183,16 +3583,21 @@ def staff_add():
     role = request.form.get('role','').strip()
     if name:
         with get_db() as conn:
-            conn.execute('INSERT OR IGNORE INTO staff_members (name,role) VALUES (?,?)', (name, role))
+            conn.execute('INSERT OR IGNORE INTO staff_members (name,role,store_id) VALUES (?,?,?)',
+                         (name, role, current_store_id()))
     return redirect(url_for('staff_page'))
 
 @app.route('/staff/toggle/<int:staff_id>', methods=['POST'])
 @login_required
 def staff_toggle(staff_id):
+    guard, gp = store_guard_clause()
     with get_db() as conn:
-        current = conn.execute('SELECT active FROM staff_members WHERE id=?', (staff_id,)).fetchone()
+        current = conn.execute(
+            f'SELECT active FROM staff_members WHERE id=? AND {guard}',
+            [staff_id] + gp).fetchone()
         if current:
-            conn.execute('UPDATE staff_members SET active=? WHERE id=?', (0 if current['active'] else 1, staff_id))
+            conn.execute(f'UPDATE staff_members SET active=? WHERE id=? AND {guard}',
+                         [0 if current['active'] else 1, staff_id] + gp)
     return redirect(url_for('staff_page'))
 
 @app.route('/staff/delete/<int:staff_id>', methods=['POST'])
@@ -3201,23 +3606,27 @@ def staff_delete(staff_id):
     """Permanently remove a staff member. Past records keep the name as plain
     text, so history is preserved, but the name disappears from every live staff
     picker (all of which read staff_members)."""
+    guard, gp = store_guard_clause()
     with get_db() as conn:
-        row = conn.execute('SELECT name FROM staff_members WHERE id=?', (staff_id,)).fetchone()
-        conn.execute('DELETE FROM staff_members WHERE id=?', (staff_id,))
+        row = conn.execute(f'SELECT name FROM staff_members WHERE id=? AND {guard}',
+                           [staff_id] + gp).fetchone()
+        conn.execute(f'DELETE FROM staff_members WHERE id=? AND {guard}', [staff_id] + gp)
     flash(f"Removed {row['name'] if row else 'staff member'} from the team.", 'success')
     return redirect(url_for('staff_page'))
 
 @app.route('/staff/<int:staff_id>/profile')
 @admin_required
 def staff_profile(staff_id):
+    guard, gp = store_guard_clause()
     with get_db() as conn:
-        member = conn.execute('SELECT * FROM staff_members WHERE id=?', (staff_id,)).fetchone()
+        member = conn.execute(f'SELECT * FROM staff_members WHERE id=? AND {guard}',
+                              [staff_id] + gp).fetchone()
         if not member:
             flash('Staff member not found.', 'danger')
             return redirect(url_for('staff_page'))
         member = dict(member)
         reward_month = date.today().strftime('%Y-%m')
-        reward_data = calculate_monthly_reward_scores(conn, reward_month)
+        reward_data = calculate_monthly_reward_scores(conn, reward_month, store_id=member.get('store_id'))
         my_score = next((r for r in reward_data['employee_rank'] if r['staff_name'] == member['name']), None)
         all_birthdays = birthday_rows(conn)
         birthday = next((b for b in all_birthdays if b['staff_name'] == member['name']), None)
@@ -3228,16 +3637,17 @@ def staff_profile(staff_id):
 @app.route('/staff/<int:staff_id>/profile/update', methods=['POST'])
 @admin_required
 def staff_profile_update(staff_id):
+    guard, gp = store_guard_clause()
     with get_db() as conn:
-        conn.execute('''UPDATE staff_members
+        conn.execute(f'''UPDATE staff_members
             SET phone=?, email=?, emergency_contact=?, staff_notes=?, role=?
-            WHERE id=?''',
-            (request.form.get('phone','').strip(),
+            WHERE id=? AND {guard}''',
+            [request.form.get('phone','').strip(),
              request.form.get('email','').strip(),
              request.form.get('emergency_contact','').strip(),
              request.form.get('staff_notes','').strip(),
              request.form.get('role','').strip(),
-             staff_id))
+             staff_id] + gp)
     flash('Profile updated.', 'success')
     return redirect(url_for('staff_profile', staff_id=staff_id))
 
@@ -3249,9 +3659,8 @@ CERT_EXT = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'pdf'}
 @admin_required
 def certificates():
     today_iso = date.today().isoformat()
+    staff = get_active_staff()
     with get_db() as conn:
-        staff = [r['name'] for r in conn.execute(
-            'SELECT name FROM staff_members WHERE active=1 ORDER BY name').fetchall()]
         rows = [dict(r) for r in conn.execute(
             'SELECT * FROM staff_certificates ORDER BY staff_name, uploaded_at DESC').fetchall()]
     # Group certificates by staff member
@@ -3510,25 +3919,32 @@ WARNING_STEP_META = {
 }
 
 
-def staff_active_strikes(conn, staff_name, window_days=STRIKE_WINDOW_DAYS):
-    """Number of violations for one staff member within the rolling window."""
+def staff_active_strikes(conn, staff_name, window_days=STRIKE_WINDOW_DAYS, store_id=None):
+    """Number of violations for one staff member within the rolling window.
+    Scoped to one store when store_id is given."""
     cutoff = (date.today() - timedelta(days=window_days)).isoformat()
-    row = conn.execute(
-        'SELECT COUNT(*) FROM staff_violations WHERE staff_name=? AND incident_date>=?',
-        (staff_name, cutoff)).fetchone()
+    q = 'SELECT COUNT(*) FROM staff_violations WHERE staff_name=? AND incident_date>=?'
+    p = [staff_name, cutoff]
+    if store_id is not None:
+        q += ' AND store_id=?'; p.append(store_id)
+    row = conn.execute(q, p).fetchone()
     return int(row[0] if row else 0)
 
 
-def staff_strike_standings(conn, window_days=STRIKE_WINDOW_DAYS):
+def staff_strike_standings(conn, window_days=STRIKE_WINDOW_DAYS, store_id=None):
     """Per-staff strike standings: active count (rolling window) + full history,
-    grouped by staff, each staff's violations sorted most-severe → least."""
+    grouped by staff, each staff's violations sorted most-severe → least.
+    Scoped to one store when store_id is given; None = all stores."""
     cutoff = (date.today() - timedelta(days=window_days)).isoformat()
-    rows = [dict(r) for r in conn.execute('''
+    where = '' if store_id is None else 'WHERE sv.store_id=?'
+    params = [] if store_id is None else [store_id]
+    rows = [dict(r) for r in conn.execute(f'''
         SELECT sv.*, COALESCE(vr.title, '(rule removed)') AS rule_title,
                COALESCE(vr.color, '#607D8B') AS rule_color
         FROM staff_violations sv
         LEFT JOIN violation_rules vr ON vr.id = sv.rule_id
-        ORDER BY sv.incident_date DESC, sv.id DESC''').fetchall()]
+        {where}
+        ORDER BY sv.incident_date DESC, sv.id DESC''', params).fetchall()]
     by_staff = {}
     for r in rows:
         name = (r.get('staff_name') or '').strip()
@@ -3572,22 +3988,30 @@ def staff_strike_standings(conn, window_days=STRIKE_WINDOW_DAYS):
     return standings
 
 
-def auto_close_violations(conn, window_days=STRIKE_WINDOW_DAYS):
-    """Per staff, once their FIRST open case is older than the window (6 months),
-    close all their still-open cases — the disciplinary cycle resets."""
+def auto_close_violations(conn, window_days=STRIKE_WINDOW_DAYS, store_id=None):
+    """Per staff (within a store), once their FIRST open case is older than the
+    window (6 months), close all their still-open cases — the cycle resets.
+    A staff member's disciplinary cycle is per store (store_id given), so the
+    same person at two stores is tracked independently."""
     today = date.today()
-    rows = conn.execute(
-        "SELECT staff_name, MIN(incident_date) AS first FROM staff_violations "
-        "WHERE status='open' GROUP BY staff_name").fetchall()
+    q = ("SELECT staff_name, MIN(incident_date) AS first FROM staff_violations "
+         "WHERE status='open'")
+    p = []
+    if store_id is not None:
+        q += ' AND store_id=?'; p.append(store_id)
+    q += ' GROUP BY staff_name'
+    rows = conn.execute(q, p).fetchall()
     for r in rows:
         try:
             first = datetime.strptime(r['first'], '%Y-%m-%d').date()
         except (TypeError, ValueError):
             continue
         if (today - first).days >= window_days:
-            conn.execute(
-                "UPDATE staff_violations SET status='closed' "
-                "WHERE staff_name=? AND status='open'", (r['staff_name'],))
+            uq = "UPDATE staff_violations SET status='closed' WHERE staff_name=? AND status='open'"
+            up = [r['staff_name']]
+            if store_id is not None:
+                uq += ' AND store_id=?'; up.append(store_id)
+            conn.execute(uq, up)
 
 
 @app.route('/admin/violations', methods=['GET', 'POST'])
@@ -3623,11 +4047,11 @@ def violation_rules():
                         action_taken = rule['default_action'] or ''
                     cur = conn.execute('''INSERT INTO staff_violations
                         (rule_id,staff_name,incident_date,incident_time,submitted_by,branch,
-                         severity,description,action_taken,follow_up_date,status,warning_step)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+                         severity,description,action_taken,follow_up_date,status,warning_step,store_id)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                         (rule_id_int, staff_name, incident_date, incident_time, submitted_by,
                          session.get('branch', ''), severity, description, action_taken,
-                         follow_up, 'open', warning_step))
+                         follow_up, 'open', warning_step, current_store_id()))
                     vid = cur.lastrowid
                     email_service.send_notification(
                         'violation',
@@ -3648,8 +4072,8 @@ def violation_rules():
                         actor=submitted_by,
                     )
                     # 3-strike escalation: alert when this pushes the staff to the
-                    # review threshold within the rolling window.
-                    active = staff_active_strikes(conn, staff_name)
+                    # review threshold within the rolling window (this store only).
+                    active = staff_active_strikes(conn, staff_name, store_id=current_store_id())
                     if active >= STRIKE_THRESHOLD:
                         email_service.send_notification(
                             'violation',
@@ -3695,22 +4119,29 @@ def _render_violations_page(view):
     date_from = request.args.get('date_from', (date.today()-timedelta(days=30)).isoformat())
     date_to   = request.args.get('date_to', today_iso)
 
+    scope_id = selected_store_scope()          # int store_id, or None = all stores
+    vscope, vsp = store_filter_clause('sv')     # 'sv.store_id = ?' or '1=1'
     with get_db() as conn:
-        # Auto-close cases once a person's first open case is >6 months old.
-        auto_close_violations(conn)
+        # Auto-close cases once a person's first open case is >6 months old —
+        # always per store so the same person at two stores is independent.
+        if scope_id is None:
+            for s in conn.execute('SELECT id FROM stores').fetchall():
+                auto_close_violations(conn, store_id=s['id'])
+        else:
+            auto_close_violations(conn, store_id=scope_id)
         rules = [dict(r) for r in conn.execute('''
             SELECT * FROM violation_rules
             WHERE active=1
             ORDER BY sort_order, title
         ''').fetchall()]
 
-        q = '''SELECT sv.*, vr.title as rule_title, vr.category as rule_category,
+        q = f'''SELECT sv.*, vr.title as rule_title, vr.category as rule_category,
                       vr.color as rule_color, vr.icon as rule_icon,
                       vr.default_action as rule_default_action
                FROM staff_violations sv
                LEFT JOIN violation_rules vr ON vr.id=sv.rule_id
-               WHERE sv.incident_date BETWEEN ? AND ?'''
-        params = [date_from, date_to]
+               WHERE sv.incident_date BETWEEN ? AND ? AND {vscope}'''
+        params = [date_from, date_to] + list(vsp)
         if status_filter != 'all':
             q += ' AND sv.status=?'; params.append(status_filter)
         if staff_filter:
@@ -3721,12 +4152,14 @@ def _render_violations_page(view):
         violations = [dict(r) for r in conn.execute(q, params).fetchall()]
 
         counts = dict(conn.execute(
-            'SELECT status, COUNT(*) FROM staff_violations GROUP BY status').fetchall())
+            f'SELECT status, COUNT(*) FROM staff_violations sv WHERE {vscope} GROUP BY status',
+            list(vsp)).fetchall())
         severity_counts = dict(conn.execute(
-            'SELECT severity, COUNT(*) FROM staff_violations GROUP BY severity').fetchall())
+            f'SELECT severity, COUNT(*) FROM staff_violations sv WHERE {vscope} GROUP BY severity',
+            list(vsp)).fetchall())
 
-        stats_where = ['sv.incident_date BETWEEN ? AND ?']
-        stats_params = [date_from, date_to]
+        stats_where = ['sv.incident_date BETWEEN ? AND ?', vscope]
+        stats_params = [date_from, date_to] + list(vsp)
         if staff_filter:
             stats_where.append('sv.staff_name=?')
             stats_params.append(staff_filter)
@@ -3752,8 +4185,8 @@ def _render_violations_page(view):
         ) if summary['total'] else 0
 
         month_start = date.today().replace(day=1).isoformat()
-        month_where = ['sv.incident_date BETWEEN ? AND ?']
-        month_params = [month_start, today_iso]
+        month_where = ['sv.incident_date BETWEEN ? AND ?', vscope]
+        month_params = [month_start, today_iso] + list(vsp)
         if staff_filter:
             month_where.append('sv.staff_name=?')
             month_params.append(staff_filter)
@@ -3839,8 +4272,9 @@ def _render_violations_page(view):
             'rule_rank': rule_rank,
         }
 
-        # Strike standings (rolling 90-day active count + full history per staff)
-        strike_standings = staff_strike_standings(conn)
+        # Strike standings (rolling window active count + full history per staff),
+        # scoped to the store in view (None = all stores for super_admin).
+        strike_standings = staff_strike_standings(conn, store_id=scope_id)
         strike_watch = [s for s in strike_standings if s['active_count'] >= STRIKE_THRESHOLD - 1]
 
     return render_template('violation_rules.html',
@@ -3881,18 +4315,20 @@ def update_violation(violation_id):
     warning_step = request.form.get('warning_step', '').strip()
     resolved_by = request.form.get('resolved_by', '').strip()
     resolved_at = datetime.now().strftime('%Y-%m-%d %H:%M') if status in ('closed', 'cancelled') else None
+    guard, gp = store_guard_clause()
     with get_db() as conn:
-        current = conn.execute('SELECT * FROM staff_violations WHERE id=?', (violation_id,)).fetchone()
+        current = conn.execute(f'SELECT * FROM staff_violations WHERE id=? AND {guard}',
+                               [violation_id] + gp).fetchone()
         if current:
             if warning_step not in WARNING_STEPS:
                 warning_step = (current['warning_step'] if 'warning_step' in current.keys()
                                 and current['warning_step'] else WARNING_STEPS[0])
-            conn.execute('''UPDATE staff_violations
+            conn.execute(f'''UPDATE staff_violations
                 SET rule_id=?, staff_name=?, incident_date=?, incident_time=?, submitted_by=?,
                     severity=?, description=?, action_taken=?, follow_up_date=?,
                     status=?, manager_notes=?, resolved_by=?, resolved_at=?, warning_step=?
-                WHERE id=?''',
-                (rule_id or current['rule_id'],
+                WHERE id=? AND {guard}''',
+                [rule_id or current['rule_id'],
                  staff_name or current['staff_name'],
                  incident_date or current['incident_date'],
                  incident_time or current['incident_time'],
@@ -3906,7 +4342,7 @@ def update_violation(violation_id):
                  resolved_by,
                  resolved_at,
                  warning_step,
-                 violation_id))
+                 violation_id] + gp)
     return redirect(url_for('violation_rules', status=status))
 
 @app.route('/admin/violations/rules/add', methods=['POST'])
@@ -3994,10 +4430,11 @@ def report_issue():
                     photo_fname = save_uploaded_photo(f, os.path.join(UPLOAD_FOLDER, initial))
             with get_db() as conn:
                 cur = conn.execute('''
-                    INSERT INTO issue_reports (category,title,description,reported_by,branch,date,priority,photo)
-                    VALUES (?,?,?,?,?,?,?,?)
+                    INSERT INTO issue_reports (category,title,description,reported_by,branch,date,priority,photo,store_id)
+                    VALUES (?,?,?,?,?,?,?,?,?)
                 ''', (category, title, description, reported_by,
-                      session.get('branch',''), date.today().isoformat(), priority, photo_fname))
+                      session.get('branch',''), date.today().isoformat(), priority, photo_fname,
+                      current_store_id()))
                 rid = cur.lastrowid
             cat_label = ISSUE_CATEGORIES.get(category, {}).get('label', category)
             email_service.send_notification(
@@ -4024,9 +4461,10 @@ def report_issue():
 def admin_reports():
     status_filter   = request.args.get('status', 'open')
     category_filter = request.args.get('category', '')
+    scope, sp = store_filter_clause()
     with get_db() as conn:
-        q = 'SELECT * FROM issue_reports WHERE 1=1'
-        p = []
+        q = f'SELECT * FROM issue_reports WHERE {scope}'
+        p = list(sp)
         if status_filter != 'all':
             q += ' AND status=?'; p.append(status_filter)
         if category_filter:
@@ -4034,7 +4472,8 @@ def admin_reports():
         q += ' ORDER BY submitted_at DESC'
         reports = [dict(r) for r in conn.execute(q, p).fetchall()]
         counts = dict(conn.execute(
-            'SELECT status, COUNT(*) FROM issue_reports GROUP BY status').fetchall())
+            f'SELECT status, COUNT(*) FROM issue_reports WHERE {scope} GROUP BY status',
+            list(sp)).fetchall())
     return render_template('admin_reports.html',
         reports=reports, status_filter=status_filter,
         category_filter=category_filter, counts=counts)
@@ -4046,17 +4485,24 @@ def update_report(report_id):
     admin_notes = request.form.get('admin_notes', '')
     resolved_by = request.form.get('resolved_by', '')
     resolved_at = datetime.now().strftime('%Y-%m-%d %H:%M') if status == 'resolved' else None
+    guard, gp = store_guard_clause()
     with get_db() as conn:
-        conn.execute('''
+        conn.execute(f'''
             UPDATE issue_reports SET status=?, admin_notes=?, resolved_by=?, resolved_at=?
-            WHERE id=?
-        ''', (status, admin_notes, resolved_by, resolved_at, report_id))
+            WHERE id=? AND {guard}
+        ''', [status, admin_notes, resolved_by, resolved_at, report_id] + gp)
     return redirect(url_for('admin_reports'))
 
 # ─── Data Management — Delete & Purge (admin only) ────────────────────────────
 
 def _delete_checklist_session(conn, session_id):
-    """Delete one checklist session, its tasks, and remove its photo files from disk."""
+    """Delete one checklist session, its tasks, and remove its photo files from disk.
+    Refuses to touch a session that belongs to another store (unless super_admin)."""
+    guard, gp = store_guard_clause()
+    owns = conn.execute(f'SELECT 1 FROM checklist_sessions WHERE id=? AND {guard}',
+                        [session_id] + gp).fetchone()
+    if not owns:
+        return
     photos = conn.execute(
         'SELECT filename FROM checklist_photos WHERE session_id=?', (session_id,)).fetchall()
     for p in photos:
@@ -4070,13 +4516,21 @@ def _delete_checklist_session(conn, session_id):
 
 
 def _delete_temp_session(conn, session_id):
+    guard, gp = store_guard_clause()
+    if not conn.execute(f'SELECT 1 FROM temp_sessions WHERE id=? AND {guard}',
+                        [session_id] + gp).fetchone():
+        return
     conn.execute('DELETE FROM temp_readings WHERE session_id=?', (session_id,))
     conn.execute('DELETE FROM temp_sessions WHERE id=?', (session_id,))
 
 
 def _delete_issue_report(conn, report_id):
-    row = conn.execute('SELECT photo FROM issue_reports WHERE id=?', (report_id,)).fetchone()
-    if row and row['photo']:
+    guard, gp = store_guard_clause()
+    row = conn.execute(f'SELECT photo FROM issue_reports WHERE id=? AND {guard}',
+                       [report_id] + gp).fetchone()
+    if not row:
+        return
+    if row['photo']:
         try:
             os.remove(os.path.join(UPLOAD_FOLDER, row['photo']))
         except OSError:
@@ -4111,8 +4565,9 @@ def admin_delete_issue(rid):
 @app.route('/admin/delete/violation/<int:vid>', methods=['POST'])
 @admin_required
 def admin_delete_violation(vid):
+    guard, gp = store_guard_clause()
     with get_db() as conn:
-        conn.execute('DELETE FROM staff_violations WHERE id=?', (vid,))
+        conn.execute(f'DELETE FROM staff_violations WHERE id=? AND {guard}', [vid] + gp)
     return redirect(request.referrer or url_for('violation_rules'))
 
 
@@ -4150,9 +4605,10 @@ def admin_delete_issue_bulk():
 @admin_required
 def admin_delete_violation_bulk():
     ids = [int(x) for x in request.form.getlist('ids[]') if x.isdigit()]
+    guard, gp = store_guard_clause()
     with get_db() as conn:
         for vid in ids:
-            conn.execute('DELETE FROM staff_violations WHERE id=?', (vid,))
+            conn.execute(f'DELETE FROM staff_violations WHERE id=? AND {guard}', [vid] + gp)
     return jsonify({'ok': True, 'deleted': len(ids)})
 
 
@@ -4420,6 +4876,11 @@ init_equipment_tables(DB_PATH)
 init_structure_tables(DB_PATH, UPLOAD_FOLDER)
 init_webauthn(DB_PATH)
 init_food_pricing_tables(DB_PATH)
+
+# Multi-store schema runs LAST: every operational table (orders, packaging,
+# equipment, prep, pastry, ...) is created by the blueprint inits above, so they
+# must all exist before we add store_id / widen UNIQUE constraints.
+migrate_multistore(DB_PATH)
 
 if __name__ == '__main__':
     print('\n' + '='*50)

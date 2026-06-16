@@ -55,8 +55,8 @@
         </label>
         <select name="branch" class="form-select" required>
           <option value="">— Select your branch —</option>
-          {% for b in branches %}
-          <option value="{{ b }}">MCQ {{ b }}</option>
+          {% for s in stores %}
+          <option value="{{ s.code }}">{{ s.name }}</option>
           {% endfor %}
         </select>
       </div>
