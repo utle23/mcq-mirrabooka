@@ -164,6 +164,9 @@
       <input type="text" name="composed_by" class="form-control form-control-sm"
              placeholder="Your name" style="width:160px">
     </div>
+    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="resetQuantities()">
+      <i class="fas fa-rotate-left me-1"></i>Reset qty
+    </button>
     <span class="qty-summary ms-auto">
       <span id="lineCount">0</span> line(s) · <span id="qtyTotal">0</span> unit(s) · <span id="moneyTotal">$0.00</span>
     </span>
@@ -492,6 +495,23 @@ function refreshSummary() {
   document.getElementById('lineCount').textContent = lines;
   document.getElementById('qtyTotal').textContent = total;
   document.getElementById('moneyTotal').textContent = money(totalMoney);
+}
+function resetQuantities() {
+  document.querySelectorAll('.qty-input').forEach(i => {
+    i.value = '0';
+    updateRowState(i);
+  });
+  refreshSummary();
+  invalidatePreparedOrder();
+  clearTimeout(prepareOrderTimer);
+  prepareOrderTimer = null;
+  const preview = document.getElementById('previewCard');
+  if (preview) preview.classList.add('d-none');
+  ['prSubject', 'prTo', 'prCc', 'prBody'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = '—';
+  });
+  toast('Quantities reset to 0');
 }
 document.querySelectorAll('.qty-input').forEach(i => updateRowState(i));
 refreshSummary();
