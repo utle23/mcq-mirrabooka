@@ -210,6 +210,19 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
 .temp-table td { font-size: 12.5px; }
 .temp-safe   { background: #d4edda !important; color: #155724 !important; }
 .temp-danger { background: #f8d7da !important; color: #721c24 !important; }
+.temp-info   { background: #fff3cd !important; color: #664d03 !important; }
+.kind-badge {
+  display: inline-block; padding: 1px 7px; border-radius: 8px;
+  font-size: 0.62rem; font-weight: 800; letter-spacing: .03em;
+  vertical-align: middle; line-height: 1.35;
+}
+.kind-badge.kind-hot  { background: #FFE0B2; color: #C0392B; border: 1px solid #FFAB91; }
+.kind-badge.kind-cold { background: #E1F5FE; color: #1565C0; border: 1px solid #81D4FA; }
+.kind-badge.kind-room { background: #E0F2F1; color: #00897B; border: 1px solid #80CBC4; }
+.kind-badge i { font-size: 0.62rem; margin-right: 2px; }
+.food-row-hot  > td:first-child { box-shadow: inset 3px 0 0 #FFAB91; }
+.food-row-cold > td:first-child { box-shadow: inset 3px 0 0 #81D4FA; }
+.food-row-room > td:first-child { box-shadow: inset 3px 0 0 #80CBC4; }
 
 /* ── Buttons ── */
 .btn-xs { padding: 2px 8px; font-size: 11.5px; border-radius: 4px; }

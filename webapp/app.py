@@ -810,6 +810,7 @@ def init_db():
                 session_id  INTEGER NOT NULL REFERENCES temp_sessions(id) ON DELETE CASCADE,
                 food_order  INTEGER NOT NULL,
                 food_name   TEXT NOT NULL,
+                food_kind   TEXT NOT NULL DEFAULT 'cold',
                 c1_time TEXT, c1_temp REAL,
                 c2_time TEXT, c2_temp REAL,
                 c3_time TEXT, c3_temp REAL,
@@ -969,11 +970,18 @@ def init_db():
             conn.execute("ALTER TABLE temp_food_templates ADD COLUMN food_kind TEXT NOT NULL DEFAULT 'cold'")
         except sqlite3.OperationalError:
             pass
+        # Keep the holding type on each reading so historical records retain
+        # the correct HOT / COLD / ROOM label even if a template changes later.
+        try:
+            conn.execute("ALTER TABLE temp_readings ADD COLUMN food_kind TEXT NOT NULL DEFAULT 'cold'")
+        except sqlite3.OperationalError:
+            pass
         # Migrate: per-food notes column on the reading row.
         try:
             conn.execute("ALTER TABLE temp_readings ADD COLUMN notes TEXT DEFAULT ''")
         except sqlite3.OperationalError:
             pass
+
         # Migrate: 'defrosting' flag for cold items being thawed (high temp is
         # then expected, so it is not treated as an out-of-zone alert).
         try:
@@ -1052,6 +1060,42 @@ def init_db():
                     "VALUES (?,?,?,?)",
                     (mig2, 'migration', 'system',
                      'Re-synced chef food kinds: added room-temp and hot items.'))
+        except sqlite3.OperationalError:
+            pass
+
+        # Backfill holding types on historical readings after the live food
+        # templates have been classified. Prefer an exact template match;
+        # fall back to the seeded classification for renamed/deleted rows.
+        try:
+            mig3 = '_mig_temp_reading_food_kind_v1'
+            done = conn.execute(
+                "SELECT 1 FROM audit_log WHERE action=? LIMIT 1", (mig3,)).fetchone()
+            if not done:
+                old_readings = conn.execute('''
+                    SELECT tr.id, tr.food_order, tr.food_name,
+                           ts.type AS temp_type,
+                           tft.food_name AS template_name,
+                           tft.food_kind AS template_kind
+                    FROM temp_readings tr
+                    JOIN temp_sessions ts ON ts.id=tr.session_id
+                    LEFT JOIN temp_food_templates tft
+                      ON tft.temp_type=ts.type AND tft.food_order=tr.food_order
+                ''').fetchall()
+                for r in old_readings:
+                    template_matches = (
+                        (r['template_name'] or '').strip().lower()
+                        == (r['food_name'] or '').strip().lower()
+                    )
+                    kind = r['template_kind'] if template_matches else None
+                    if kind not in TEMP_KIND_RULES:
+                        kind = temp_food_kind_default(r['temp_type'], r['food_name'])
+                    conn.execute('UPDATE temp_readings SET food_kind=? WHERE id=?',
+                                 (kind, r['id']))
+                conn.execute(
+                    "INSERT INTO audit_log (action,record_type,user_name,details) "
+                    "VALUES (?,?,?,?)",
+                    (mig3, 'migration', 'system',
+                     'Backfilled HOT/COLD/ROOM labels on historical temperature readings.'))
         except sqlite3.OperationalError:
             pass
 
@@ -1685,6 +1729,7 @@ def inject_globals():
         selected_store=(request.args.get('store', 'all') if session.get('role') == 'super_admin' else None),
         issue_categories=ISSUE_CATEGORIES,
         temp_kind_rules=TEMP_KIND_RULES,
+        temp_is_unsafe=temp_is_unsafe,
     )
 
 # Paths that should NOT trigger or be affected by the timeout middleware:
@@ -2292,8 +2337,8 @@ def temperature_save(temp_type):
             sid = cur.lastrowid
         for r in readings:
             conn.execute(
-                'INSERT INTO temp_readings (session_id,food_order,food_name,c1_time,c1_temp,c2_time,c2_temp,c3_time,c3_temp,c4_time,c4_temp,c5_time,c5_temp,discarded,notes,defrosted) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                (sid,r['food_order'],r['food_name'],
+                'INSERT INTO temp_readings (session_id,food_order,food_name,food_kind,c1_time,c1_temp,c2_time,c2_temp,c3_time,c3_temp,c4_time,c4_temp,c5_time,c5_temp,discarded,notes,defrosted) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                (sid,r['food_order'],r['food_name'],r['food_kind'],
                  r['c1_time'],r['c1_temp'],r['c2_time'],r['c2_temp'],
                  r['c3_time'],r['c3_temp'],r['c4_time'],r['c4_temp'],
                  r['c5_time'],r['c5_temp'],r['discarded'],r['notes'],r['defrosted']))
@@ -3292,7 +3337,7 @@ def export_temperature_excel(session_id):
     ws.merge_cells('A2:M2')
     ws['A3'] = f'Recorded by: {sess.get("recorded_by","") or ""}   |   Checked by: {sess.get("checked_by","") or ""}'
     ws.merge_cells('A3:M3')
-    ws['A4'] = 'SAFE ZONE: < 5°C (cold) or > 60°C (hot).  Danger zone 5–60°C: max 4 hours before discarding.'
+    ws['A4'] = 'SAFE HOLDING: COLD ≤ 5°C | ROOM 15–30°C | HOT ≥ 60°C.'
     ws['A4'].font = Font(color='CC0000', italic=True)
     ws.merge_cells('A4:M4')
     ws.append([''])
@@ -3313,7 +3358,8 @@ def export_temperature_excel(session_id):
         c.alignment = Alignment(horizontal='center', wrap_text=True)
 
     for r in readings:
-        row_data = [r['food_name']]
+        kind = r.get('food_kind') or 'cold'
+        row_data = [f'[{TEMP_KIND_RULES.get(kind, TEMP_KIND_RULES["cold"])["label"]}] {r["food_name"]}']
         for n in range(1, 6):
             row_data.append(r.get(f'c{n}_time') or '')
             row_data.append(r.get(f'c{n}_temp') if r.get(f'c{n}_temp') is not None else '')
@@ -3325,7 +3371,9 @@ def export_temperature_excel(session_id):
             tv = r.get(f'c{n}_temp')
             if tv is not None:
                 cell = ws.cell(row=row_num, column=temp_col)
-                if tv < 5 or tv > 60:
+                if sess['type'] == 'pastry' and n == 3:
+                    cell.fill = PatternFill(start_color='FFF3CD', end_color='FFF3CD', fill_type='solid')
+                elif temp_is_unsafe(kind, tv):
                     cell.fill = PatternFill(start_color='FF4444', end_color='FF4444', fill_type='solid')
                     cell.font = Font(bold=True, color='FFFFFF')
                 else:
@@ -3384,6 +3432,8 @@ def export_temperature_pdf(session_id):
         Paragraph(f"{temp_data.get('title','Temperature Record')} | Date: {sess['date']} | "
                   f"Recorded by: {escape(sess.get('recorded_by') or '-')} | "
                   f"Checked by: {escape(sess.get('checked_by') or '-')}", styles['sub']),
+        Paragraph('SAFE HOLDING: COLD ≤ 5°C | ROOM 15–30°C | HOT ≥ 60°C',
+                  styles['sub']),
         Spacer(1, 4*mm),
     ]
 
@@ -3391,7 +3441,9 @@ def export_temperature_pdf(session_id):
                'C4 Time', 'C4 °C', 'C5 Time', 'C5 °C', 'Discard']
     rows = [headers]
     for r in readings:
-        row = [Paragraph(escape(r['food_name']), styles['food'])]
+        kind = r.get('food_kind') or 'cold'
+        kind_label = TEMP_KIND_RULES.get(kind, TEMP_KIND_RULES['cold'])['label']
+        row = [Paragraph(f'<b>[{kind_label}]</b> {escape(r["food_name"])}', styles['food'])]
         for n in range(1, 6):
             row.append(r.get(f'c{n}_time') or '')
             temp_val = r.get(f'c{n}_temp')
@@ -3415,15 +3467,18 @@ def export_temperature_pdf(session_id):
         ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
     ]
     for row_idx, r in enumerate(readings, 1):
+        kind = r.get('food_kind') or 'cold'
         for n in range(1, 6):
             tv = r.get(f'c{n}_temp')
             if tv is None:
                 continue
             col = (n - 1) * 2 + 2
-            if tv < 5 or tv > 60:
-                table_style.append(('BACKGROUND', (col, row_idx), (col, row_idx), colors.HexColor('#D8F3DC')))
-            else:
+            if sess['type'] == 'pastry' and n == 3:
+                table_style.append(('BACKGROUND', (col, row_idx), (col, row_idx), colors.HexColor('#FFF3CD')))
+            elif temp_is_unsafe(kind, tv):
                 table_style.append(('BACKGROUND', (col, row_idx), (col, row_idx), colors.HexColor('#F8D7DA')))
+            else:
+                table_style.append(('BACKGROUND', (col, row_idx), (col, row_idx), colors.HexColor('#D8F3DC')))
         if (r.get('discarded') or 'N') == 'Y':
             table_style.append(('BACKGROUND', (11, row_idx), (11, row_idx), colors.HexColor('#FFE8A1')))
     table.setStyle(TableStyle(table_style))
@@ -3436,7 +3491,7 @@ def export_temperature_pdf(session_id):
         canvas.saveState()
         canvas.setFont(font_name, 8)
         canvas.setFillColor(colors.HexColor('#666666'))
-        canvas.drawString(9*mm, 6*mm, 'Green = safe cold/hot holding | Red = danger zone 5-60C')
+        canvas.drawString(9*mm, 6*mm, 'Green = within the item safe range | Red = outside the item safe range')
         canvas.drawRightString(landscape(A4)[0] - 9*mm, 6*mm, f'Page {doc_obj.page}')
         canvas.restoreState()
 

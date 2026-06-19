@@ -37,11 +37,27 @@
   </div>
 </div>
 
-<div class="alert alert-info py-2 small mb-3">
-  <i class="fas fa-info-circle me-1"></i>
-  <span class="badge bg-danger">Red</span> = Danger zone (5°C–60°C) &nbsp;|&nbsp;
-  <span class="badge bg-success">Green</span> = Safe (&lt;5°C cold or &gt;60°C hot) &nbsp;|&nbsp;
-  <span class="badge bg-warning text-dark">Y</span> = Discarded
+{% set kinds_here = [] %}
+{% for r in readings %}
+  {% set kind = r.food_kind or 'cold' %}
+  {% if kind not in kinds_here %}{% set _ = kinds_here.append(kind) %}{% endif %}
+{% endfor %}
+<div class="alert alert-light border py-2 mb-3">
+  <div class="fw-bold small text-uppercase text-muted mb-2">
+    <i class="fas fa-temperature-half me-1"></i>Safe holding ranges for this record
+  </div>
+  {% for kind in ['cold', 'room', 'hot'] %}{% if kind in kinds_here %}
+  {% set rule = temp_kind_rules[kind] %}
+  <div class="d-flex align-items-center gap-2 mb-1">
+    <span class="kind-badge kind-{{ kind }}"><i class="fas {{ rule.icon }}"></i> {{ rule.label }}</span>
+    <span class="small">items are safe at <strong>{{ rule.rule }}</strong>.</span>
+  </div>
+  {% endif %}{% endfor %}
+  <div class="small text-muted mt-2">
+    <span class="badge bg-success">Green</span> = within the item's safe range &nbsp;|&nbsp;
+    <span class="badge bg-danger">Red</span> = outside the item's safe range &nbsp;|&nbsp;
+    <span class="badge bg-warning text-dark">Y</span> = discarded
+  </div>
 </div>
 
 <div class="card shadow-sm">
@@ -69,13 +85,21 @@
       </thead>
       <tbody>
         {% for r in readings %}
-        <tr>
-          <td class="fw-semibold small">{{ r.food_name }}</td>
+        {% set kind = r.food_kind or 'cold' %}
+        {% set rule = temp_kind_rules.get(kind, temp_kind_rules['cold']) %}
+        <tr class="food-row food-row-{{ kind }}">
+          <td class="fw-semibold small">
+            <span class="kind-badge kind-{{ kind }}" title="{{ rule.label }} — safe at {{ rule.rule }}">
+              <i class="fas {{ rule.icon }}"></i> {{ rule.label }}
+            </span>
+            <span class="ms-1">{{ r.food_name }}</span>
+          </td>
           {% for c in range(1,6) %}
           {% set tkey = 'c' ~ c ~ '_time' %}
           {% set vkey = 'c' ~ c ~ '_temp' %}
           <td class="text-center small">{{ r[tkey] or '' }}</td>
-          <td class="text-center small fw-bold {% if r[vkey] is not none %}{% if r[vkey] < 5 or r[vkey] > 60 %}temp-safe{% else %}temp-danger{% endif %}{% endif %}">
+          <td class="text-center small fw-bold {% if r[vkey] is not none %}{% if sess.type == 'pastry' and c == 3 %}temp-info{% elif temp_is_unsafe(kind, r[vkey]) %}temp-danger{% else %}temp-safe{% endif %}{% endif %}"
+              title="{% if sess.type == 'pastry' and c == 3 %}Informational check — no alert{% else %}{{ rule.label }} safe range: {{ rule.rule }}{% endif %}">
             {% if r[vkey] is not none %}{{ r[vkey] }}°{% else %}—{% endif %}
           </td>
           {% endfor %}
