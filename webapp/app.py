@@ -359,6 +359,10 @@ STORE_SCOPED_TABLES = [
     'staff_violations', 'issue_reports', 'equipment_units', 'equipment_temp_readings',
     'prep_weekly_schedules', 'prep_weekly_tasks', 'prep_daily_status',
     'pastry_delivery', 'pastry_sales', 'orders',
+    # batch 3 — HR / org-chart tables
+    'staff_certificates', 'staff_birthdays', 'monthly_reward_decisions',
+    'monthly_reward_adjustments', 'salary_raise_reviews',
+    'structure_departments', 'structure_members', 'structure_meta',
 ]
 
 
@@ -531,9 +535,14 @@ VIOLATION_RULES_SEED = [
 # ─── Database ──────────────────────────────────────────────────────────────────
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    # timeout=30 + busy_timeout: under concurrent use (several staff at once, or
+    # a slow PDF holding a read while another request writes) SQLite would
+    # otherwise raise "database is locked" after 5s → 500/502. WAL (set once at
+    # startup) lets readers and the single writer work without blocking.
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA foreign_keys = ON')
+    conn.execute('PRAGMA busy_timeout = 20000')
     return conn
 
 
@@ -596,12 +605,54 @@ def _add_store_to_unique(conn, table, old_unique, new_unique):
         conn.execute('PRAGMA foreign_keys = ON')
 
 
+def _rebuild_structure_meta_per_store(conn):
+    """structure_meta is key→value with `key` as PRIMARY KEY. Make it per store:
+    PRIMARY KEY (key, store_id). Autocommit conn + FK off. Idempotent."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='structure_meta'").fetchone()
+    if not row or not row[0]:
+        return
+    sql = row[0]
+    norm = sql.replace(' ', '')
+    if 'PRIMARYKEY(key,store_id)' in norm:
+        return  # already migrated
+    if 'keyTEXTPRIMARYKEY' not in norm:
+        return  # unexpected shape — leave it
+    cols = [r[1] for r in conn.execute('PRAGMA table_info(structure_meta)')]
+    if 'store_id' not in cols:
+        return  # store_id column must exist first (added in the ALTER pass)
+    collist = ', '.join(cols)
+    conn.execute('PRAGMA foreign_keys = OFF')
+    conn.execute('BEGIN')
+    try:
+        conn.execute('DROP TABLE IF EXISTS structure_meta__mig')
+        conn.execute('''CREATE TABLE structure_meta__mig (
+            key TEXT NOT NULL, value TEXT, store_id INTEGER DEFAULT 1,
+            PRIMARY KEY (key, store_id))''')
+        conn.execute(f'INSERT INTO structure_meta__mig ({collist}) SELECT {collist} FROM structure_meta')
+        conn.execute('DROP TABLE structure_meta')
+        conn.execute('ALTER TABLE structure_meta__mig RENAME TO structure_meta')
+        conn.execute('COMMIT')
+    except Exception:
+        conn.execute('ROLLBACK')
+        raise
+    finally:
+        conn.execute('PRAGMA foreign_keys = ON')
+
+
 def migrate_multistore(db_path):
     """All multi-store schema work on a dedicated AUTOCOMMIT connection so the
     UNIQUE-constraint rebuilds can safely toggle foreign_keys. Idempotent."""
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.isolation_level = None   # autocommit
+    # Wait (don't error) if another worker/console briefly holds the DB during a
+    # reload, and switch the DB to WAL once so readers never block the writer.
+    try:
+        conn.execute('PRAGMA busy_timeout = 30000')
+        conn.execute('PRAGMA journal_mode = WAL')
+    except Exception:
+        pass
     try:
         # 1) stores table + seed (fixed ids: mirrabooka=1, morley=2, subiaco=3)
         conn.execute('''CREATE TABLE IF NOT EXISTS stores (
@@ -637,19 +688,31 @@ def migrate_multistore(db_path):
             except Exception:
                 pass
         # 3) widen natural-key UNIQUE constraints to include store_id (only the
-        #    tables whose key columns are chain-wide need it).
-        _add_store_to_unique(conn, 'checklist_sessions',
-                             'UNIQUE(type, section, date)',
-                             'UNIQUE(type, section, date, store_id)')
-        _add_store_to_unique(conn, 'temp_sessions',
-                             'UNIQUE(type, date)', 'UNIQUE(type, date, store_id)')
-        _add_store_to_unique(conn, 'pastry_delivery',
-                             'UNIQUE(item_id, date)', 'UNIQUE(item_id, date, store_id)')
-        _add_store_to_unique(conn, 'pastry_sales',
-                             'UNIQUE(item_id, date)', 'UNIQUE(item_id, date, store_id)')
-        # 3b) staff names are unique PER STORE, not globally, so two branches can
-        #     each have a "John". Rebuild the inline UNIQUE on name → composite.
-        _rebuild_staff_unique_per_store(conn)
+        #    tables whose key columns are chain-wide need it). Each rebuild is
+        #    isolated: a transient failure (e.g. a brief lock during a reload) is
+        #    skipped and retried next boot — it must NEVER crash app startup,
+        #    because that would 502 the entire site.
+        def _safe(fn, *a):
+            try:
+                fn(conn, *a)
+            except Exception:
+                pass
+        _safe(_add_store_to_unique, 'checklist_sessions',
+              'UNIQUE(type, section, date)', 'UNIQUE(type, section, date, store_id)')
+        _safe(_add_store_to_unique, 'temp_sessions',
+              'UNIQUE(type, date)', 'UNIQUE(type, date, store_id)')
+        _safe(_add_store_to_unique, 'pastry_delivery',
+              'UNIQUE(item_id, date)', 'UNIQUE(item_id, date, store_id)')
+        _safe(_add_store_to_unique, 'pastry_sales',
+              'UNIQUE(item_id, date)', 'UNIQUE(item_id, date, store_id)')
+        # 3b) names that were globally UNIQUE become unique PER STORE.
+        _safe(_rebuild_col_unique_per_store, 'staff_members', 'name')
+        _safe(_rebuild_col_unique_per_store, 'staff_birthdays', 'staff_name')
+        # 3c) one reward decision per (month, award_type) PER STORE.
+        _safe(_add_store_to_unique, 'monthly_reward_decisions',
+              'UNIQUE(reward_month, award_type)', 'UNIQUE(reward_month, award_type, store_id)')
+        # 3d) org-chart settings (structure_meta) are keyed per store.
+        _safe(_rebuild_structure_meta_per_store)
         # 4) index store_id on every scoped table (after any rebuild above)
         for tbl in STORE_SCOPED_TABLES:
             try:
@@ -660,38 +723,40 @@ def migrate_multistore(db_path):
         conn.close()
 
 
-def _rebuild_staff_unique_per_store(conn):
-    """staff_members.name has an inline column-level UNIQUE; rebuild the table so
-    uniqueness is UNIQUE(name, store_id) instead. Autocommit conn + FK off.
+def _rebuild_col_unique_per_store(conn, table, col):
+    """A column with inline `<col> TEXT NOT NULL UNIQUE` should be unique PER
+    STORE, not globally (so two branches can share a name). Rebuild the table so
+    uniqueness becomes UNIQUE(<col>, store_id). Autocommit conn + FK off.
     Idempotent: skips if already migrated or the expected shape isn't present."""
     row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='staff_members'").fetchone()
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
     if not row or not row[0]:
         return
     sql = row[0]
     norm = sql.replace(' ', '')
-    if 'UNIQUE(name,store_id)' in norm:
+    if f'UNIQUE({col},store_id)' in norm:
         return  # already migrated
-    if 'nameTEXTNOTNULLUNIQUE' not in norm:
+    if f'{col}TEXTNOTNULLUNIQUE' not in norm:
         return  # unexpected shape — leave data untouched
     import re
-    new_inner = re.sub(r'(name\s+TEXT\s+NOT\s+NULL)\s+UNIQUE', r'\1', sql, count=1, flags=re.I)
+    new_inner = re.sub(rf'({col}\s+TEXT\s+NOT\s+NULL)\s+UNIQUE', r'\1', sql, count=1, flags=re.I)
     idx = new_inner.rstrip().rfind(')')
-    new_inner = new_inner[:idx] + ', UNIQUE(name, store_id)' + new_inner[idx:]
-    new_create = new_inner.replace('staff_members', 'staff_members__mig', 1)
-    if 'staff_members__mig' not in new_create:
+    new_inner = new_inner[:idx] + f', UNIQUE({col}, store_id)' + new_inner[idx:]
+    tmp = f'{table}__mig'
+    new_create = new_inner.replace(table, tmp, 1)
+    if tmp not in new_create:
         return
-    cols = [r[1] for r in conn.execute('PRAGMA table_info(staff_members)')]
+    cols = [r[1] for r in conn.execute(f'PRAGMA table_info({table})')]
     collist = ', '.join(cols)
     conn.execute('PRAGMA foreign_keys = OFF')
     conn.execute('BEGIN')
     try:
-        conn.execute('DROP TABLE IF EXISTS staff_members__mig')
+        conn.execute(f'DROP TABLE IF EXISTS {tmp}')
         conn.execute(new_create)
-        conn.execute(f'INSERT INTO staff_members__mig ({collist}) SELECT {collist} FROM staff_members')
-        conn.execute('DROP TABLE staff_members')
-        conn.execute('ALTER TABLE staff_members__mig RENAME TO staff_members')
-        conn.execute('CREATE INDEX IF NOT EXISTS idx_staff_members_store_id ON staff_members(store_id)')
+        conn.execute(f'INSERT INTO {tmp} ({collist}) SELECT {collist} FROM {table}')
+        conn.execute(f'DROP TABLE {table}')
+        conn.execute(f'ALTER TABLE {tmp} RENAME TO {table}')
+        conn.execute(f'CREATE INDEX IF NOT EXISTS idx_{table}_store_id ON {table}(store_id)')
         conn.execute('COMMIT')
     except Exception:
         conn.execute('ROLLBACK')
@@ -1098,6 +1163,8 @@ def save_uploaded_photo(file_storage, dest_path, max_dim=1280, quality=82):
     except Exception:
         pass
 
+    img = None
+    work = None
     try:
         img = Image.open(file_storage.stream)
         if img.format == 'JPEG' and max(img.size) <= max_dim:
@@ -1114,19 +1181,25 @@ def save_uploaded_photo(file_storage, dest_path, max_dim=1280, quality=82):
                 img.draft('RGB', (max_dim, max_dim))
             except Exception:
                 pass
-        img = ImageOps.exif_transpose(img)   # respect phone rotation metadata
-        if img.mode in ('RGBA', 'LA', 'P'):
-            img = img.convert('RGB')
-        w, h = img.size
+        work = ImageOps.exif_transpose(img)   # respect phone rotation metadata
+        if work.mode in ('RGBA', 'LA', 'P'):
+            conv = work.convert('RGB')
+            if work is not img:
+                work.close()
+            work = conv
+        w, h = work.size
         if max(w, h) > max_dim:
             ratio = max_dim / float(max(w, h))
-            img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+            resized = work.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+            if work is not img:
+                work.close()
+            work = resized
         # Always save resized photos as JPEG. Avoid optimize/progressive here:
         # those save a little space but make checklist submit noticeably slower
         # when staff upload several phone photos at once.
         base, _ = os.path.splitext(dest_path)
         final_path = base + '.jpg'
-        img.save(final_path, 'JPEG', quality=quality)
+        work.save(final_path, 'JPEG', quality=quality)
         return os.path.basename(final_path)
     except Exception:
         # If decoding failed (corrupt / unsupported), fall back to original bytes.
@@ -1136,6 +1209,15 @@ def save_uploaded_photo(file_storage, dest_path, max_dim=1280, quality=82):
             pass
         file_storage.save(dest_path)
         return os.path.basename(dest_path)
+    finally:
+        # Release decoded-image memory immediately so a batch of phone photos
+        # (each 4000×3000) doesn't pile up and OOM-kill the worker.
+        for im in (work, img):
+            try:
+                if im is not None:
+                    im.close()
+            except Exception:
+                pass
 
 
 def log_action(action, record_type, record_id, user_name, details=''):
@@ -1478,15 +1560,18 @@ def raise_review_snapshot(conn, staff_name, month_value, store_id=None):
         'today': today_iso,
     }
 
-def birthday_rows(conn):
+def birthday_rows(conn, store_id=None):
+    if store_id is None:
+        store_id = current_store_id()
     today_obj = date.today()
     current_year = today_obj.year
     rows = [dict(r) for r in conn.execute('''
         SELECT sb.*, sm.role, sm.active
         FROM staff_birthdays sb
-        LEFT JOIN staff_members sm ON sm.name=sb.staff_name
+        LEFT JOIN staff_members sm ON sm.name=sb.staff_name AND sm.store_id=sb.store_id
+        WHERE sb.store_id=?
         ORDER BY sb.staff_name
-    ''').fetchall()]
+    ''', (store_id,)).fetchall()]
     enriched = []
     for r in rows:
         try:
@@ -2727,11 +2812,12 @@ def birthday_giveaways():
         if staff_name and birthday:
             last_year = request.form.get('last_given_year', '').strip()
             last_year_val = int(last_year) if last_year.isdigit() else None
+            sid = current_store_id()
             with get_db() as conn:
                 conn.execute('''INSERT INTO staff_birthdays
-                    (staff_name,birthday,favorite_gift,gift_status,last_given_year,notes)
-                    VALUES (?,?,?,?,?,?)
-                    ON CONFLICT(staff_name) DO UPDATE SET
+                    (staff_name,birthday,favorite_gift,gift_status,last_given_year,notes,store_id)
+                    VALUES (?,?,?,?,?,?,?)
+                    ON CONFLICT(staff_name, store_id) DO UPDATE SET
                         birthday=excluded.birthday,
                         favorite_gift=excluded.favorite_gift,
                         gift_status=excluded.gift_status,
@@ -2742,23 +2828,26 @@ def birthday_giveaways():
                      request.form.get('favorite_gift', '').strip(),
                      request.form.get('gift_status', 'planned').strip() or 'planned',
                      last_year_val,
-                     request.form.get('notes', '').strip()))
+                     request.form.get('notes', '').strip(), sid))
         return redirect(url_for('birthday_giveaways'))
 
+    sid = current_store_id()
     with get_db() as conn:
         # Keep birthday rows in sync when new staff are added after initial setup.
-        existing = {r['staff_name'] for r in conn.execute('SELECT staff_name FROM staff_birthdays').fetchall()}
-        staff_rows = [dict(r) for r in conn.execute('SELECT * FROM staff_members WHERE active=1 ORDER BY name').fetchall()]
+        existing = {r['staff_name'] for r in conn.execute(
+            'SELECT staff_name FROM staff_birthdays WHERE store_id=?', (sid,)).fetchall()}
+        staff_rows = [dict(r) for r in conn.execute(
+            'SELECT * FROM staff_members WHERE active=1 AND store_id=? ORDER BY name', (sid,)).fetchall()]
         gift_ideas = ['MCQ meal voucher', 'Coffee and pastry pack', 'Birthday cake', 'Gift card', 'Team lunch shout', 'Dessert box']
         for idx, staff_row in enumerate(staff_rows):
             if staff_row['name'] not in existing:
                 seed = sum(ord(ch) for ch in staff_row['name']) + idx * 17
                 conn.execute('''INSERT INTO staff_birthdays
-                    (staff_name,birthday,favorite_gift,gift_status,notes)
-                    VALUES (?,?,?,?,?)''',
+                    (staff_name,birthday,favorite_gift,gift_status,notes,store_id)
+                    VALUES (?,?,?,?,?,?)''',
                     (staff_row['name'], f'2000-{seed % 12 + 1:02d}-{(seed * 7) % 28 + 1:02d}',
                      gift_ideas[seed % len(gift_ideas)], 'planned',
-                     'Temporary birthday data - update when the real birthday is confirmed.'))
+                     'Temporary birthday data - update when the real birthday is confirmed.', sid))
         rows = birthday_rows(conn)
     today_obj = date.today()
     next_30 = [r for r in rows if r['days_until'] <= 30]
@@ -3628,7 +3717,7 @@ def staff_profile(staff_id):
         reward_month = date.today().strftime('%Y-%m')
         reward_data = calculate_monthly_reward_scores(conn, reward_month, store_id=member.get('store_id'))
         my_score = next((r for r in reward_data['employee_rank'] if r['staff_name'] == member['name']), None)
-        all_birthdays = birthday_rows(conn)
+        all_birthdays = birthday_rows(conn, store_id=member.get('store_id'))
         birthday = next((b for b in all_birthdays if b['staff_name'] == member['name']), None)
     return render_template('staff_profile.html',
         member=member, my_score=my_score,
@@ -3660,9 +3749,11 @@ CERT_EXT = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'pdf'}
 def certificates():
     today_iso = date.today().isoformat()
     staff = get_active_staff()
+    scope, sp = store_filter_clause()
     with get_db() as conn:
         rows = [dict(r) for r in conn.execute(
-            'SELECT * FROM staff_certificates ORDER BY staff_name, uploaded_at DESC').fetchall()]
+            f'SELECT * FROM staff_certificates WHERE {scope} ORDER BY staff_name, uploaded_at DESC',
+            sp).fetchall()]
     # Group certificates by staff member
     by_staff = {}
     for r in rows:
@@ -3707,18 +3798,20 @@ def certificate_upload():
         f.save(dest)
     with get_db() as conn:
         conn.execute('''INSERT INTO staff_certificates
-            (staff_name, cert_type, filename, original_name, expiry_date, notes, uploaded_by)
-            VALUES (?,?,?,?,?,?,?)''',
+            (staff_name, cert_type, filename, original_name, expiry_date, notes, uploaded_by, store_id)
+            VALUES (?,?,?,?,?,?,?,?)''',
             (staff_name, cert_type, fname, secure_filename(f.filename),
-             expiry, notes, session.get('role', 'admin')))
+             expiry, notes, session.get('role', 'admin'), current_store_id()))
     flash(f'Certificate uploaded for {staff_name}.', 'success')
     return redirect(url_for('certificates'))
 
 @app.route('/admin/certificate/<int:cert_id>/file')
 @login_required
 def certificate_file(cert_id):
+    guard, gp = store_guard_clause()
     with get_db() as conn:
-        row = conn.execute('SELECT filename FROM staff_certificates WHERE id=?', (cert_id,)).fetchone()
+        row = conn.execute(f'SELECT filename FROM staff_certificates WHERE id=? AND {guard}',
+                           [cert_id] + gp).fetchone()
     if not row:
         abort(404)
     return send_from_directory(UPLOAD_FOLDER, os.path.basename(row['filename']))
@@ -3726,14 +3819,16 @@ def certificate_file(cert_id):
 @app.route('/admin/certificate/<int:cert_id>/delete', methods=['POST'])
 @admin_required
 def certificate_delete(cert_id):
+    guard, gp = store_guard_clause()
     with get_db() as conn:
-        row = conn.execute('SELECT filename FROM staff_certificates WHERE id=?', (cert_id,)).fetchone()
+        row = conn.execute(f'SELECT filename FROM staff_certificates WHERE id=? AND {guard}',
+                           [cert_id] + gp).fetchone()
         if row:
             try:
                 os.remove(os.path.join(UPLOAD_FOLDER, row['filename']))
             except OSError:
                 pass
-            conn.execute('DELETE FROM staff_certificates WHERE id=?', (cert_id,))
+            conn.execute(f'DELETE FROM staff_certificates WHERE id=? AND {guard}', [cert_id] + gp)
     flash('Certificate deleted.', 'warning')
     return redirect(url_for('certificates'))
 
@@ -3742,8 +3837,14 @@ def certificate_delete(cert_id):
 @app.route('/photo/<path:filename>')
 @admin_required
 def serve_photo(filename):
+    # Photo filenames are immutable (they embed a hash), so the browser can cache
+    # them hard. This stops the checklist/share pages from re-downloading dozens
+    # of images on every view — a big load cut for the shared worker pool. The
+    # response is marked `private` because the route is behind admin auth.
     safe = os.path.basename(filename)
-    return send_from_directory(UPLOAD_FOLDER, safe)
+    resp = send_from_directory(UPLOAD_FOLDER, safe, max_age=604800)  # 7 days
+    resp.headers['Cache-Control'] = 'private, max-age=604800, immutable'
+    return resp
 
 @app.route('/admin/photos')
 @admin_required
@@ -4860,27 +4961,40 @@ def email_recipient_delete(rid):
 
 # ─── Main ──────────────────────────────────────────────────────────────────────
 
-init_db()
-init_prep_tables(DB_PATH, STAFF)
-init_pastry_tables(DB_PATH)
-init_inventory_tables(DB_PATH)
-init_job_tables(DB_PATH)
-init_rules_tables(DB_PATH)
-init_training_tables(DB_PATH, CHECKLISTS)
-email_service.init_email_tables(DB_PATH)
-init_whatsapp(DB_PATH, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static'),
-              UPLOAD_FOLDER, CHECKLISTS, TEMPERATURES)
-init_packaging(DB_PATH)
-init_order_tables(DB_PATH)
-init_equipment_tables(DB_PATH)
-init_structure_tables(DB_PATH, UPLOAD_FOLDER)
-init_webauthn(DB_PATH)
-init_food_pricing_tables(DB_PATH)
+# Startup must be crash-proof: if any one-time init/migration throws on the
+# server (e.g. a brief DB lock during a worker reload), the WSGI app would fail
+# to import and the load balancer would return 502 for EVERY request. Each step
+# is idempotent, so wrapping it lets the site come up and retry next boot.
+def _safe_init(fn, *args, **kwargs):
+    try:
+        fn(*args, **kwargs)
+    except Exception as e:
+        import traceback
+        print(f'[startup] {getattr(fn, "__name__", fn)} failed: '
+              f'{type(e).__name__}: {e}')
+        traceback.print_exc()
+
+_safe_init(init_db)
+_safe_init(init_prep_tables, DB_PATH, STAFF)
+_safe_init(init_pastry_tables, DB_PATH)
+_safe_init(init_inventory_tables, DB_PATH)
+_safe_init(init_job_tables, DB_PATH)
+_safe_init(init_rules_tables, DB_PATH)
+_safe_init(init_training_tables, DB_PATH, CHECKLISTS)
+_safe_init(email_service.init_email_tables, DB_PATH)
+_safe_init(init_whatsapp, DB_PATH, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static'),
+           UPLOAD_FOLDER, CHECKLISTS, TEMPERATURES)
+_safe_init(init_packaging, DB_PATH)
+_safe_init(init_order_tables, DB_PATH)
+_safe_init(init_equipment_tables, DB_PATH)
+_safe_init(init_structure_tables, DB_PATH, UPLOAD_FOLDER)
+_safe_init(init_webauthn, DB_PATH)
+_safe_init(init_food_pricing_tables, DB_PATH)
 
 # Multi-store schema runs LAST: every operational table (orders, packaging,
 # equipment, prep, pastry, ...) is created by the blueprint inits above, so they
 # must all exist before we add store_id / widen UNIQUE constraints.
-migrate_multistore(DB_PATH)
+_safe_init(migrate_multistore, DB_PATH)
 
 if __name__ == '__main__':
     print('\n' + '='*50)
