@@ -396,7 +396,7 @@ ITEMS_SEED = [
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _get_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -452,7 +452,7 @@ def _add_carton_margin(item: dict) -> dict:
 def init_inventory_tables(db_path):
     global DB_PATH
     DB_PATH = db_path
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(db_path, timeout=30) as conn:
         conn.execute('''CREATE TABLE IF NOT EXISTS inventory_items (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             category    TEXT NOT NULL,

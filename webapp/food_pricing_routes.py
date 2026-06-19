@@ -922,7 +922,7 @@ def _ordered_food_pricing_seed():
 
 
 def _get_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -1197,7 +1197,7 @@ def _seed_food_pricing(conn):
 def init_food_pricing_tables(db_path):
     global DB_PATH
     DB_PATH = db_path
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(db_path, timeout=30) as conn:
         conn.row_factory = sqlite3.Row
         conn.execute('''CREATE TABLE IF NOT EXISTS food_pricing_items (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,

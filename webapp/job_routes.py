@@ -232,7 +232,7 @@ ROLES_BY_KEY = {r['key']: r for r in ROLES}
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _get_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -446,7 +446,7 @@ def _register_pdf_fonts():
 def init_job_tables(db_path):
     global DB_PATH
     DB_PATH = db_path
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(db_path, timeout=30) as conn:
         conn.row_factory = sqlite3.Row
         conn.execute('''CREATE TABLE IF NOT EXISTS job_assignments (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,

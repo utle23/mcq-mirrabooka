@@ -136,7 +136,7 @@ JACCUS_PRICE_DATA = {
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _conn():
-    c = sqlite3.connect(DB_PATH)
+    c = sqlite3.connect(DB_PATH, timeout=30)
     c.row_factory = sqlite3.Row
     return c
 
