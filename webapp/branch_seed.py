@@ -19,6 +19,13 @@ from packaging_routes import JACCUS_PRICE_DATA
 SUBIACO_STORE_ID = 3
 MARKER = 'subiaco_branch_seed_v1'
 PRICE_MARKER = 'subiaco_packaging_prices_from_pdf_v1'
+CONTACT_FIX_MARKER = 'subiaco_contact_fix_v1'
+
+# Subiaco's Jaccus packaging contact (from branch.xlsx). A historic global
+# UPDATE in init_packaging clobbered this with Mirrabooka's "Khoi: 0449819235"
+# on every startup; _fix_subiaco_contact restores it once.
+SUBIACO_PACKAGING_CONTACT = 'Kenny Ho — 0406552462 — mcqsubiaco@mcqinternational.com'
+MIRRABOOKA_PACKAGING_CONTACT = 'Khoi: 0449819235'
 
 DAYS = {
     'mon': 'mon', 'monday': 'mon',
@@ -240,7 +247,7 @@ def _seed_packaging(conn: sqlite3.Connection, wb) -> None:
          fields.get('delivery days', '').upper(),
          'Saigon Alley by MCQ Street Food — SUBIACO',
          fields.get('deliver-to address', '4A Seddon St, Subiaco WA 6008'),
-         'Kenny Ho — 0406552462 — mcqsubiaco@mcqinternational.com',
+         SUBIACO_PACKAGING_CONTACT,
          SUBIACO_STORE_ID))
     supplier_id = cur.lastrowid
     for idx, row in enumerate(_rows(wb['9. Packaging Items'], 'Product code')):
@@ -276,6 +283,27 @@ def _sync_packaging_prices(conn: sqlite3.Connection) -> None:
     conn.execute('''INSERT INTO audit_log(action, record_type, user_name, details)
         VALUES (?, 'migration', 'system', ?)''',
         (PRICE_MARKER, f'Applied Jaccus PDF price list to {updated} Subiaco packaging item(s).'))
+
+
+def _fix_subiaco_contact(conn: sqlite3.Connection) -> None:
+    """Restore Subiaco's Jaccus packaging contact once.
+
+    Earlier builds clobbered every branch's contact with Mirrabooka's on each
+    startup. Now that init_packaging only touches store_id=1, repair the live
+    Subiaco row — but only if it is still blank or holds the clobbered Mirrabooka
+    value, so genuine admin edits are never overwritten. Guarded by an audit
+    marker so it runs at most once.
+    """
+    if conn.execute('SELECT 1 FROM audit_log WHERE action=? LIMIT 1', (CONTACT_FIX_MARKER,)).fetchone():
+        return
+    cur = conn.execute('''UPDATE packaging_suppliers
+        SET cafe_contacts=?
+        WHERE store_id=? AND lower(name)=lower('Jaccus Trading') AND active=1
+          AND (COALESCE(cafe_contacts,'')='' OR cafe_contacts=?)''',
+        (SUBIACO_PACKAGING_CONTACT, SUBIACO_STORE_ID, MIRRABOOKA_PACKAGING_CONTACT))
+    conn.execute('''INSERT INTO audit_log(action, record_type, user_name, details)
+        VALUES (?, 'migration', 'system', ?)''',
+        (CONTACT_FIX_MARKER, f'Restored Subiaco Jaccus contact on {cur.rowcount or 0} row(s).'))
 
 
 def _seed_pastry(conn: sqlite3.Connection, wb) -> None:
@@ -378,6 +406,7 @@ def seed_subiaco_branch(db_path: str, workbook_path: str | None = None) -> None:
         exists = conn.execute('SELECT 1 FROM audit_log WHERE action=? LIMIT 1', (MARKER,)).fetchone()
         if exists:
             _sync_packaging_prices(conn)
+            _fix_subiaco_contact(conn)
             conn.commit()
             return
         wb = load_workbook(workbook_path, data_only=True)
@@ -388,6 +417,7 @@ def seed_subiaco_branch(db_path: str, workbook_path: str | None = None) -> None:
         _seed_prep(conn, wb)
         _seed_packaging(conn, wb)
         _sync_packaging_prices(conn)
+        _fix_subiaco_contact(conn)
         _seed_pastry(conn, wb)
         _seed_structure(conn, wb)
         _seed_email(conn)

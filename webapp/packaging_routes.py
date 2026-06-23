@@ -1,13 +1,10 @@
 """Packaging Order — supplier-aware order composer.
 
 Each supplier has a fixed item catalogue (codes, names, units) and contact
-details. The main page lets the staff member tick / set quantities, the
-"Compose" step builds a clean email body, and the action buttons either:
-
-* open a pre-filled Gmail compose window (https://mail.google.com/...),
-* fall back to a mailto: link, or
-* send through Brevo using the same API key already configured for
-  email notifications.
+details. The main page lets the staff member tick / set quantities, then the
+single "Review & Send Order" action shows the exact Word document content and,
+on confirmation, emails the supplier through Brevo with the .docx auto-attached
+(a hidden copy is BCC'd to the owner).
 
 Admin can edit supplier contact details, add / edit / delete catalogue
 items, and tweak default quantities directly from the same screen.
@@ -17,9 +14,9 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import re
 import sqlite3
-import urllib.parse
 from datetime import datetime, date
 from functools import wraps
 
@@ -150,6 +147,13 @@ JACCUS_PRICE_DATA = {
 }
 
 DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+
+# Every packaging order is silently copied here so the owner keeps a full record
+# of what each branch sends to the supplier (hidden from the supplier via BCC).
+OWNER_BCC_EMAIL = 'utle23.23@gmail.com'
+
+# MCQ Vietnamese Street Food logo, embedded at the top of the Word order.
+LOGO_PATH = os.path.join(os.path.dirname(__file__), 'static', 'logo.png')
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -301,8 +305,12 @@ def init_packaging(db_path: str):
         # Backfill the MCQ Mirrabooka delivery address where it's still blank.
         c.execute("UPDATE packaging_suppliers SET cafe_address=? WHERE COALESCE(cafe_address,'')=''",
                   (JACCUS_SUPPLIER_SEED['cafe_address'],))
+        # Only seed the Mirrabooka (store_id=1) contact. Other branches keep
+        # their own contact (e.g. Subiaco's Kenny Ho) instead of being clobbered
+        # with Mirrabooka's on every startup.
         c.execute(
-            "UPDATE packaging_suppliers SET cafe_contacts=? WHERE name=? AND active=1",
+            "UPDATE packaging_suppliers SET cafe_contacts=? "
+            "WHERE name=? AND active=1 AND store_id=1",
             (JACCUS_SUPPLIER_SEED['cafe_contacts'], JACCUS_SUPPLIER_SEED['name'])
         )
         for product_code, unit in PACKAGING_ITEM_UNIT_FIXES.items():
@@ -414,48 +422,28 @@ def _selected_order_items(sid: int) -> list[dict]:
 
 def _compose_order(supplier: dict, items_with_qty: list[dict],
                     delivery_date: str, extra_note: str = '') -> tuple[str, str]:
-    """Return a concise fallback email body.
+    """Return a short, professional email body.
 
-    The official order details live in the attached Word document. Keeping the
-    email body short avoids suppliers reading a stale/plain-text copy instead of
-    the structured attachment.
+    The official order details live in the attached Word document, so the email
+    body stays minimal — greeting, the attachment/delivery line, and where to
+    deliver. Every value is pulled from the supplier record, so editing the cafe
+    name/address updates both this email and the Word attachment.
     """
-    today_pretty = datetime.now().strftime('%d/%m/%Y')
     deliv_pretty = _format_delivery_date(delivery_date)
     subject = _order_subject(supplier, delivery_date)
-
-    total_units, total_money = _order_totals(items_with_qty)
-    line_count  = len(items_with_qty)
-    s = 's' if total_units != 1 else ''
-    ls = 's' if line_count != 1 else ''
 
     cafe_address = (supplier.get('cafe_address') or '').strip()
     parts = [
         f"Hello {supplier['name']},",
         "",
         f"Please see the attached Microsoft Word packaging order for delivery on {deliv_pretty}.",
-        f"Summary: {line_count} line{ls}, {total_units} unit{s}, total {_money(total_money)}.",
     ]
     if cafe_address:
-        parts.append(f"Deliver to: {_delivery_line(supplier)}")
+        parts += ["", f"Deliver to: {_delivery_line(supplier)}"]
 
     if extra_note.strip():
         parts += ["", "Note:", extra_note.strip()]
 
-    parts += [
-        "",
-        f"CC: {supplier.get('cc_emails') or '-'}",
-        "",
-        f"- {_brand_name(supplier)}",
-    ]
-    if cafe_address:
-        parts.append(cafe_address)
-    parts += [
-        "Contact:",
-        supplier.get('cafe_contacts') or '-',
-        "",
-        f"Order date: {today_pretty}",
-    ]
     return subject, '\n'.join(parts)
 
 
@@ -470,11 +458,14 @@ def _build_order_docx(supplier: dict, items_with_qty: list[dict],
     from docx.oxml.ns import qn
     from docx.shared import Inches, Pt, RGBColor
 
-    BLUE = RGBColor(46, 116, 181)
-    DARK = RGBColor(31, 77, 120)
-    MUTED = RGBColor(91, 101, 112)
-    HEADER_FILL = 'E8EEF5'
-    TOTAL_FILL = 'F4F6F9'
+    GREEN = RGBColor(0x3F, 0x8F, 0x3A)
+    DARK = RGBColor(0x2B, 0x2B, 0x2B)
+    MUTED = RGBColor(0x77, 0x82, 0x77)
+    ACCENT_HEX = '3F8F3A'
+    HEADER_FILL = 'E9F3E6'
+    STRIPE_FILL = 'F6F9F5'
+    LABEL_FILL = 'F2F4F6'
+    BORDER_HEX = 'D9E2D6'
 
     def set_font(run, size=10.5, bold=False, color=None):
         run.font.name = 'Calibri'
@@ -557,73 +548,136 @@ def _build_order_docx(supplier: dict, items_with_qty: list[dict],
             col.set(qn('w:w'), str(dxa))
             tbl_grid.append(col)
 
+    def set_table_borders(table, *, color=BORDER_HEX, sz=4, val='single'):
+        tbl_pr = table._tbl.tblPr
+        existing = tbl_pr.find(qn('w:tblBorders'))
+        if existing is not None:
+            tbl_pr.remove(existing)
+        borders = OxmlElement('w:tblBorders')
+        for edge in ('top', 'left', 'bottom', 'right', 'insideH', 'insideV'):
+            e = OxmlElement(f'w:{edge}')
+            e.set(qn('w:val'), val)
+            e.set(qn('w:sz'), str(sz))
+            e.set(qn('w:space'), '0')
+            e.set(qn('w:color'), color)
+            borders.append(e)
+        tbl_pr.append(borders)
+
+    def bottom_rule(paragraph, *, color=ACCENT_HEX, sz=12):
+        p_pr = paragraph._p.get_or_add_pPr()
+        pbdr = OxmlElement('w:pBdr')
+        bottom = OxmlElement('w:bottom')
+        bottom.set(qn('w:val'), 'single')
+        bottom.set(qn('w:sz'), str(sz))
+        bottom.set(qn('w:space'), '6')
+        bottom.set(qn('w:color'), color)
+        pbdr.append(bottom)
+        p_pr.append(pbdr)
+
     doc = Document()
     section = doc.sections[0]
     section.page_width = Inches(8.5)
     section.page_height = Inches(11)
-    for attr in ('top_margin', 'right_margin', 'bottom_margin', 'left_margin'):
-        setattr(section, attr, Inches(1))
-    section.header_distance = Inches(0.492)
-    section.footer_distance = Inches(0.492)
+    section.top_margin = Inches(0.7)
+    section.bottom_margin = Inches(0.7)
+    section.left_margin = Inches(0.85)
+    section.right_margin = Inches(0.85)
+    section.header_distance = Inches(0.4)
+    section.footer_distance = Inches(0.4)
 
     styles = doc.styles
     normal = styles['Normal']
     normal.font.name = 'Calibri'
-    normal.font.size = Pt(11)
-    normal.paragraph_format.space_after = Pt(6)
-    normal.paragraph_format.line_spacing = 1.25
+    normal.font.size = Pt(10.5)
+    normal.paragraph_format.space_after = Pt(4)
+    normal.paragraph_format.line_spacing = 1.15
 
-    header = section.header.paragraphs[0]
-    header.text = ''
-    header.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    hr = header.add_run(_brand_name(supplier))
-    set_font(hr, size=9, bold=True, color=MUTED)
-
+    # Footer — single, quiet line.
     footer = section.footer.paragraphs[0]
     footer.text = ''
-    footer.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    fr = footer.add_run('Packaging order generated by MCQ Food Safety App')
-    set_font(fr, size=8.5, color=MUTED)
+    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    fr = footer.add_run(f"{_brand_name(supplier)}  ·  Packaging order generated by the MCQ Food Safety App")
+    set_font(fr, size=8, color=MUTED)
 
+    # ── Letterhead: logo + brand name, with an accent divider underneath ──
+    banner = doc.add_table(rows=1, cols=2)
+    set_table_width(banner, [1.7, 4.8])
+    set_table_borders(banner, val='nil')
+    logo_cell = banner.rows[0].cells[0]
+    logo_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    set_cell_margins(logo_cell, top=0, bottom=0, start=0, end=0)
+    lp = logo_cell.paragraphs[0]
+    lp.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    try:
+        lp.add_run().add_picture(LOGO_PATH, width=Inches(1.4))
+    except Exception:
+        set_font(lp.add_run('MCQ'), size=20, bold=True, color=GREEN)
+
+    info_cell = banner.rows[0].cells[1]
+    info_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    set_cell_margins(info_cell)
+    bp = info_cell.paragraphs[0]
+    bp.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    bp.paragraph_format.space_after = Pt(0)
+    set_font(bp.add_run(_brand_name(supplier)), size=14, bold=True, color=GREEN)
+    tag = info_cell.add_paragraph()
+    tag.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    tag.paragraph_format.space_before = Pt(0)
+    set_font(tag.add_run('Vietnamese Street Food'), size=9, color=MUTED)
+
+    divider = doc.add_paragraph()
+    divider.paragraph_format.space_before = Pt(2)
+    divider.paragraph_format.space_after = Pt(10)
+    bottom_rule(divider)
+
+    # ── Title + delivery date ──
     title = doc.add_paragraph()
-    title.paragraph_format.space_after = Pt(3)
-    tr = title.add_run('PACKAGING ORDER')
-    set_font(tr, size=18, bold=True, color=DARK)
+    title.paragraph_format.space_after = Pt(1)
+    set_font(title.add_run('PACKAGING ORDER'), size=20, bold=True, color=DARK)
 
     subtitle = doc.add_paragraph()
-    subtitle.paragraph_format.space_after = Pt(12)
-    sr = subtitle.add_run(f"{supplier.get('name') or 'Supplier'} | Delivery {_format_delivery_date(delivery_date)}")
-    set_font(sr, size=10.5, bold=True, color=BLUE)
+    subtitle.paragraph_format.space_after = Pt(10)
+    set_font(subtitle.add_run(f"Delivery: {_format_delivery_date(delivery_date)}"),
+             size=11, bold=True, color=GREEN)
 
-    meta = doc.add_table(rows=4, cols=2)
-    set_table_width(meta, [1.35, 5.15])
+    # ── Order details (clean, borderless 2-column block) ──
     meta_rows = [
         ('Supplier', supplier.get('name') or ''),
         ('Deliver to', _delivery_line(supplier)),
         ('Contact', (supplier.get('cafe_contacts') or '').replace('\r\n', '\n')),
         ('Prepared by', composed_by or '-'),
+        ('Order date', datetime.now().strftime('%d/%m/%Y')),
     ]
+    meta = doc.add_table(rows=len(meta_rows), cols=2)
+    set_table_width(meta, [1.35, 5.15])
+    set_table_borders(meta, val='nil')
     for row, (label, value) in zip(meta.rows, meta_rows):
-        set_cell(row.cells[0], label, bold=True, size=9.2, color=DARK, fill=TOTAL_FILL)
-        set_cell(row.cells[1], value, size=9.2)
+        set_cell(row.cells[0], label, bold=True, size=9.5, color=GREEN, fill=LABEL_FILL)
+        set_cell(row.cells[1], value, size=9.5, color=DARK)
 
     doc.add_paragraph().paragraph_format.space_after = Pt(2)
 
+    # ── Line items ──
     table = doc.add_table(rows=1, cols=7)
     widths = [1.05, 2.0, 0.55, 0.68, 0.72, 0.75, 0.75]
     set_table_width(table, widths)
+    set_table_borders(table)
     headings = ['Product Code', 'Name (Vietnamese)', 'Qty', 'Unit', 'Measure', 'Unit Price', 'Line Total']
-    for cell, text in zip(table.rows[0].cells, headings):
-        set_cell(cell, text, bold=True, size=8.6, color=DARK,
-                 align=WD_ALIGN_PARAGRAPH.CENTER, fill=HEADER_FILL)
+    aligns = [
+        WD_ALIGN_PARAGRAPH.LEFT, WD_ALIGN_PARAGRAPH.LEFT,
+        WD_ALIGN_PARAGRAPH.CENTER, WD_ALIGN_PARAGRAPH.CENTER, WD_ALIGN_PARAGRAPH.CENTER,
+        WD_ALIGN_PARAGRAPH.RIGHT, WD_ALIGN_PARAGRAPH.RIGHT,
+    ]
+    for cell, text, align in zip(table.rows[0].cells, headings, aligns):
+        set_cell(cell, text, bold=True, size=8.8, color=DARK, align=align, fill=HEADER_FILL)
 
     total_money = 0.0
-    for it in items_with_qty:
+    for idx, it in enumerate(items_with_qty):
         qty = int(it.get('qty') or 0)
         unit_price = float(it.get('unit_price') or 0)
         line_total = qty * unit_price
         total_money += line_total
-        row = table.add_row().cells
+        stripe = STRIPE_FILL if idx % 2 else None
         values = [
             it.get('product_code') or '',
             it.get('name_vi') or it.get('name_en') or '',
@@ -633,71 +687,27 @@ def _build_order_docx(supplier: dict, items_with_qty: list[dict],
             _money(unit_price),
             _money(line_total),
         ]
-        aligns = [
-            WD_ALIGN_PARAGRAPH.LEFT,
-            WD_ALIGN_PARAGRAPH.LEFT,
-            WD_ALIGN_PARAGRAPH.CENTER,
-            WD_ALIGN_PARAGRAPH.CENTER,
-            WD_ALIGN_PARAGRAPH.CENTER,
-            WD_ALIGN_PARAGRAPH.RIGHT,
-            WD_ALIGN_PARAGRAPH.RIGHT,
-        ]
+        row = table.add_row().cells
         for cell, text, align in zip(row, values, aligns):
-            set_cell(cell, text, size=8.8, align=align)
+            set_cell(cell, text, size=9, color=DARK, align=align, fill=stripe)
 
-    total = doc.add_paragraph()
-    total.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    total.paragraph_format.space_before = Pt(10)
-    total.paragraph_format.space_after = Pt(2)
-    total_run = total.add_run(f"TOTAL ORDER VALUE: {_money(total_money)}")
-    set_font(total_run, size=12.5, bold=True, color=DARK)
+    # Total row inside the table so it lines up under Line Total.
+    total_row = table.add_row().cells
+    set_cell(total_row[0], 'TOTAL ORDER VALUE', bold=True, size=9.5, color=DARK, fill=HEADER_FILL)
+    for c in total_row[1:6]:
+        set_cell(c, '', fill=HEADER_FILL)
+    set_cell(total_row[6], _money(total_money), bold=True, size=10, color=GREEN,
+             align=WD_ALIGN_PARAGRAPH.RIGHT, fill=HEADER_FILL)
 
     if extra_note.strip():
         note = doc.add_paragraph()
-        note.paragraph_format.space_before = Pt(8)
-        nr = note.add_run('Note: ')
-        set_font(nr, size=9.5, bold=True, color=DARK)
-        vr = note.add_run(extra_note.strip())
-        set_font(vr, size=9.5)
-
-    generated = doc.add_paragraph()
-    generated.paragraph_format.space_before = Pt(8)
-    gr = generated.add_run(f"Order date: {datetime.now().strftime('%d/%m/%Y')}")
-    set_font(gr, size=8.8, color=MUTED)
+        note.paragraph_format.space_before = Pt(10)
+        set_font(note.add_run('Note: '), size=9.5, bold=True, color=GREEN)
+        set_font(note.add_run(extra_note.strip()), size=9.5, color=DARK)
 
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
-
-
-def _gmail_compose_url(to: str, subject: str, body: str, cc: str = '') -> str:
-    """Build a https://mail.google.com compose-window URL."""
-    qs = {
-        'view': 'cm', 'fs': '1', 'tf': '1',
-        'to': to or '',
-        'su': subject,
-        'body': body,
-    }
-    if cc:
-        qs['cc'] = cc
-    return 'https://mail.google.com/mail/?' + urllib.parse.urlencode(qs, quote_via=urllib.parse.quote)
-
-
-def _mailto_url(to: str, subject: str, body: str, cc: str = '') -> str:
-    qs = {'subject': subject, 'body': body}
-    if cc:
-        qs['cc'] = cc
-    return f'mailto:{urllib.parse.quote(to or "")}?' + urllib.parse.urlencode(qs, quote_via=urllib.parse.quote)
-
-
-def _gmail_app_url(to: str, subject: str, body: str, cc: str = '') -> str:
-    """Deep-link to the Gmail iOS / Android app: googlegmail:///co?…
-    On iOS this opens the Gmail app directly; on Android the same scheme is
-    also recognised when Gmail is installed."""
-    qs = {'to': to or '', 'subject': subject, 'body': body}
-    if cc:
-        qs['cc'] = cc
-    return 'googlegmail:///co?' + urllib.parse.urlencode(qs, quote_via=urllib.parse.quote)
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
@@ -747,8 +757,12 @@ def packaging_home():
 @packaging_bp.route('/compose', methods=['POST'])
 @_login_required
 def packaging_compose():
-    """Build email subject + body from posted quantities and return JSON.
-    Used by the page's JS to fill the preview textarea and the Gmail URL."""
+    """Build the order email + a structured preview of the Word document.
+
+    Returns the email envelope (to/cc/bcc/subject/body/attachment) plus the exact
+    contents of the .docx (meta + line items + total), so the page can show a
+    "Review & Send" panel that mirrors the attached Word document before sending.
+    """
     try:
         sid = int(request.form.get('supplier_id', 0))
     except ValueError:
@@ -759,6 +773,7 @@ def packaging_compose():
 
     delivery_date = request.form.get('delivery_date', '').strip()
     extra_note    = request.form.get('extra_note', '').strip()
+    composed_by   = request.form.get('composed_by', session.get('role', '')).strip()
 
     chosen = _selected_order_items(sid)
 
@@ -767,19 +782,45 @@ def packaging_compose():
 
     subject, body = _compose_order(supplier, chosen, delivery_date, extra_note)
     cc = supplier.get('cc_emails', '')
+    to = supplier['email']
+
+    items = []
+    for it in chosen:
+        qty = int(it.get('qty') or 0)
+        unit_price = float(it.get('unit_price') or 0)
+        items.append({
+            'product_code': it.get('product_code') or '',
+            'name':         it.get('name_vi') or it.get('name_en') or '',
+            'qty':          qty,
+            'unit':         it.get('unit') or '',
+            'unit_measure': it.get('unit_measure') or '',
+            'unit_price':   unit_price,
+            'line_total':   qty * unit_price,
+        })
+    total_qty, total_money = _order_totals(chosen)
+    bcc = OWNER_BCC_EMAIL if (OWNER_BCC_EMAIL and OWNER_BCC_EMAIL.lower() != (to or '').lower()) else ''
+
     return jsonify({
         'ok': True,
         'subject':       subject,
         'body':          body,
-        'gmail_url':     _gmail_compose_url(supplier['email'], subject, body, cc),
-        'gmail_app_url': _gmail_app_url   (supplier['email'], subject, body, cc),
-        'mailto':        _mailto_url      (supplier['email'], subject, body, cc),
-        'to':            supplier['email'],
+        'to':            to,
         'cc':            cc,
+        'bcc':           bcc,
         'docx_filename': _order_filename(supplier, delivery_date),
+        # Word document content, mirroring _build_order_docx
+        'brand':         _brand_name(supplier),
+        'supplier_name': supplier.get('name') or '',
+        'deliver_to':    _delivery_line(supplier),
+        'contact':       (supplier.get('cafe_contacts') or '').strip(),
+        'prepared_by':   composed_by or '-',
+        'delivery_pretty': _format_delivery_date(delivery_date),
+        'order_date':    datetime.now().strftime('%d/%m/%Y'),
+        'note':          extra_note.strip(),
+        'items':         items,
         'item_count':    len(chosen),
-        'total_qty':     sum(i['qty'] for i in chosen),
-        'total_money':   sum(i['qty'] * float(i.get('unit_price') or 0) for i in chosen),
+        'total_qty':     total_qty,
+        'total_money':   total_money,
     })
 
 
@@ -877,6 +918,9 @@ def packaging_send():
     }
     if cc_list:
         payload['cc'] = [{'email': e} for e in cc_list]
+    # Always BCC the owner so every order is archived without the supplier seeing it.
+    if OWNER_BCC_EMAIL and OWNER_BCC_EMAIL.lower() != to_email.lower():
+        payload['bcc'] = [{'email': OWNER_BCC_EMAIL}]
 
     ok, msg = email_service._brevo_post(payload, settings['brevo_api_key'])
 
