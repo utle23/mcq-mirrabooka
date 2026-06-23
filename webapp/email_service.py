@@ -576,6 +576,25 @@ def _log(event_type: str, subject: str, recipients: list[str], status: str,
         pass
 
 
+def _ssl_context() -> ssl.SSLContext:
+    """Verified TLS context, with a certifi fallback.
+
+    Some Python installs (notably python.org builds on macOS) ship without a
+    populated system trust store, which makes every HTTPS call fail with
+    CERTIFICATE_VERIFY_FAILED. When that happens we load certifi's CA bundle so
+    sending still works — certificates are still fully verified, just against a
+    known-good bundle instead of the empty system store.
+    """
+    ctx = ssl.create_default_context()
+    try:
+        if not ctx.get_ca_certs():
+            import certifi
+            ctx.load_verify_locations(cafile=certifi.where())
+    except Exception:
+        pass
+    return ctx
+
+
 def _brevo_post(payload: dict, api_key: str, timeout: int = 30) -> tuple[bool, str]:
     """POST one transactional email to Brevo. Returns (ok, message)."""
     body = json.dumps(payload).encode('utf-8')
@@ -589,7 +608,7 @@ def _brevo_post(payload: dict, api_key: str, timeout: int = 30) -> tuple[bool, s
             'api-key': api_key,
         },
     )
-    ctx = ssl.create_default_context()
+    ctx = _ssl_context()
     try:
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             data = resp.read().decode('utf-8', 'replace')
