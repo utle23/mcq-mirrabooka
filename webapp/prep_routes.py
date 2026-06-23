@@ -173,7 +173,8 @@ def init_prep_tables(db_path, staff_list):
                 instruction_en   TEXT,
                 instruction_vi   TEXT,
                 active           INTEGER DEFAULT 1,
-                sort_order       INTEGER DEFAULT 0
+                sort_order       INTEGER DEFAULT 0,
+                store_id         INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS prep_weekly_tasks (
                 id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -241,13 +242,17 @@ def init_prep_tables(db_path, staff_list):
             conn.execute('ALTER TABLE prep_daily_status ADD COLUMN is_faved INTEGER DEFAULT 0')
         except Exception:
             pass
+        try:
+            conn.execute('ALTER TABLE prep_task_templates ADD COLUMN store_id INTEGER NOT NULL DEFAULT 1')
+        except Exception:
+            pass
 
         if conn.execute('SELECT COUNT(*) as c FROM prep_task_templates').fetchone()['c'] == 0:
             for i, t in enumerate(PREP_TASKS_SEED):
                 conn.execute('''INSERT INTO prep_task_templates
                     (station_id,task_name_en,task_name_vi,default_time,active_days,
-                     default_assignee,is_supplier,supplier_name,sort_order)
-                    VALUES (?,?,?,?,?,?,?,?,?)''',
+                     default_assignee,is_supplier,supplier_name,sort_order,store_id)
+                    VALUES (?,?,?,?,?,?,?,?,?,1)''',
                     (t[0],t[1],t[2],t[3],t[4],t[5],t[6],t[7],i))
 
         # Seed prep_stations from the legacy hardcoded list on first init so
@@ -294,7 +299,8 @@ def _build_schedule(week_start_str, conn):
     if conn.execute('SELECT COUNT(*) as c FROM prep_weekly_tasks WHERE schedule_id=?', (sid,)).fetchone()['c']:
         return sid
     for i, t in enumerate(conn.execute(
-            'SELECT * FROM prep_task_templates WHERE active=1 ORDER BY station_id,sort_order').fetchall()):
+            'SELECT * FROM prep_task_templates WHERE active=1 AND store_id=? ORDER BY station_id,sort_order',
+            (store_id,)).fetchall()):
         cur = conn.execute('''INSERT INTO prep_weekly_tasks
             (schedule_id,template_id,task_name_en,task_name_vi,station_id,
              scheduled_time,assigned_to,active_days,is_supplier,supplier_name,sort_order,store_id)
@@ -333,9 +339,9 @@ def _sync_week_from_templates(week_start_str, conn):
     schedule_id = sched['id']
     templates = [dict(r) for r in conn.execute('''
         SELECT * FROM prep_task_templates
-        WHERE active=1
+        WHERE active=1 AND store_id=?
         ORDER BY station_id, sort_order, id
-    ''').fetchall()]
+    ''', (current_store_id(),)).fetchall()]
     existing = {
         r['template_id']: dict(r)
         for r in conn.execute(
@@ -617,12 +623,12 @@ def weekly_add_template(week_start):
         next_order = conn.execute('''
             SELECT COALESCE(MAX(sort_order), -1) + 1
             FROM prep_task_templates
-            WHERE station_id=?
-        ''', (station_id,)).fetchone()[0]
+            WHERE station_id=? AND store_id=?
+        ''', (station_id, current_store_id())).fetchone()[0]
         conn.execute('''INSERT INTO prep_task_templates
             (task_name_en,task_name_vi,station_id,default_time,active_days,
-             default_assignee,is_supplier,supplier_name,sort_order,active)
-            VALUES (?,?,?,?,?,?,?,?,?,1)''',
+             default_assignee,is_supplier,supplier_name,sort_order,active,store_id)
+            VALUES (?,?,?,?,?,?,?,?,?,1,?)''',
             (request.form.get('task_name_en','').strip(),
              request.form.get('task_name_vi','').strip(),
              station_id,
@@ -631,7 +637,7 @@ def weekly_add_template(week_start):
              request.form.get('default_assignee','').strip(),
              is_supplier,
              request.form.get('supplier_name','').strip() if is_supplier else '',
-             next_order))
+             next_order, current_store_id()))
         _ensure_schedule(week_start, conn)
         stats = _sync_all_unlocked_weeks_from_templates(conn)
     return redirect(url_for('prep.prep_weekly_view',
@@ -658,12 +664,12 @@ def weekly_edit_task_template(task_id):
         if not template_id:
             next_order = conn.execute('''
                 SELECT COALESCE(MAX(sort_order), -1) + 1
-                FROM prep_task_templates WHERE station_id=?
-            ''', (station_id,)).fetchone()[0]
+                FROM prep_task_templates WHERE station_id=? AND store_id=?
+            ''', (station_id, current_store_id())).fetchone()[0]
             cur = conn.execute('''INSERT INTO prep_task_templates
                 (task_name_en,task_name_vi,station_id,default_time,active_days,
-                 default_assignee,is_supplier,supplier_name,sort_order,active)
-                VALUES (?,?,?,?,?,?,?,?,?,1)''',
+                 default_assignee,is_supplier,supplier_name,sort_order,active,store_id)
+                VALUES (?,?,?,?,?,?,?,?,?,1,?)''',
                 (request.form.get('task_name_en','').strip(),
                  request.form.get('task_name_vi','').strip(),
                  station_id,
@@ -672,14 +678,14 @@ def weekly_edit_task_template(task_id):
                  request.form.get('default_assignee','').strip(),
                  is_supplier,
                  request.form.get('supplier_name','').strip() if is_supplier else '',
-                 next_order))
+                 next_order, current_store_id()))
             template_id = cur.lastrowid
             conn.execute('UPDATE prep_weekly_tasks SET template_id=? WHERE id=?', (template_id, task_id))
         else:
             conn.execute('''UPDATE prep_task_templates
                 SET task_name_en=?, task_name_vi=?, station_id=?, default_time=?,
                     active_days=?, default_assignee=?, is_supplier=?, supplier_name=?, active=1
-                WHERE id=?''',
+                WHERE id=? AND store_id=?''',
                 (request.form.get('task_name_en','').strip(),
                  request.form.get('task_name_vi','').strip(),
                  station_id,
@@ -688,7 +694,7 @@ def weekly_edit_task_template(task_id):
                  request.form.get('default_assignee','').strip(),
                  is_supplier,
                  request.form.get('supplier_name','').strip() if is_supplier else '',
-                 template_id))
+                 template_id, current_store_id()))
         stats = _sync_all_unlocked_weeks_from_templates(conn)
         week_start = task['week_start']
     return redirect(url_for('prep.prep_weekly_view',
@@ -709,7 +715,8 @@ def weekly_archive_task_template(task_id):
         if not task:
             return redirect(url_for('prep.prep_weekly_view', week_start=get_week_start().isoformat()))
         if task['template_id']:
-            conn.execute('UPDATE prep_task_templates SET active=0 WHERE id=?', (task['template_id'],))
+            conn.execute('UPDATE prep_task_templates SET active=0 WHERE id=? AND store_id=?',
+                         (task['template_id'], current_store_id()))
             stats = _sync_all_unlocked_weeks_from_templates(conn)
         else:
             conn.execute('DELETE FROM prep_weekly_tasks WHERE id=?', (task_id,))
@@ -768,8 +775,8 @@ def weekly_bulk_delete_tasks(week_start):
         if template_ids:
             tpl_placeholders = ','.join('?' for _ in template_ids)
             conn.execute(
-                f'UPDATE prep_task_templates SET active=0 WHERE id IN ({tpl_placeholders})',
-                template_ids)
+                f'UPDATE prep_task_templates SET active=0 WHERE id IN ({tpl_placeholders}) AND store_id=?',
+                template_ids + [current_store_id()])
         if loose_ids:
             loose_placeholders = ','.join('?' for _ in loose_ids)
             conn.execute(
@@ -1249,7 +1256,8 @@ def update_task_time(task_id):
         if update_type=='all':
             row = conn.execute('SELECT template_id FROM prep_weekly_tasks WHERE id=?',(task_id,)).fetchone()
             if row and row['template_id']:
-                conn.execute('UPDATE prep_task_templates SET default_time=? WHERE id=?',(new_time,row['template_id']))
+                conn.execute('UPDATE prep_task_templates SET default_time=? WHERE id=? AND store_id=?',
+                             (new_time,row['template_id'], current_store_id()))
     return jsonify({'ok':True,'fmt_time':fmt_time(new_time)})
 
 @prep.route('/weekly-task/<int:task_id>/assign', methods=['POST'])
@@ -1265,7 +1273,8 @@ def assign_task(task_id):
 def prep_templates_view():
     with _get_db() as conn:
         templates = [dict(r) for r in conn.execute(
-            'SELECT * FROM prep_task_templates ORDER BY station_id,sort_order').fetchall()]
+            'SELECT * FROM prep_task_templates WHERE store_id=? ORDER BY station_id,sort_order',
+            (current_store_id(),)).fetchall()]
     for t in templates:
         t['station'] = STATIONS_MAP.get(t['station_id'],{})
     return render_template('prep_templates.html',
@@ -1279,12 +1288,13 @@ def add_template():
     with _get_db() as conn:
         conn.execute('''INSERT INTO prep_task_templates
             (task_name_en,task_name_vi,station_id,default_time,active_days,
-             default_assignee,is_supplier,supplier_name,sort_order)
-            VALUES (?,?,?,?,?,?,?,?,999)''',
+             default_assignee,is_supplier,supplier_name,sort_order,store_id)
+            VALUES (?,?,?,?,?,?,?,?,999,?)''',
             (request.form.get('task_name_en',''), request.form.get('task_name_vi',''),
              int(request.form.get('station_id',1)), request.form.get('default_time',''),
              active_days, request.form.get('default_assignee',''),
-             1 if request.form.get('is_supplier') else 0, request.form.get('supplier_name','')))
+             1 if request.form.get('is_supplier') else 0, request.form.get('supplier_name',''),
+             current_store_id()))
     return redirect(url_for('prep.prep_templates_view'))
 
 # ── Stations CRUD ─────────────────────────────────────────────────────────────
@@ -1351,8 +1361,8 @@ def edit_station(sid):
 def delete_station(sid):
     with _get_db() as conn:
         task_count = conn.execute(
-            'SELECT COUNT(*) as c FROM prep_task_templates WHERE station_id=?',
-            (sid,)).fetchone()['c']
+            'SELECT COUNT(*) as c FROM prep_task_templates WHERE station_id=? AND store_id=?',
+            (sid, current_store_id())).fetchone()['c']
         if task_count > 0:
             return jsonify({
                 'error': f'Cannot delete: this section still has {task_count} task(s). '
@@ -1375,11 +1385,11 @@ def edit_template(tid):
     with _get_db() as conn:
         conn.execute('''UPDATE prep_task_templates SET
             task_name_en=?,task_name_vi=?,station_id=?,default_time=?,active_days=?,
-            default_assignee=?,is_supplier=?,supplier_name=? WHERE id=?''',
+            default_assignee=?,is_supplier=?,supplier_name=? WHERE id=? AND store_id=?''',
             (request.form.get('task_name_en',''), request.form.get('task_name_vi',''),
              int(request.form.get('station_id',1)), request.form.get('default_time',''),
              active_days, request.form.get('default_assignee',''),
-             is_supplier, request.form.get('supplier_name',''), tid))
+             is_supplier, request.form.get('supplier_name',''), tid, current_store_id()))
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return jsonify({'ok': True})
     return redirect(url_for('prep.prep_templates_view'))
@@ -1389,7 +1399,8 @@ def edit_template(tid):
 @_admin_required
 def delete_template(tid):
     with _get_db() as conn:
-        conn.execute('DELETE FROM prep_task_templates WHERE id=?', (tid,))
+        conn.execute('DELETE FROM prep_task_templates WHERE id=? AND store_id=?',
+                     (tid, current_store_id()))
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return jsonify({'ok': True})
     return redirect(url_for('prep.prep_templates_view'))
@@ -1398,9 +1409,11 @@ def delete_template(tid):
 @_admin_required
 def toggle_template(tid):
     with _get_db() as conn:
-        row = conn.execute('SELECT active FROM prep_task_templates WHERE id=?',(tid,)).fetchone()
+        row = conn.execute('SELECT active FROM prep_task_templates WHERE id=? AND store_id=?',
+                           (tid, current_store_id())).fetchone()
         if row:
-            conn.execute('UPDATE prep_task_templates SET active=? WHERE id=?',(0 if row['active'] else 1,tid))
+            conn.execute('UPDATE prep_task_templates SET active=? WHERE id=? AND store_id=?',
+                         (0 if row['active'] else 1,tid,current_store_id()))
     return redirect(url_for('prep.prep_templates_view'))
 
 @prep.route('/suppliers')

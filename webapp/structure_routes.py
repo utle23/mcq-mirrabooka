@@ -15,6 +15,7 @@ from io import BytesIO
 
 from flask import (Blueprint, abort, flash, redirect, render_template, request,
                    send_file, send_from_directory, session, url_for)
+from store_scope import current_store_id as _session_store_id
 
 structure = Blueprint('structure', __name__, url_prefix='/structure')
 DB_PATH = None
@@ -23,6 +24,13 @@ UPLOAD_DIR = None
 CURRENT_BASENAME = 'staff_structure_current'
 IMG_EXTS = {'png', 'jpg', 'jpeg', 'webp', 'gif'}
 ALLOWED = IMG_EXTS | {'pdf'}
+
+
+def _store_id():
+    try:
+        return int(_session_store_id() or 1)
+    except Exception:
+        return 1
 
 DEFAULT_DEPARTMENTS = [
     ('DRINK',        '#2F83C2', 'Phúc',   'LEAD',
@@ -92,14 +100,15 @@ def _actor():
 
 
 def _get_meta(conn, key, default=None):
-    row = conn.execute('SELECT value FROM structure_meta WHERE key=?', (key,)).fetchone()
+    row = conn.execute('SELECT value FROM structure_meta WHERE key=? AND store_id=?',
+                       (key, _store_id())).fetchone()
     return row['value'] if row else default
 
 
 def _set_meta(conn, key, value):
-    conn.execute('''INSERT INTO structure_meta(key, value) VALUES(?,?)
-                    ON CONFLICT(key) DO UPDATE SET value=excluded.value''',
-                 (key, str(value)))
+    conn.execute('''INSERT INTO structure_meta(key, value, store_id) VALUES(?,?,?)
+                    ON CONFLICT(key, store_id) DO UPDATE SET value=excluded.value''',
+                 (key, str(value), _store_id()))
 
 
 def _touch(conn, actor=None):
@@ -132,9 +141,9 @@ def _live_chart(conn):
     }
     departments = [dict(r) for r in conn.execute('''
         SELECT * FROM structure_departments
-        WHERE active=1
+        WHERE active=1 AND store_id=?
         ORDER BY sort_order, id
-    ''').fetchall()]
+    ''', (_store_id(),)).fetchall()]
     for dept in departments:
         dept['members'] = [dict(r) for r in conn.execute('''
             SELECT * FROM structure_members
@@ -147,14 +156,15 @@ def _live_chart(conn):
 def _staff_options(conn):
     try:
         return [r['name'] for r in conn.execute('''
-            SELECT name FROM staff_members WHERE active=1 ORDER BY name
-        ''').fetchall()]
+            SELECT name FROM staff_members WHERE active=1 AND store_id=? ORDER BY name
+        ''', (_store_id(),)).fetchall()]
     except Exception:
         return []
 
 
 def _seed_live_structure(conn):
-    count = conn.execute('SELECT COUNT(*) AS c FROM structure_departments').fetchone()['c']
+    count = conn.execute('SELECT COUNT(*) AS c FROM structure_departments WHERE store_id=?',
+                         (_store_id(),)).fetchone()['c']
     if count:
         return
     _set_meta(conn, 'manager_name', 'Phụng')
@@ -162,16 +172,16 @@ def _seed_live_structure(conn):
     for i, (name, color, lead_name, lead_badge, members) in enumerate(DEFAULT_DEPARTMENTS):
         cur = conn.execute('''
             INSERT INTO structure_departments
-                (name, color, lead_name, lead_badge, sort_order, active)
-            VALUES (?,?,?,?,?,1)
-        ''', (name, color, lead_name, lead_badge, i))
+                (name, color, lead_name, lead_badge, sort_order, active, store_id)
+            VALUES (?,?,?,?,?,1,?)
+        ''', (name, color, lead_name, lead_badge, i, _store_id()))
         dept_id = cur.lastrowid
         for j, (level_label, staff_name) in enumerate(members):
             conn.execute('''
                 INSERT INTO structure_members
-                    (department_id, level_label, staff_name, sort_order, active)
-                VALUES (?,?,?,?,1)
-            ''', (dept_id, level_label, staff_name, j))
+                    (department_id, level_label, staff_name, sort_order, active, store_id)
+                VALUES (?,?,?,?,1,?)
+            ''', (dept_id, level_label, staff_name, j, _store_id()))
     _touch(conn, 'seed')
 
 
@@ -191,14 +201,14 @@ def _upgrade_seed_names(conn):
         cur = conn.execute('''
             UPDATE structure_departments
             SET lead_name=?
-            WHERE lead_name=?
-        ''', (new_name, old_name))
+            WHERE lead_name=? AND store_id=?
+        ''', (new_name, old_name, _store_id()))
         changed = changed or cur.rowcount > 0
         cur = conn.execute('''
             UPDATE structure_members
             SET staff_name=?
-            WHERE staff_name=?
-        ''', (new_name, old_name))
+            WHERE staff_name=? AND store_id=?
+        ''', (new_name, old_name, _store_id()))
         changed = changed or cur.rowcount > 0
 
     if changed:
@@ -210,8 +220,8 @@ def _upgrade_seed_names(conn):
 def _active_department_exists(conn, dept_id):
     row = conn.execute('''
         SELECT 1 FROM structure_departments
-        WHERE id=? AND active=1
-    ''', (dept_id,)).fetchone()
+        WHERE id=? AND active=1 AND store_id=?
+    ''', (dept_id, _store_id())).fetchone()
     return bool(row)
 
 
@@ -239,6 +249,36 @@ def _write_member_order(conn, ids):
                      (i, member_id))
 
 
+def _ensure_store_schema(conn):
+    for tbl in ('structure_departments', 'structure_members'):
+        try:
+            conn.execute(f'ALTER TABLE {tbl} ADD COLUMN store_id INTEGER NOT NULL DEFAULT 1')
+        except sqlite3.OperationalError:
+            pass
+
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='structure_meta'"
+    ).fetchone()
+    if not row or not row[0]:
+        return
+    norm = row[0].replace(' ', '').replace('\n', '')
+    if 'PRIMARYKEY(key,store_id)' in norm:
+        return
+    cols = [r['name'] for r in conn.execute('PRAGMA table_info(structure_meta)').fetchall()]
+    store_expr = 'COALESCE(store_id, 1)' if 'store_id' in cols else '1'
+    conn.execute('DROP TABLE IF EXISTS structure_meta__mig')
+    conn.execute('''CREATE TABLE structure_meta__mig (
+        key TEXT NOT NULL,
+        value TEXT,
+        store_id INTEGER NOT NULL DEFAULT 1,
+        PRIMARY KEY (key, store_id)
+    )''')
+    conn.execute(f'''INSERT OR REPLACE INTO structure_meta__mig (key, value, store_id)
+        SELECT key, value, {store_expr} FROM structure_meta''')
+    conn.execute('DROP TABLE structure_meta')
+    conn.execute('ALTER TABLE structure_meta__mig RENAME TO structure_meta')
+
+
 # ── Init ─────────────────────────────────────────────────────────────────────
 
 def init_structure_tables(db_path, upload_dir):
@@ -247,7 +287,8 @@ def init_structure_tables(db_path, upload_dir):
     UPLOAD_DIR = upload_dir
     with _get_db() as conn:
         conn.execute('''CREATE TABLE IF NOT EXISTS structure_meta (
-            key TEXT PRIMARY KEY, value TEXT)''')
+            key TEXT NOT NULL, value TEXT, store_id INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (key, store_id))''')
         conn.execute('''CREATE TABLE IF NOT EXISTS structure_departments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -255,7 +296,8 @@ def init_structure_tables(db_path, upload_dir):
             lead_name TEXT NOT NULL DEFAULT '',
             lead_badge TEXT NOT NULL DEFAULT 'LEAD',
             sort_order INTEGER NOT NULL DEFAULT 0,
-            active INTEGER NOT NULL DEFAULT 1
+            active INTEGER NOT NULL DEFAULT 1,
+            store_id INTEGER NOT NULL DEFAULT 1
         )''')
         conn.execute('''CREATE TABLE IF NOT EXISTS structure_members (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -263,8 +305,10 @@ def init_structure_tables(db_path, upload_dir):
             level_label TEXT NOT NULL DEFAULT '',
             staff_name TEXT NOT NULL DEFAULT '',
             sort_order INTEGER NOT NULL DEFAULT 0,
-            active INTEGER NOT NULL DEFAULT 1
+            active INTEGER NOT NULL DEFAULT 1,
+            store_id INTEGER NOT NULL DEFAULT 1
         )''')
+        _ensure_store_schema(conn)
         _seed_live_structure(conn)
         _upgrade_seed_names(conn)
 
@@ -569,12 +613,12 @@ def department_add():
     lead_badge = request.form.get('lead_badge', '').strip().upper() or 'LEAD'
     with _get_db() as conn:
         sort_order = conn.execute(
-            'SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM structure_departments'
-        ).fetchone()['n']
+            'SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM structure_departments WHERE store_id=?',
+            (_store_id(),)).fetchone()['n']
         conn.execute('''INSERT INTO structure_departments
-            (name, color, lead_name, lead_badge, sort_order, active)
-            VALUES (?,?,?,?,?,1)''',
-            (name, color, lead_name, lead_badge, sort_order))
+            (name, color, lead_name, lead_badge, sort_order, active, store_id)
+            VALUES (?,?,?,?,?,1,?)''',
+            (name, color, lead_name, lead_badge, sort_order, _store_id()))
         _touch(conn)
     flash('Department added.', 'success')
     return redirect(url_for('structure.view'))
@@ -590,11 +634,11 @@ def department_update(dept_id):
     with _get_db() as conn:
         conn.execute('''UPDATE structure_departments
             SET name=?, color=?, lead_name=?, lead_badge=?
-            WHERE id=?''',
+            WHERE id=? AND store_id=?''',
             (name, _normalize_color(request.form.get('color'), '#1A3A5C'),
              request.form.get('lead_name', '').strip(),
              request.form.get('lead_badge', '').strip().upper() or 'LEAD',
-             dept_id))
+             dept_id, _store_id()))
         _touch(conn)
     flash('Department updated.', 'success')
     return redirect(url_for('structure.view'))
@@ -604,7 +648,8 @@ def department_update(dept_id):
 @_admin_required
 def department_delete(dept_id):
     with _get_db() as conn:
-        conn.execute('UPDATE structure_departments SET active=0 WHERE id=?', (dept_id,))
+        conn.execute('UPDATE structure_departments SET active=0 WHERE id=? AND store_id=?',
+                     (dept_id, _store_id()))
         _touch(conn)
     flash('Department removed from live chart.', 'success')
     return redirect(url_for('structure.view'))
@@ -618,9 +663,9 @@ def department_move(dept_id, direction):
     with _get_db() as conn:
         ids = [r['id'] for r in conn.execute('''
             SELECT id FROM structure_departments
-            WHERE active=1
+            WHERE active=1 AND store_id=?
             ORDER BY sort_order, id
-        ''').fetchall()]
+        ''', (_store_id(),)).fetchall()]
         ids, changed = _move_id(ids, dept_id, direction)
         if changed:
             _write_department_order(conn, ids)
@@ -649,8 +694,8 @@ def member_add():
             FROM structure_members WHERE department_id=?
         ''', (dept_id,)).fetchone()['n']
         conn.execute('''INSERT INTO structure_members
-            (department_id, level_label, staff_name, sort_order, active)
-            VALUES (?,?,?,?,1)''', (dept_id, level_label, staff_name, sort_order))
+            (department_id, level_label, staff_name, sort_order, active, store_id)
+            VALUES (?,?,?,?,1,?)''', (dept_id, level_label, staff_name, sort_order, _store_id()))
         _touch(conn)
     flash('Level/staff row added.', 'success')
     return redirect(url_for('structure.view'))
@@ -670,8 +715,8 @@ def member_update(member_id):
     with _get_db() as conn:
         current = conn.execute('''
             SELECT department_id FROM structure_members
-            WHERE id=? AND active=1
-        ''', (member_id,)).fetchone()
+            WHERE id=? AND active=1 AND store_id=?
+        ''', (member_id, _store_id())).fetchone()
         if not current:
             flash('Level/staff row was not found.', 'warning')
             return redirect(url_for('structure.view'))
@@ -682,16 +727,16 @@ def member_update(member_id):
         if dept_id == current['department_id']:
             conn.execute('''UPDATE structure_members
                 SET level_label=?, staff_name=?
-                WHERE id=?''', (level_label, staff_name, member_id))
+                WHERE id=? AND store_id=?''', (level_label, staff_name, member_id, _store_id()))
         else:
             sort_order = conn.execute('''
                 SELECT COALESCE(MAX(sort_order), -1) + 1 AS n
-                FROM structure_members WHERE department_id=? AND active=1
-            ''', (dept_id,)).fetchone()['n']
+                FROM structure_members WHERE department_id=? AND active=1 AND store_id=?
+            ''', (dept_id, _store_id())).fetchone()['n']
             conn.execute('''UPDATE structure_members
                 SET department_id=?, level_label=?, staff_name=?, sort_order=?
-                WHERE id=?''',
-                (dept_id, level_label, staff_name, sort_order, member_id))
+                WHERE id=? AND store_id=?''',
+                (dept_id, level_label, staff_name, sort_order, member_id, _store_id()))
         _touch(conn)
     flash('Level/staff row updated.', 'success')
     return redirect(url_for('structure.view'))
@@ -701,7 +746,8 @@ def member_update(member_id):
 @_admin_required
 def member_delete(member_id):
     with _get_db() as conn:
-        conn.execute('UPDATE structure_members SET active=0 WHERE id=?', (member_id,))
+        conn.execute('UPDATE structure_members SET active=0 WHERE id=? AND store_id=?',
+                     (member_id, _store_id()))
         _touch(conn)
     flash('Level/staff row removed.', 'success')
     return redirect(url_for('structure.view'))
@@ -715,14 +761,14 @@ def member_move(member_id, direction):
     with _get_db() as conn:
         row = conn.execute('''
             SELECT department_id FROM structure_members
-            WHERE id=? AND active=1
-        ''', (member_id,)).fetchone()
+            WHERE id=? AND active=1 AND store_id=?
+        ''', (member_id, _store_id())).fetchone()
         if row:
             ids = [r['id'] for r in conn.execute('''
                 SELECT id FROM structure_members
-                WHERE department_id=? AND active=1
+                WHERE department_id=? AND active=1 AND store_id=?
                 ORDER BY sort_order, id
-            ''', (row['department_id'],)).fetchall()]
+            ''', (row['department_id'], _store_id())).fetchall()]
             ids, changed = _move_id(ids, member_id, direction)
             if changed:
                 _write_member_order(conn, ids)

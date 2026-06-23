@@ -626,6 +626,38 @@ document.addEventListener('DOMContentLoaded', _updateInstallBtnVisibility);
   });
 })();
 </script>
+<!-- ── Light unsaved-change guard: warn only after a form has been touched ── -->
+<script>
+(function () {
+  let dirty = false;
+  let submitting = false;
+
+  function eligible(form) {
+    if (!form) return false;
+    if ((form.getAttribute('method') || 'get').toLowerCase() !== 'post') return false;
+    if (form.hasAttribute('data-no-unsaved-warning') || form.hasAttribute('data-no-autosave')) return false;
+    return true;
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('form').forEach(form => {
+      if (!eligible(form)) return;
+      form.addEventListener('input', () => { dirty = true; });
+      form.addEventListener('change', () => { dirty = true; });
+      form.addEventListener('submit', () => {
+        submitting = true;
+        dirty = false;
+      });
+    });
+  });
+
+  window.addEventListener('beforeunload', function (e) {
+    if (!dirty || submitting) return;
+    e.preventDefault();
+    e.returnValue = '';
+  });
+})();
+</script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -14,13 +14,17 @@ items, and tweak default quantities directly from the same screen.
 """
 from __future__ import annotations
 
+import base64
+import io
+import json
+import re
 import sqlite3
 import urllib.parse
 from datetime import datetime, date
 from functools import wraps
 
 from flask import (Blueprint, render_template, request, redirect, url_for,
-                   session, jsonify)
+                   session, jsonify, send_file)
 
 from store_scope import current_store_id, store_filter_clause
 
@@ -130,7 +134,22 @@ JACCUS_PRICE_DATA = {
     'BioC-96D(N)': ('1000', 94.90),
     'LWGP33x40': ('800', 19.90),
     'Blitz5': ('5lt', 22.90),
+    'PB#16': ('250', 36.90),
+    'WipesBlu (Ea)': ('1 Roll', 11.90),
+    'BL120/35': ('100', 23.90),
+    'BL120/35 (100)': ('100', 23.90),
+    'BL240/35': ('100', 54.90),
+    'RT80': ('16 Roll', 49.90),
+    'Bleach5': ('5lt', 12.90),
+    'JetDryPlus15': ('15lt', 79.90),
+    'JetKlean20': ('20lt', 89.90),
+    'Sanitiser5': ('5lt', 26.90),
+    'Surplus5': ('5lt', 16.90),
+    'Bake40/120 (Ea)': ('Each', 26.90),
+    '4CupPulp (300)': ('300', 60.90),
 }
+
+DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -156,44 +175,50 @@ def _float_form(value, default=0.0):
 
 
 def _sync_jaccus_catalog_prices(c):
+    # Keep the original Mirrabooka seed catalogue complete, but apply price data
+    # to every branch's Jaccus catalogue by product code.
     supplier = c.execute(
-        "SELECT id FROM packaging_suppliers WHERE name=? AND active=1 ORDER BY id LIMIT 1",
+        "SELECT id FROM packaging_suppliers WHERE name=? AND active=1 AND store_id=1 ORDER BY id LIMIT 1",
         (JACCUS_SUPPLIER_SEED['name'],)
     ).fetchone()
-    if not supplier:
-        return
-    sid = supplier['id']
-    existing_codes = {
-        r['product_code']
-        for r in c.execute(
-            "SELECT product_code FROM packaging_items WHERE supplier_id=? AND active=1",
+    if supplier:
+        sid = supplier['id']
+        existing_codes = {
+            r['product_code']
+            for r in c.execute(
+                "SELECT product_code FROM packaging_items WHERE supplier_id=? AND active=1",
+                (sid,)
+            ).fetchall()
+        }
+        next_sort = c.execute(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM packaging_items WHERE supplier_id=?",
             (sid,)
-        ).fetchall()
-    }
-    next_sort = c.execute(
-        "SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM packaging_items WHERE supplier_id=?",
-        (sid,)
-    ).fetchone()['n']
+        ).fetchone()['n']
 
-    for code, en, vi, unit, qty in JACCUS_ITEMS_SEED:
-        if code in existing_codes:
-            continue
-        c.execute(
-            '''INSERT INTO packaging_items
-               (supplier_id, product_code, name_en, name_vi, unit, default_qty, sort_order)
-               VALUES (?,?,?,?,?,?,?)''',
-            (sid, code, en, vi, unit, qty, next_sort)
-        )
-        existing_codes.add(code)
-        next_sort += 1
+        for code, en, vi, unit, qty in JACCUS_ITEMS_SEED:
+            if code in existing_codes:
+                continue
+            c.execute(
+                '''INSERT INTO packaging_items
+                   (supplier_id, product_code, name_en, name_vi, unit, default_qty, sort_order)
+                   VALUES (?,?,?,?,?,?,?)''',
+                (sid, code, en, vi, unit, qty, next_sort)
+            )
+            existing_codes.add(code)
+            next_sort += 1
 
-    for product_code, (unit_measure, unit_price) in JACCUS_PRICE_DATA.items():
-        c.execute(
-            '''UPDATE packaging_items
-               SET unit_measure=?, unit_price=?
-               WHERE supplier_id=? AND product_code=? AND active=1''',
-            (unit_measure, unit_price, sid, product_code)
-        )
+    for supplier_row in c.execute(
+        "SELECT id FROM packaging_suppliers WHERE name=? AND active=1",
+        (JACCUS_SUPPLIER_SEED['name'],)
+    ).fetchall():
+        sid = supplier_row['id']
+        for product_code, (unit_measure, unit_price) in JACCUS_PRICE_DATA.items():
+            c.execute(
+                '''UPDATE packaging_items
+                   SET unit_measure=?, unit_price=?
+                   WHERE supplier_id=? AND product_code=? AND active=1''',
+                (unit_measure, unit_price, sid, product_code)
+            )
 
 
 def _login_required(f):
@@ -233,7 +258,8 @@ def init_packaging(db_path: str):
                 cafe_contacts TEXT NOT NULL DEFAULT '',
                 notes         TEXT NOT NULL DEFAULT '',
                 active        INTEGER NOT NULL DEFAULT 1,
-                sort_order    INTEGER NOT NULL DEFAULT 0
+                sort_order    INTEGER NOT NULL DEFAULT 0,
+                store_id      INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS packaging_items (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -265,6 +291,8 @@ def init_packaging(db_path: str):
         cols = [r['name'] for r in c.execute("PRAGMA table_info(packaging_suppliers)").fetchall()]
         if 'cafe_address' not in cols:
             c.execute("ALTER TABLE packaging_suppliers ADD COLUMN cafe_address TEXT NOT NULL DEFAULT ''")
+        if 'store_id' not in cols:
+            c.execute("ALTER TABLE packaging_suppliers ADD COLUMN store_id INTEGER NOT NULL DEFAULT 1")
         item_cols = [r['name'] for r in c.execute("PRAGMA table_info(packaging_items)").fetchall()]
         if 'unit_measure' not in item_cols:
             c.execute("ALTER TABLE packaging_items ADD COLUMN unit_measure TEXT NOT NULL DEFAULT ''")
@@ -310,14 +338,15 @@ def init_packaging(db_path: str):
 def _suppliers():
     with _conn() as c:
         rows = c.execute(
-            'SELECT * FROM packaging_suppliers WHERE active=1 '
-            'ORDER BY sort_order, name').fetchall()
+            'SELECT * FROM packaging_suppliers WHERE active=1 AND store_id=? '
+            'ORDER BY sort_order, name', (current_store_id(),)).fetchall()
     return [dict(r) for r in rows]
 
 
 def _supplier(sid):
     with _conn() as c:
-        row = c.execute('SELECT * FROM packaging_suppliers WHERE id=?', (sid,)).fetchone()
+        row = c.execute('SELECT * FROM packaging_suppliers WHERE id=? AND store_id=?',
+                        (sid, current_store_id())).fetchone()
     return dict(row) if row else None
 
 
@@ -338,18 +367,64 @@ def _format_delivery_date(s: str) -> str:
         return s or '-'
 
 
+def _brand_name(supplier: dict) -> str:
+    return (supplier.get('cafe_name') or 'MCQ Restaurant').strip()
+
+
+def _delivery_line(supplier: dict) -> str:
+    brand = _brand_name(supplier)
+    address = (supplier.get('cafe_address') or '').strip()
+    if not address:
+        return brand
+    brand_root = re.split(r'\s+[—-]\s+', brand, maxsplit=1)[0].strip().lower()
+    if address.lower().startswith(brand.lower()) or (brand_root and address.lower().startswith(brand_root)):
+        return address
+    return f"{brand} - {address}"
+
+
+def _order_subject(supplier: dict, delivery_date: str) -> str:
+    deliv_pretty = _format_delivery_date(delivery_date)
+    return f"{_brand_name(supplier)} - Packaging order - delivery {deliv_pretty}"
+
+
+def _order_filename(supplier: dict, delivery_date: str) -> str:
+    brand = re.sub(r'[^A-Za-z0-9]+', '-', _brand_name(supplier)).strip('-') or 'MCQ'
+    date_part = re.sub(r'[^0-9A-Za-z-]+', '-', delivery_date or date.today().isoformat()).strip('-')
+    return f"{brand}-packaging-order-{date_part}.docx"
+
+
+def _order_totals(items_with_qty: list[dict]) -> tuple[int, float]:
+    total_qty = sum(i['qty'] for i in items_with_qty)
+    total_money = sum(i['qty'] * float(i.get('unit_price') or 0) for i in items_with_qty)
+    return total_qty, total_money
+
+
+def _selected_order_items(sid: int) -> list[dict]:
+    chosen = []
+    for it in _items(sid):
+        raw = request.form.get(f'qty_{it["id"]}', '').strip()
+        try:
+            qty = int(raw or 0)
+        except ValueError:
+            qty = 0
+        if qty > 0:
+            chosen.append({**it, 'qty': qty})
+    return chosen
+
+
 def _compose_order(supplier: dict, items_with_qty: list[dict],
                     delivery_date: str, extra_note: str = '') -> tuple[str, str]:
-    """Return (subject, plain text body) for the order email.
-    Body uses a clean bulleted list (no fixed-width columns) because Gmail's
-    compose window collapses runs of spaces, which destroyed the old
-    ASCII-table layout when the user opened the draft."""
+    """Return a concise fallback email body.
+
+    The official order details live in the attached Word document. Keeping the
+    email body short avoids suppliers reading a stale/plain-text copy instead of
+    the structured attachment.
+    """
     today_pretty = datetime.now().strftime('%d/%m/%Y')
     deliv_pretty = _format_delivery_date(delivery_date)
-    subject = f"MCQ Restaurant Mirrabooka — Packaging order — delivery {deliv_pretty}"
+    subject = _order_subject(supplier, delivery_date)
 
-    total_units = sum(i['qty'] for i in items_with_qty)
-    total_money = sum(i['qty'] * float(i.get('unit_price') or 0) for i in items_with_qty)
+    total_units, total_money = _order_totals(items_with_qty)
     line_count  = len(items_with_qty)
     s = 's' if total_units != 1 else ''
     ls = 's' if line_count != 1 else ''
@@ -358,30 +433,11 @@ def _compose_order(supplier: dict, items_with_qty: list[dict],
     parts = [
         f"Hello {supplier['name']},",
         "",
-        f"Please prepare the following packaging order for delivery on {deliv_pretty}.",
+        f"Please see the attached Microsoft Word packaging order for delivery on {deliv_pretty}.",
+        f"Summary: {line_count} line{ls}, {total_units} unit{s}, total {_money(total_money)}.",
     ]
     if cafe_address:
-        parts.append(f"Deliver to: {supplier.get('cafe_name') or 'MCQ Restaurant Mirrabooka'} — {cafe_address}")
-    parts += [
-        "",
-        f"ORDER LIST ({line_count} item{ls}, {total_units} unit{s}):",
-        "",
-    ]
-    for it in items_with_qty:
-        code = it.get('product_code') or ''
-        unit_price = float(it.get('unit_price') or 0)
-        line_total = it['qty'] * unit_price
-        bullet = f"• {it['qty']} × {it['unit']} — {it['name_en']}"
-        if code:
-            bullet += f"  (code: {code})"
-        bullet += f"  | Price per {it['unit']}: {_money(unit_price)} | Line total: {_money(line_total)}"
-        parts.append(bullet)
-
-    parts.extend([
-        "",
-        f"TOTAL: {total_units} unit{s} across {line_count} line{ls}.",
-        f"TOTAL MONEY: {_money(total_money)}",
-    ])
+        parts.append(f"Deliver to: {_delivery_line(supplier)}")
 
     if extra_note.strip():
         parts += ["", "Note:", extra_note.strip()]
@@ -390,7 +446,7 @@ def _compose_order(supplier: dict, items_with_qty: list[dict],
         "",
         f"CC: {supplier.get('cc_emails') or '-'}",
         "",
-        f"— {supplier.get('cafe_name') or 'MCQ Restaurant Mirrabooka'}",
+        f"- {_brand_name(supplier)}",
     ]
     if cafe_address:
         parts.append(cafe_address)
@@ -401,6 +457,217 @@ def _compose_order(supplier: dict, items_with_qty: list[dict],
         f"Order date: {today_pretty}",
     ]
     return subject, '\n'.join(parts)
+
+
+def _build_order_docx(supplier: dict, items_with_qty: list[dict],
+                      delivery_date: str, extra_note: str = '',
+                      composed_by: str = '') -> bytes:
+    """Build a professional Word order attachment from the selected quantities."""
+    from docx import Document
+    from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.shared import Inches, Pt, RGBColor
+
+    BLUE = RGBColor(46, 116, 181)
+    DARK = RGBColor(31, 77, 120)
+    MUTED = RGBColor(91, 101, 112)
+    HEADER_FILL = 'E8EEF5'
+    TOTAL_FILL = 'F4F6F9'
+
+    def set_font(run, size=10.5, bold=False, color=None):
+        run.font.name = 'Calibri'
+        run._element.rPr.rFonts.set(qn('w:ascii'), 'Calibri')
+        run._element.rPr.rFonts.set(qn('w:hAnsi'), 'Calibri')
+        run.font.size = Pt(size)
+        run.bold = bold
+        if color is not None:
+            run.font.color.rgb = color
+
+    def set_cell_margins(cell, top=80, bottom=80, start=120, end=120):
+        tc_pr = cell._tc.get_or_add_tcPr()
+        tc_mar = tc_pr.first_child_found_in('w:tcMar')
+        if tc_mar is None:
+            tc_mar = OxmlElement('w:tcMar')
+            tc_pr.append(tc_mar)
+        for m, v in (('top', top), ('bottom', bottom), ('start', start), ('end', end)):
+            node = tc_mar.find(qn(f'w:{m}'))
+            if node is None:
+                node = OxmlElement(f'w:{m}')
+                tc_mar.append(node)
+            node.set(qn('w:w'), str(v))
+            node.set(qn('w:type'), 'dxa')
+
+    def shade(cell, fill):
+        tc_pr = cell._tc.get_or_add_tcPr()
+        shd = tc_pr.find(qn('w:shd'))
+        if shd is None:
+            shd = OxmlElement('w:shd')
+            tc_pr.append(shd)
+        shd.set(qn('w:fill'), fill)
+
+    def set_cell(cell, text, *, bold=False, size=9.2, color=None,
+                 align=WD_ALIGN_PARAGRAPH.LEFT, fill=None):
+        cell.text = ''
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+        set_cell_margins(cell)
+        if fill:
+            shade(cell, fill)
+        p = cell.paragraphs[0]
+        p.alignment = align
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(0)
+        p.paragraph_format.line_spacing = 1.10
+        run = p.add_run(str(text or ''))
+        set_font(run, size=size, bold=bold, color=color)
+
+    def set_table_width(table, widths):
+        table.autofit = False
+        dxa_widths = [int(round(width * 1440)) for width in widths]
+        for row in table.rows:
+            for idx, dxa in enumerate(dxa_widths):
+                cell = row.cells[idx]
+                cell.width = Inches(widths[idx])
+                tc_pr = cell._tc.get_or_add_tcPr()
+                tc_w = tc_pr.find(qn('w:tcW'))
+                if tc_w is None:
+                    tc_w = OxmlElement('w:tcW')
+                    tc_pr.append(tc_w)
+                tc_w.set(qn('w:w'), str(dxa))
+                tc_w.set(qn('w:type'), 'dxa')
+        tbl_pr = table._tbl.tblPr
+        tbl_w = tbl_pr.find(qn('w:tblW'))
+        if tbl_w is None:
+            tbl_w = OxmlElement('w:tblW')
+            tbl_pr.append(tbl_w)
+        tbl_w.set(qn('w:w'), '9360')
+        tbl_w.set(qn('w:type'), 'dxa')
+        tbl_ind = tbl_pr.find(qn('w:tblInd'))
+        if tbl_ind is None:
+            tbl_ind = OxmlElement('w:tblInd')
+            tbl_pr.append(tbl_ind)
+        tbl_ind.set(qn('w:w'), '120')
+        tbl_ind.set(qn('w:type'), 'dxa')
+        tbl_grid = table._tbl.tblGrid
+        for child in list(tbl_grid):
+            tbl_grid.remove(child)
+        for dxa in dxa_widths:
+            col = OxmlElement('w:gridCol')
+            col.set(qn('w:w'), str(dxa))
+            tbl_grid.append(col)
+
+    doc = Document()
+    section = doc.sections[0]
+    section.page_width = Inches(8.5)
+    section.page_height = Inches(11)
+    for attr in ('top_margin', 'right_margin', 'bottom_margin', 'left_margin'):
+        setattr(section, attr, Inches(1))
+    section.header_distance = Inches(0.492)
+    section.footer_distance = Inches(0.492)
+
+    styles = doc.styles
+    normal = styles['Normal']
+    normal.font.name = 'Calibri'
+    normal.font.size = Pt(11)
+    normal.paragraph_format.space_after = Pt(6)
+    normal.paragraph_format.line_spacing = 1.25
+
+    header = section.header.paragraphs[0]
+    header.text = ''
+    header.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    hr = header.add_run(_brand_name(supplier))
+    set_font(hr, size=9, bold=True, color=MUTED)
+
+    footer = section.footer.paragraphs[0]
+    footer.text = ''
+    footer.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    fr = footer.add_run('Packaging order generated by MCQ Food Safety App')
+    set_font(fr, size=8.5, color=MUTED)
+
+    title = doc.add_paragraph()
+    title.paragraph_format.space_after = Pt(3)
+    tr = title.add_run('PACKAGING ORDER')
+    set_font(tr, size=18, bold=True, color=DARK)
+
+    subtitle = doc.add_paragraph()
+    subtitle.paragraph_format.space_after = Pt(12)
+    sr = subtitle.add_run(f"{supplier.get('name') or 'Supplier'} | Delivery {_format_delivery_date(delivery_date)}")
+    set_font(sr, size=10.5, bold=True, color=BLUE)
+
+    meta = doc.add_table(rows=4, cols=2)
+    set_table_width(meta, [1.35, 5.15])
+    meta_rows = [
+        ('Supplier', supplier.get('name') or ''),
+        ('Deliver to', _delivery_line(supplier)),
+        ('Contact', (supplier.get('cafe_contacts') or '').replace('\r\n', '\n')),
+        ('Prepared by', composed_by or '-'),
+    ]
+    for row, (label, value) in zip(meta.rows, meta_rows):
+        set_cell(row.cells[0], label, bold=True, size=9.2, color=DARK, fill=TOTAL_FILL)
+        set_cell(row.cells[1], value, size=9.2)
+
+    doc.add_paragraph().paragraph_format.space_after = Pt(2)
+
+    table = doc.add_table(rows=1, cols=7)
+    widths = [1.05, 2.0, 0.55, 0.68, 0.72, 0.75, 0.75]
+    set_table_width(table, widths)
+    headings = ['Product Code', 'Name (Vietnamese)', 'Qty', 'Unit', 'Measure', 'Unit Price', 'Line Total']
+    for cell, text in zip(table.rows[0].cells, headings):
+        set_cell(cell, text, bold=True, size=8.6, color=DARK,
+                 align=WD_ALIGN_PARAGRAPH.CENTER, fill=HEADER_FILL)
+
+    total_money = 0.0
+    for it in items_with_qty:
+        qty = int(it.get('qty') or 0)
+        unit_price = float(it.get('unit_price') or 0)
+        line_total = qty * unit_price
+        total_money += line_total
+        row = table.add_row().cells
+        values = [
+            it.get('product_code') or '',
+            it.get('name_vi') or it.get('name_en') or '',
+            str(qty),
+            it.get('unit') or '',
+            it.get('unit_measure') or '',
+            _money(unit_price),
+            _money(line_total),
+        ]
+        aligns = [
+            WD_ALIGN_PARAGRAPH.LEFT,
+            WD_ALIGN_PARAGRAPH.LEFT,
+            WD_ALIGN_PARAGRAPH.CENTER,
+            WD_ALIGN_PARAGRAPH.CENTER,
+            WD_ALIGN_PARAGRAPH.CENTER,
+            WD_ALIGN_PARAGRAPH.RIGHT,
+            WD_ALIGN_PARAGRAPH.RIGHT,
+        ]
+        for cell, text, align in zip(row, values, aligns):
+            set_cell(cell, text, size=8.8, align=align)
+
+    total = doc.add_paragraph()
+    total.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    total.paragraph_format.space_before = Pt(10)
+    total.paragraph_format.space_after = Pt(2)
+    total_run = total.add_run(f"TOTAL ORDER VALUE: {_money(total_money)}")
+    set_font(total_run, size=12.5, bold=True, color=DARK)
+
+    if extra_note.strip():
+        note = doc.add_paragraph()
+        note.paragraph_format.space_before = Pt(8)
+        nr = note.add_run('Note: ')
+        set_font(nr, size=9.5, bold=True, color=DARK)
+        vr = note.add_run(extra_note.strip())
+        set_font(vr, size=9.5)
+
+    generated = doc.add_paragraph()
+    generated.paragraph_format.space_before = Pt(8)
+    gr = generated.add_run(f"Order date: {datetime.now().strftime('%d/%m/%Y')}")
+    set_font(gr, size=8.8, color=MUTED)
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
 
 
 def _gmail_compose_url(to: str, subject: str, body: str, cc: str = '') -> str:
@@ -493,16 +760,7 @@ def packaging_compose():
     delivery_date = request.form.get('delivery_date', '').strip()
     extra_note    = request.form.get('extra_note', '').strip()
 
-    all_items = _items(sid)
-    chosen = []
-    for it in all_items:
-        raw = request.form.get(f'qty_{it["id"]}', '').strip()
-        try:
-            qty = int(raw or 0)
-        except ValueError:
-            qty = 0
-        if qty > 0:
-            chosen.append({**it, 'qty': qty})
+    chosen = _selected_order_items(sid)
 
     if not chosen:
         return jsonify({'error': 'No items selected. Set a quantity > 0 on at least one row.'}), 400
@@ -518,10 +776,39 @@ def packaging_compose():
         'mailto':        _mailto_url      (supplier['email'], subject, body, cc),
         'to':            supplier['email'],
         'cc':            cc,
+        'docx_filename': _order_filename(supplier, delivery_date),
         'item_count':    len(chosen),
         'total_qty':     sum(i['qty'] for i in chosen),
         'total_money':   sum(i['qty'] * float(i.get('unit_price') or 0) for i in chosen),
     })
+
+
+@packaging_bp.route('/docx', methods=['POST'])
+@_login_required
+def packaging_docx():
+    """Download the same Word order document used for supplier emails."""
+    try:
+        sid = int(request.form.get('supplier_id', 0))
+    except ValueError:
+        return jsonify({'error': 'invalid supplier'}), 400
+    supplier = _supplier(sid)
+    if not supplier:
+        return jsonify({'error': 'supplier not found'}), 404
+
+    delivery_date = request.form.get('delivery_date', '').strip()
+    extra_note    = request.form.get('extra_note', '').strip()
+    composed_by   = request.form.get('composed_by', session.get('role','')).strip()
+    chosen = _selected_order_items(sid)
+    if not chosen:
+        return jsonify({'error': 'No items selected.'}), 400
+
+    docx_bytes = _build_order_docx(supplier, chosen, delivery_date, extra_note, composed_by)
+    return send_file(
+        io.BytesIO(docx_bytes),
+        mimetype=DOCX_MIME,
+        as_attachment=True,
+        download_name=_order_filename(supplier, delivery_date),
+    )
 
 
 @packaging_bp.route('/send', methods=['POST'])
@@ -540,21 +827,14 @@ def packaging_send():
     extra_note    = request.form.get('extra_note', '').strip()
     composed_by   = request.form.get('composed_by', session.get('role','')).strip()
 
-    all_items = _items(sid)
-    chosen = []
-    for it in all_items:
-        raw = request.form.get(f'qty_{it["id"]}', '').strip()
-        try:
-            qty = int(raw or 0)
-        except ValueError:
-            qty = 0
-        if qty > 0:
-            chosen.append({**it, 'qty': qty})
+    chosen = _selected_order_items(sid)
 
     if not chosen:
         return jsonify({'error': 'No items selected.'}), 400
 
     subject, body = _compose_order(supplier, chosen, delivery_date, extra_note)
+    docx_bytes = _build_order_docx(supplier, chosen, delivery_date, extra_note, composed_by)
+    filename = _order_filename(supplier, delivery_date)
 
     # Send via Brevo
     try:
@@ -571,43 +851,52 @@ def packaging_send():
     if not to_email:
         return jsonify({'error': 'Supplier has no email address. Edit supplier info first.'}), 400
 
-    # HTML version — keep it simple: <pre> with the same body for compatibility
+    total_qty, total_money = _order_totals(chosen)
+
+    # HTML version stays short; the structured order is the attached DOCX.
     from html import escape as _esc
     html_body = (
         '<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#222">'
-        + '<pre style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;'
-        + 'background:#f7f9fb;border:1px solid #eef0f3;border-radius:8px;padding:14px;white-space:pre-wrap">'
-        + _esc(body)
-        + '</pre></div>'
+        + f'<p>{_esc(body).replace(chr(10), "<br>")}</p>'
+        + f'<p><strong>Attachment:</strong> {_esc(filename)}</p>'
+        + '</div>'
     )
 
     cc_list = [c.strip() for c in (supplier.get('cc_emails') or '').split(',') if c.strip()]
     payload = {
-        'sender':      {'name': settings.get('from_name') or 'MCQ Mirrabooka',
+        'sender':      {'name': settings.get('from_name') or _brand_name(supplier),
                          'email': settings['sender_email']},
         'to':          [{'email': to_email}],
         'subject':     subject,
         'htmlContent': html_body,
         'textContent': body,
+        'attachment':   [{
+            'content': base64.b64encode(docx_bytes).decode('ascii'),
+            'name': filename,
+        }],
     }
     if cc_list:
         payload['cc'] = [{'email': e} for e in cc_list]
 
     ok, msg = email_service._brevo_post(payload, settings['brevo_api_key'])
 
-    import json as _json
     with _conn() as c:
         c.execute('''INSERT INTO packaging_orders
             (supplier_id, delivery_date, composed_by, send_channel, subject, body, payload_json, store_id)
             VALUES (?,?,?,?,?,?,?,?)''',
             (sid, delivery_date, composed_by,
              'brevo' if ok else f'brevo_failed',
-             subject, body, _json.dumps(chosen), current_store_id()))
+             subject, body, json.dumps({
+                 'items': chosen,
+                 'docx_filename': filename,
+                 'total_qty': total_qty,
+                 'total_money': total_money,
+             }), current_store_id()))
 
     if not ok:
         # Friendlier hint when Brevo bounces
         return jsonify({'error': f'Brevo send failed: {msg}'}), 500
-    return jsonify({'ok': True, 'message': f'Order emailed to {to_email}.'})
+    return jsonify({'ok': True, 'message': f'Word order emailed to {to_email}. Quantities reset to 0.'})
 
 
 @packaging_bp.route('/log-action', methods=['POST'])
@@ -650,7 +939,7 @@ def supplier_edit(sid):
         c.execute('''UPDATE packaging_suppliers SET
             name=?, email=?, phone=?, cc_emails=?, delivery_days=?,
             cafe_name=?, cafe_address=?, cafe_contacts=?, notes=?
-            WHERE id=?''',
+            WHERE id=? AND store_id=?''',
             (name,
              request.form.get('email', '').strip(),
              request.form.get('phone', '').strip(),
@@ -660,7 +949,7 @@ def supplier_edit(sid):
              request.form.get('cafe_address', '').strip(),
              request.form.get('cafe_contacts', '').strip(),
              request.form.get('notes', '').strip(),
-             sid))
+             sid, current_store_id()))
     return jsonify({'ok': True})
 
 
@@ -672,11 +961,11 @@ def supplier_add():
         return redirect(url_for('packaging.packaging_home'))
     with _conn() as c:
         n = c.execute(
-            'SELECT COALESCE(MAX(sort_order),-1)+1 AS n FROM packaging_suppliers'
-        ).fetchone()['n']
+            'SELECT COALESCE(MAX(sort_order),-1)+1 AS n FROM packaging_suppliers WHERE store_id=?',
+            (current_store_id(),)).fetchone()['n']
         cur = c.execute('''INSERT INTO packaging_suppliers
-            (name, email, phone, cc_emails, delivery_days, cafe_name, cafe_contacts, sort_order)
-            VALUES (?,?,?,?,?,?,?,?)''',
+            (name, email, phone, cc_emails, delivery_days, cafe_name, cafe_contacts, sort_order, store_id)
+            VALUES (?,?,?,?,?,?,?,?,?)''',
             (name,
              request.form.get('email', '').strip(),
              request.form.get('phone', '').strip(),
@@ -684,7 +973,7 @@ def supplier_add():
              request.form.get('delivery_days', '').strip().upper(),
              request.form.get('cafe_name', '').strip() or 'MCQ Vietnamese Street Food — MIRRABOOKA',
              request.form.get('cafe_contacts', '').strip(),
-             n))
+             n, current_store_id()))
         new_id = cur.lastrowid
     return redirect(url_for('packaging.packaging_home', supplier=new_id))
 
@@ -693,7 +982,8 @@ def supplier_add():
 @_admin_required
 def supplier_delete(sid):
     with _conn() as c:
-        c.execute('DELETE FROM packaging_suppliers WHERE id=?', (sid,))
+        c.execute('DELETE FROM packaging_suppliers WHERE id=? AND store_id=?',
+                  (sid, current_store_id()))
     return redirect(url_for('packaging.packaging_home'))
 
 
@@ -708,6 +998,9 @@ def item_add():
     if not name_en:
         return jsonify({'error': 'Item name required'}), 400
     with _conn() as c:
+        if not c.execute('SELECT 1 FROM packaging_suppliers WHERE id=? AND store_id=?',
+                         (sid, current_store_id())).fetchone():
+            return jsonify({'error': 'supplier not found'}), 404
         n = c.execute(
             'SELECT COALESCE(MAX(sort_order),-1)+1 AS n FROM packaging_items WHERE supplier_id=?',
             (sid,)).fetchone()['n']
@@ -742,6 +1035,11 @@ def item_edit(iid):
     except ValueError:
         qty = 0
     with _conn() as c:
+        if not c.execute('''SELECT 1 FROM packaging_items i
+                            JOIN packaging_suppliers s ON s.id=i.supplier_id
+                            WHERE i.id=? AND s.store_id=?''',
+                         (iid, current_store_id())).fetchone():
+            return jsonify({'error': 'item not found'}), 404
         c.execute('''UPDATE packaging_items SET
             product_code=?, name_en=?, name_vi=?, unit=?, unit_measure=?,
             unit_price=?, default_qty=?
@@ -760,7 +1058,10 @@ def item_edit(iid):
 @_admin_required
 def item_delete(iid):
     with _conn() as c:
-        c.execute('DELETE FROM packaging_items WHERE id=?', (iid,))
+        c.execute('''DELETE FROM packaging_items
+            WHERE id=? AND supplier_id IN (
+              SELECT id FROM packaging_suppliers WHERE store_id=?
+            )''', (iid, current_store_id()))
     return jsonify({'ok': True})
 
 

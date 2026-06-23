@@ -191,7 +191,7 @@
             data-unit-price="{{ it.unit_price or 0 }}">
           <td>
             <input type="number" name="qty_{{ it.id }}" class="form-control form-control-sm qty-input"
-                   min="0" max="999" value="{{ it.default_qty }}"
+                   min="0" max="999" value="0"
                    oninput="updateRowState(this); refreshSummary();">
           </td>
           <td class="unit-cell">{{ it.unit }}</td>
@@ -253,6 +253,14 @@
 
   <!-- Send actions -->
   <div class="d-flex gap-2 flex-wrap align-items-center">
+    {% if is_admin %}
+    <button type="button" id="sendWordBtn" class="btn btn-success" onclick="sendOrderDocx()">
+      <i class="fas fa-file-word me-1"></i>Send Word document
+    </button>
+    {% endif %}
+    <button type="button" id="downloadWordBtn" class="btn btn-outline-primary" onclick="downloadOrderDocx()">
+      <i class="fas fa-download me-1"></i>Download Word
+    </button>
     <button type="button" class="btn btn-gmail" onclick="composeOrder('gmail')">
       <i class="fab fa-google me-1"></i>Open in Gmail
     </button>
@@ -481,7 +489,8 @@ function refreshSummary() {
   document.getElementById('qtyTotal').textContent = total;
   document.getElementById('moneyTotal').textContent = money(totalMoney);
 }
-function resetQuantities() {
+function resetQuantities(opts = {}) {
+  const showToast = opts.showToast !== false;
   document.querySelectorAll('.qty-input').forEach(i => {
     i.value = '0';
     updateRowState(i);
@@ -496,7 +505,7 @@ function resetQuantities() {
     const el = document.getElementById(id);
     if (el) el.textContent = '—';
   });
-  toast('Quantities reset to 0');
+  if (showToast) toast('Quantities reset to 0');
 }
 document.querySelectorAll('.qty-input').forEach(i => updateRowState(i));
 refreshSummary();
@@ -666,6 +675,86 @@ async function composeOrder(channel) {
     if (e.message && !e.toastShown) toast(e.message, true);
   }
 }
+
+function filenameFromDisposition(header, fallback) {
+  if (!header) return fallback;
+  const match = header.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
+  if (!match) return fallback;
+  try { return decodeURIComponent(match[1].replace(/\"/g, '')); }
+  catch (e) { return match[1].replace(/\"/g, '') || fallback; }
+}
+
+async function downloadOrderDocx() {
+  const ctx = orderContext();
+  if (selectedLineCount() === 0) {
+    toast('No items selected. Set a quantity > 0 on at least one row.', true);
+    return;
+  }
+  const btn = document.getElementById('downloadWordBtn');
+  const old = btn ? btn.innerHTML : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Preparing';
+  }
+  try {
+    const resp = await fetch('/packaging/docx', { method:'POST', body:ctx.fd });
+    if (!resp.ok) {
+      let message = 'Word document failed';
+      try {
+        const data = await resp.json();
+        message = data.error || message;
+      } catch (e) {}
+      throw new Error(message);
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filenameFromDisposition(resp.headers.get('Content-Disposition'), 'packaging-order.docx');
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1200);
+    toast('Word document downloaded');
+  } catch (e) {
+    toast(e.message || 'Word document failed', true);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = old;
+    }
+  }
+}
+
+{% if is_admin %}
+async function sendOrderDocx() {
+  const ctx = orderContext();
+  if (selectedLineCount() === 0) {
+    toast('No items selected. Set a quantity > 0 on at least one row.', true);
+    return;
+  }
+  const btn = document.getElementById('sendWordBtn');
+  const old = btn ? btn.innerHTML : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Sending';
+  }
+  try {
+    const resp = await fetch('/packaging/send', { method:'POST', body:ctx.fd });
+    const data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || 'Send failed');
+    resetQuantities({ showToast:false });
+    toast(data.message || 'Word order emailed. Quantities reset to 0.');
+  } catch (e) {
+    toast(e.message || 'Send failed', true);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = old;
+    }
+  }
+}
+{% endif %}
 
 document.getElementById('orderForm').addEventListener('input', () => {
   invalidatePreparedOrder();

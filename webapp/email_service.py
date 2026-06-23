@@ -53,12 +53,109 @@ PREP_STATIONS = {
 
 # ── DB setup ───────────────────────────────────────────────────────────────────
 
+def _resolve_store_id(store_id: int | None = None) -> int:
+    if store_id is not None:
+        try:
+            return int(store_id)
+        except (TypeError, ValueError):
+            return 1
+    try:
+        from store_scope import current_store_id
+        return int(current_store_id() or 1)
+    except Exception:
+        return 1
+
+
+def _migrate_email_settings_per_store(conn: sqlite3.Connection) -> None:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='email_settings'"
+    ).fetchone()
+    if not row or not row[0]:
+        return
+    cols = [r['name'] for r in conn.execute('PRAGMA table_info(email_settings)').fetchall()]
+    norm = row[0].replace(' ', '').replace('\n', '')
+    if 'store_id' in cols and 'CHECK(id=1)' not in norm and 'CHECK(id=1)' not in norm.upper():
+        return
+    store_expr = 'COALESCE(store_id, 1)' if 'store_id' in cols else '1'
+    conn.execute('DROP TABLE IF EXISTS email_settings__mig')
+    conn.execute('''CREATE TABLE email_settings__mig (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        store_id      INTEGER NOT NULL UNIQUE DEFAULT 1,
+        smtp_host     TEXT NOT NULL DEFAULT 'smtp.gmail.com',
+        smtp_port     INTEGER NOT NULL DEFAULT 587,
+        smtp_user     TEXT NOT NULL DEFAULT '',
+        smtp_password TEXT NOT NULL DEFAULT '',
+        from_name     TEXT NOT NULL DEFAULT 'MCQ Notification',
+        base_url      TEXT NOT NULL DEFAULT '',
+        enabled       INTEGER NOT NULL DEFAULT 0,
+        updated_at    TEXT DEFAULT (datetime('now','localtime')),
+        updated_by    TEXT DEFAULT '',
+        brevo_api_key TEXT NOT NULL DEFAULT '',
+        sender_email  TEXT NOT NULL DEFAULT ''
+    )''')
+    select_cols = ', '.join(
+        c for c in ('smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'from_name',
+                    'base_url', 'enabled', 'updated_at', 'updated_by',
+                    'brevo_api_key', 'sender_email')
+        if c in cols
+    )
+    if select_cols:
+        conn.execute(f'''INSERT OR REPLACE INTO email_settings__mig
+            (store_id, {select_cols})
+            SELECT {store_expr}, {select_cols} FROM email_settings''')
+    conn.execute('DROP TABLE email_settings')
+    conn.execute('ALTER TABLE email_settings__mig RENAME TO email_settings')
+
+
+def _migrate_email_recipients_per_store(conn: sqlite3.Connection) -> None:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='email_recipients'"
+    ).fetchone()
+    if not row or not row[0]:
+        return
+    cols = [r['name'] for r in conn.execute('PRAGMA table_info(email_recipients)').fetchall()]
+    norm = row[0].replace(' ', '').replace('\n', '')
+    if 'store_id' in cols and 'UNIQUE(email,store_id)' in norm:
+        return
+    store_expr = 'COALESCE(store_id, 1)' if 'store_id' in cols else '1'
+    conn.execute('DROP TABLE IF EXISTS email_recipients__mig')
+    conn.execute('''CREATE TABLE email_recipients__mig (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        email               TEXT NOT NULL,
+        name                TEXT NOT NULL DEFAULT '',
+        active              INTEGER NOT NULL DEFAULT 1,
+        notify_checklist    INTEGER NOT NULL DEFAULT 1,
+        notify_temperature  INTEGER NOT NULL DEFAULT 1,
+        notify_violation    INTEGER NOT NULL DEFAULT 1,
+        notify_issue        INTEGER NOT NULL DEFAULT 1,
+        notify_prep         INTEGER NOT NULL DEFAULT 1,
+        notify_training     INTEGER NOT NULL DEFAULT 1,
+        notify_pastry       INTEGER NOT NULL DEFAULT 1,
+        notify_jobs         INTEGER NOT NULL DEFAULT 0,
+        created_at          TEXT DEFAULT (datetime('now','localtime')),
+        store_id            INTEGER NOT NULL DEFAULT 1,
+        UNIQUE(email, store_id)
+    )''')
+    select_cols = ', '.join(
+        c for c in ('email', 'name', 'active', 'notify_checklist', 'notify_temperature',
+                    'notify_violation', 'notify_issue', 'notify_prep', 'notify_training',
+                    'notify_pastry', 'notify_jobs', 'created_at')
+        if c in cols
+    )
+    if select_cols:
+        conn.execute(f'''INSERT OR IGNORE INTO email_recipients__mig
+            ({select_cols}, store_id)
+            SELECT {select_cols}, {store_expr} FROM email_recipients''')
+    conn.execute('DROP TABLE email_recipients')
+    conn.execute('ALTER TABLE email_recipients__mig RENAME TO email_recipients')
+
 def init_email_tables(db_path: str) -> None:
     global DB_PATH
     DB_PATH = db_path
     with _conn() as conn:
         conn.execute('''CREATE TABLE IF NOT EXISTS email_settings (
-            id            INTEGER PRIMARY KEY CHECK (id = 1),
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_id      INTEGER NOT NULL UNIQUE DEFAULT 1,
             smtp_host     TEXT NOT NULL DEFAULT 'smtp.gmail.com',
             smtp_port     INTEGER NOT NULL DEFAULT 587,
             smtp_user     TEXT NOT NULL DEFAULT '',
@@ -71,7 +168,7 @@ def init_email_tables(db_path: str) -> None:
         )''')
         conn.execute('''CREATE TABLE IF NOT EXISTS email_recipients (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-            email               TEXT NOT NULL UNIQUE,
+            email               TEXT NOT NULL,
             name                TEXT NOT NULL DEFAULT '',
             active              INTEGER NOT NULL DEFAULT 1,
             notify_checklist    INTEGER NOT NULL DEFAULT 1,
@@ -82,7 +179,9 @@ def init_email_tables(db_path: str) -> None:
             notify_training     INTEGER NOT NULL DEFAULT 1,
             notify_pastry       INTEGER NOT NULL DEFAULT 1,
             notify_jobs         INTEGER NOT NULL DEFAULT 0,
-            created_at          TEXT DEFAULT (datetime('now','localtime'))
+            created_at          TEXT DEFAULT (datetime('now','localtime')),
+            store_id            INTEGER NOT NULL DEFAULT 1,
+            UNIQUE(email, store_id)
         )''')
         conn.execute('''CREATE TABLE IF NOT EXISTS email_log (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,28 +190,40 @@ def init_email_tables(db_path: str) -> None:
             subject      TEXT NOT NULL,
             recipients   TEXT NOT NULL,
             status       TEXT NOT NULL,
-            error_detail TEXT DEFAULT ''
+            error_detail TEXT DEFAULT '',
+            store_id     INTEGER NOT NULL DEFAULT 1
         )''')
         # Migration: add Brevo-specific columns if missing.
         for col, ddl in [
             ('brevo_api_key', "ALTER TABLE email_settings ADD COLUMN brevo_api_key TEXT NOT NULL DEFAULT ''"),
             ('sender_email',  "ALTER TABLE email_settings ADD COLUMN sender_email  TEXT NOT NULL DEFAULT ''"),
+            ('store_id',      "ALTER TABLE email_settings ADD COLUMN store_id INTEGER NOT NULL DEFAULT 1"),
         ]:
             try:
                 conn.execute(ddl)
             except sqlite3.OperationalError:
                 pass
+        try:
+            conn.execute("ALTER TABLE email_recipients ADD COLUMN store_id INTEGER NOT NULL DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE email_log ADD COLUMN store_id INTEGER NOT NULL DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass
+        _migrate_email_settings_per_store(conn)
+        _migrate_email_recipients_per_store(conn)
 
         # Seed the singleton settings row if missing.
-        conn.execute('INSERT OR IGNORE INTO email_settings (id) VALUES (1)')
+        conn.execute('INSERT OR IGNORE INTO email_settings (store_id) VALUES (1)')
 
         # Carry-over: if Brevo fields are empty but old SMTP fields had a value,
         # populate sender_email from smtp_user so the user keeps their sender address.
         row = conn.execute(
-            'SELECT brevo_api_key, sender_email, smtp_user FROM email_settings WHERE id=1').fetchone()
+            'SELECT brevo_api_key, sender_email, smtp_user FROM email_settings WHERE store_id=1').fetchone()
         if row and not row['sender_email'] and row['smtp_user']:
             conn.execute(
-                'UPDATE email_settings SET sender_email=? WHERE id=1',
+                'UPDATE email_settings SET sender_email=? WHERE store_id=1',
                 (row['smtp_user'],))
 
 
@@ -124,13 +235,16 @@ def _conn() -> sqlite3.Connection:
 
 # ── Settings helpers ──────────────────────────────────────────────────────────
 
-def get_settings() -> dict:
+def get_settings(store_id: int | None = None) -> dict:
+    sid = _resolve_store_id(store_id)
     with _conn() as conn:
-        row = conn.execute('SELECT * FROM email_settings WHERE id=1').fetchone()
+        conn.execute('INSERT OR IGNORE INTO email_settings (store_id) VALUES (?)', (sid,))
+        row = conn.execute('SELECT * FROM email_settings WHERE store_id=?', (sid,)).fetchone()
         return dict(row) if row else {}
 
 
-def update_settings(**kwargs) -> None:
+def update_settings(store_id: int | None = None, **kwargs) -> None:
+    sid = _resolve_store_id(store_id)
     allowed = {'brevo_api_key', 'sender_email', 'from_name',
                'base_url', 'enabled', 'updated_by'}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
@@ -139,22 +253,30 @@ def update_settings(**kwargs) -> None:
     sets = ', '.join(f'{k}=?' for k in fields)
     sets += ", updated_at=datetime('now','localtime')"
     with _conn() as conn:
-        conn.execute(f'UPDATE email_settings SET {sets} WHERE id=1', list(fields.values()))
+        conn.execute('INSERT OR IGNORE INTO email_settings (store_id) VALUES (?)', (sid,))
+        conn.execute(f'UPDATE email_settings SET {sets} WHERE store_id=?',
+                     list(fields.values()) + [sid])
 
 
-def list_recipients() -> list[dict]:
+def list_recipients(store_id: int | None = None) -> list[dict]:
+    sid = _resolve_store_id(store_id)
     with _conn() as conn:
         return [dict(r) for r in conn.execute(
-            'SELECT * FROM email_recipients ORDER BY active DESC, email').fetchall()]
+            'SELECT * FROM email_recipients WHERE store_id=? ORDER BY active DESC, email',
+            (sid,)).fetchall()]
 
 
-def get_recent_log(limit: int = 50) -> list[dict]:
+def get_recent_log(limit: int = 50, store_id: int | None = None) -> list[dict]:
+    sid = _resolve_store_id(store_id)
     with _conn() as conn:
         return [dict(r) for r in conn.execute(
-            'SELECT * FROM email_log ORDER BY id DESC LIMIT ?', (limit,)).fetchall()]
+            'SELECT * FROM email_log WHERE store_id=? ORDER BY id DESC LIMIT ?',
+            (sid, limit)).fetchall()]
 
 
-def add_recipient(email: str, name: str = '', events: dict | None = None) -> int:
+def add_recipient(email: str, name: str = '', events: dict | None = None,
+                  store_id: int | None = None) -> int:
+    sid = _resolve_store_id(store_id)
     email = (email or '').strip().lower()
     if not email or '@' not in email:
         raise ValueError('Invalid email address.')
@@ -168,17 +290,19 @@ def add_recipient(email: str, name: str = '', events: dict | None = None) -> int
         cur = conn.execute('''INSERT INTO email_recipients
             (email, name, active,
              notify_checklist, notify_temperature, notify_violation, notify_issue,
-             notify_prep, notify_training, notify_pastry, notify_jobs)
-            VALUES (?,?,1,?,?,?,?,?,?,?,?)''',
+             notify_prep, notify_training, notify_pastry, notify_jobs, store_id)
+            VALUES (?,?,1,?,?,?,?,?,?,?,?,?)''',
             (email, name.strip(),
              flags['notify_checklist'], flags['notify_temperature'],
              flags['notify_violation'], flags['notify_issue'],
              flags['notify_prep'], flags['notify_training'],
-             flags['notify_pastry'], flags['notify_jobs']))
+             flags['notify_pastry'], flags['notify_jobs'], sid))
         return cur.lastrowid
 
 
-def update_recipient(rid: int, email: str, name: str, active: bool, events: dict) -> None:
+def update_recipient(rid: int, email: str, name: str, active: bool, events: dict,
+                     store_id: int | None = None) -> None:
+    sid = _resolve_store_id(store_id)
     email = (email or '').strip().lower()
     if not email or '@' not in email:
         raise ValueError('Invalid email address.')
@@ -187,23 +311,28 @@ def update_recipient(rid: int, email: str, name: str, active: bool, events: dict
     for ev in VALID_EVENTS:
         cols.append(f'notify_{ev}=?')
         vals.append(1 if events.get(ev) else 0)
-    vals.append(rid)
+    vals.extend([rid, sid])
     with _conn() as conn:
-        conn.execute(f'UPDATE email_recipients SET {", ".join(cols)} WHERE id=?', vals)
+        conn.execute(f'UPDATE email_recipients SET {", ".join(cols)} WHERE id=? AND store_id=?', vals)
 
 
-def delete_recipient(rid: int) -> None:
+def delete_recipient(rid: int, store_id: int | None = None) -> None:
+    sid = _resolve_store_id(store_id)
     with _conn() as conn:
-        conn.execute('DELETE FROM email_recipients WHERE id=?', (rid,))
+        conn.execute('DELETE FROM email_recipients WHERE id=? AND store_id=?', (rid, sid))
 
 
-def toggle_recipient(rid: int) -> int:
+def toggle_recipient(rid: int, store_id: int | None = None) -> int:
+    sid = _resolve_store_id(store_id)
     with _conn() as conn:
-        row = conn.execute('SELECT active FROM email_recipients WHERE id=?', (rid,)).fetchone()
+        row = conn.execute(
+            'SELECT active FROM email_recipients WHERE id=? AND store_id=?',
+            (rid, sid)).fetchone()
         if not row:
             return 0
         new_val = 0 if row['active'] else 1
-        conn.execute('UPDATE email_recipients SET active=? WHERE id=?', (new_val, rid))
+        conn.execute('UPDATE email_recipients SET active=? WHERE id=? AND store_id=?',
+                     (new_val, rid, sid))
         return new_val
 
 
@@ -232,12 +361,12 @@ PILL_KEYS = {'status': '#1565C0', 'severity': '#C62828', 'priority': '#E65100',
              'out-of-zone readings': '#C62828'}
 
 
-def _logo_bar_html(brand_subtitle: str = '') -> str:
+def _logo_bar_html(brand_subtitle: str = '', settings: dict | None = None) -> str:
     """White header strip with the restaurant logo + brand name.
     The logo URL comes from settings.base_url + /static/logo.png so the email
     client can fetch it. If base_url is empty, falls back to a text-only header.
     """
-    settings = get_settings()
+    settings = settings or get_settings()
     base_url = (settings.get('base_url') or '').rstrip('/')
     sub_html = (f'<div style="font-size:11px;color:#888;letter-spacing:.1em;'
                 f'text-transform:uppercase;margin-top:2px">{escape(brand_subtitle)}</div>'
@@ -275,7 +404,7 @@ def _logo_bar_html(brand_subtitle: str = '') -> str:
 
 
 def _build_html(event_label: str, color: str, title: str, lines: list[str],
-                link: str = '', actor: str = '') -> str:
+                link: str = '', actor: str = '', settings: dict | None = None) -> str:
     dark = _darken(color, 0.75)
     rows_html = []
     people_html = []
@@ -357,7 +486,7 @@ def _build_html(event_label: str, color: str, title: str, lines: list[str],
             f'box-shadow:0 2px 8px rgba(0,0,0,.12)">View full details in app  →</a>'
             f'</div>')
 
-    logo_bar = _logo_bar_html()
+    logo_bar = _logo_bar_html(settings=settings)
 
     return f'''<!DOCTYPE html>
 <html lang="en">
@@ -418,14 +547,15 @@ def _build_text(event_label: str, title: str, lines: list[str], link: str, actor
 
 # ── Sending via Brevo HTTP API ────────────────────────────────────────────────
 
-def _recipients_for_event(event_type: str) -> list[str]:
+def _recipients_for_event(event_type: str, store_id: int | None = None) -> list[str]:
     if event_type not in VALID_EVENTS:
         return []
+    sid = _resolve_store_id(store_id)
     col = f'notify_{event_type}'
     with _conn() as conn:
         rows = conn.execute(
-            f'SELECT email FROM email_recipients WHERE active=1 AND {col}=1 ORDER BY email'
-        ).fetchall()
+            f'SELECT email FROM email_recipients WHERE active=1 AND {col}=1 AND store_id=? ORDER BY email',
+            (sid,)).fetchall()
     return [r['email'] for r in rows]
 
 
@@ -433,13 +563,15 @@ def _is_configured(settings: dict) -> bool:
     return bool(settings.get('brevo_api_key') and settings.get('sender_email'))
 
 
-def _log(event_type: str, subject: str, recipients: list[str], status: str, error: str = '') -> None:
+def _log(event_type: str, subject: str, recipients: list[str], status: str,
+         error: str = '', store_id: int | None = None) -> None:
+    sid = _resolve_store_id(store_id)
     try:
         with _conn() as conn:
             conn.execute('''INSERT INTO email_log
-                (event_type, subject, recipients, status, error_detail)
-                VALUES (?,?,?,?,?)''',
-                (event_type, subject[:200], ', '.join(recipients)[:500], status, error[:1000]))
+                (event_type, subject, recipients, status, error_detail, store_id)
+                VALUES (?,?,?,?,?,?)''',
+                (event_type, subject[:200], ', '.join(recipients)[:500], status, error[:1000], sid))
     except Exception:
         pass
 
@@ -477,7 +609,8 @@ def _brevo_post(payload: dict, api_key: str, timeout: int = 30) -> tuple[bool, s
 
 
 def _send_sync(event_type: str, subject: str, lines: list[str],
-               link_path: str, actor: str, recipients: list[str], settings: dict) -> None:
+               link_path: str, actor: str, recipients: list[str], settings: dict,
+               store_id: int | None = None) -> None:
     """Send the notification — one POST per recipient.
     Sending separately keeps each recipient's email private (they don't see
     others in the To: field) and isolates failures so one bad address can't
@@ -489,7 +622,7 @@ def _send_sync(event_type: str, subject: str, lines: list[str],
     base_url = (settings.get('base_url') or '').rstrip('/')
     link = f'{base_url}{link_path}' if base_url and link_path else ''
 
-    html_body = _build_html(label, color, subject, lines, link, actor)
+    html_body = _build_html(label, color, subject, lines, link, actor, settings=settings)
     text_body = _build_text(label, subject, lines, link, actor)
 
     sent_to: list[str] = []
@@ -512,16 +645,19 @@ def _send_sync(event_type: str, subject: str, lines: list[str],
             failures.append(f'{recipient}: {msg}')
 
     if sent_to and not failures:
-        _log(event_type, subject, sent_to, 'sent')
+        _log(event_type, subject, sent_to, 'sent', store_id=store_id)
     elif sent_to and failures:
         _log(event_type, subject, recipients, 'partial',
-             f'Sent to {len(sent_to)}, failed for {len(failures)}: ' + ' | '.join(failures))
+             f'Sent to {len(sent_to)}, failed for {len(failures)}: ' + ' | '.join(failures),
+             store_id=store_id)
     else:
-        _log(event_type, subject, recipients, 'failed', ' | '.join(failures) or 'no recipients')
+        _log(event_type, subject, recipients, 'failed', ' | '.join(failures) or 'no recipients',
+             store_id=store_id)
 
 
 def _send_html_sync(event_type: str, subject: str, html_body: str, text_body: str,
-                    recipients: list[str], settings: dict) -> None:
+                    recipients: list[str], settings: dict,
+                    store_id: int | None = None) -> None:
     """Send a pre-rendered HTML notification, one POST per recipient."""
     sent_to: list[str] = []
     failures: list[str] = []
@@ -543,34 +679,38 @@ def _send_html_sync(event_type: str, subject: str, html_body: str, text_body: st
             failures.append(f'{recipient}: {msg}')
 
     if sent_to and not failures:
-        _log(event_type, subject, sent_to, 'sent')
+        _log(event_type, subject, sent_to, 'sent', store_id=store_id)
     elif sent_to and failures:
         _log(event_type, subject, recipients, 'partial',
-             f'Sent to {len(sent_to)}, failed for {len(failures)}: ' + ' | '.join(failures))
+             f'Sent to {len(sent_to)}, failed for {len(failures)}: ' + ' | '.join(failures),
+             store_id=store_id)
     else:
-        _log(event_type, subject, recipients, 'failed', ' | '.join(failures) or 'no recipients')
+        _log(event_type, subject, recipients, 'failed', ' | '.join(failures) or 'no recipients',
+             store_id=store_id)
 
 
 def send_notification(event_type: str, subject: str, lines: list[str],
-                       link_path: str = '', actor: str = '') -> None:
+                       link_path: str = '', actor: str = '',
+                       store_id: int | None = None) -> None:
     """Fire-and-forget notification. Never raises. Every DB read (settings,
     recipients) happens inside the worker thread so the calling request — e.g.
     a checklist submit — returns immediately instead of waiting on the DB."""
     if event_type not in VALID_EVENTS:
         return
+    sid = _resolve_store_id(store_id)
 
     def _worker():
         try:
-            settings = get_settings()
+            settings = get_settings(sid)
             if not settings.get('enabled') or not _is_configured(settings):
                 return
-            recipients = _recipients_for_event(event_type)
+            recipients = _recipients_for_event(event_type, sid)
             if not recipients:
                 return
-            _send_sync(event_type, subject, lines, link_path, actor, recipients, settings)
+            _send_sync(event_type, subject, lines, link_path, actor, recipients, settings, store_id=sid)
         except Exception as e:
             try:
-                _log(event_type, subject, [], 'queue_failed', f'{type(e).__name__}: {e}')
+                _log(event_type, subject, [], 'queue_failed', f'{type(e).__name__}: {e}', store_id=sid)
             except Exception:
                 pass
 
@@ -581,24 +721,25 @@ def send_notification(event_type: str, subject: str, lines: list[str],
 
 
 def send_html_notification(event_type: str, subject: str, html_body: str,
-                           text_body: str = '') -> None:
+                           text_body: str = '', store_id: int | None = None) -> None:
     """Fire-and-forget notification using already-rendered HTML. Never raises.
     DB reads run inside the worker thread so the caller returns immediately."""
     if event_type not in VALID_EVENTS:
         return
+    sid = _resolve_store_id(store_id)
 
     def _worker():
         try:
-            settings = get_settings()
+            settings = get_settings(sid)
             if not settings.get('enabled') or not _is_configured(settings):
                 return
-            recipients = _recipients_for_event(event_type)
+            recipients = _recipients_for_event(event_type, sid)
             if not recipients:
                 return
-            _send_html_sync(event_type, subject, html_body, text_body, recipients, settings)
+            _send_html_sync(event_type, subject, html_body, text_body, recipients, settings, store_id=sid)
         except Exception as e:
             try:
-                _log(event_type, subject, [], 'queue_failed', f'{type(e).__name__}: {e}')
+                _log(event_type, subject, [], 'queue_failed', f'{type(e).__name__}: {e}', store_id=sid)
             except Exception:
                 pass
 
@@ -940,16 +1081,18 @@ def build_prep_weekly_text(data: dict, actor: str = '', changed_count: int = 0) 
 
 
 def send_prep_weekly_schedule(week_start: str | date, subject: str | None = None,
-                              actor: str = '', changed_count: int = 0) -> None:
+                              actor: str = '', changed_count: int = 0,
+                              store_id: int | None = None) -> None:
     """Send the full weekly prep schedule to recipients subscribed to prep."""
-    data = collect_weekly_prep(week_start)
-    settings = get_settings()
+    sid = _resolve_store_id(store_id)
+    data = collect_weekly_prep(week_start, store_id=sid)
+    settings = get_settings(sid)
     base_url = settings.get('base_url') or ''
     subject = subject or f"Weekly prep schedule - {data['week_start']} to {data['week_end']}"
     html = build_prep_weekly_email_html(
         data, subject=subject, actor=actor, changed_count=changed_count, base_url=base_url)
     text = build_prep_weekly_text(data, actor=actor, changed_count=changed_count)
-    send_html_notification('prep', subject, html, text)
+    send_html_notification('prep', subject, html, text, store_id=sid)
 
 
 # ── Daily digest ──────────────────────────────────────────────────────────────
@@ -957,9 +1100,11 @@ def send_prep_weekly_schedule(week_start: str | date, subject: str | None = None
 import secrets
 
 
-def get_or_create_digest_token() -> str:
+def get_or_create_digest_token(store_id: int | None = None) -> str:
     """Return the secret token used to authenticate the public digest cron URL.
     Creates one on first use."""
+    sid = _resolve_store_id(store_id)
+    key = f'digest_token:{sid}'
     with _conn() as conn:
         # Reuse the email_log table's existence as a "table ready" signal; ensure
         # a tiny key/value table for misc app config exists.
@@ -967,22 +1112,29 @@ def get_or_create_digest_token() -> str:
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL DEFAULT ''
         )''')
-        row = conn.execute('SELECT value FROM app_config WHERE key=?', ('digest_token',)).fetchone()
+        row = conn.execute('SELECT value FROM app_config WHERE key=?', (key,)).fetchone()
+        if not row and sid == 1:
+            row = conn.execute('SELECT value FROM app_config WHERE key=?', ('digest_token',)).fetchone()
+            if row and row['value']:
+                conn.execute('INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)',
+                             (key, row['value']))
         if row and row['value']:
             return row['value']
         new_tok = secrets.token_urlsafe(24)
         conn.execute('INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)',
-                     ('digest_token', new_tok))
+                     (key, new_tok))
         return new_tok
 
 
-def regenerate_digest_token() -> str:
+def regenerate_digest_token(store_id: int | None = None) -> str:
+    sid = _resolve_store_id(store_id)
+    key = f'digest_token:{sid}'
     new_tok = secrets.token_urlsafe(24)
     with _conn() as conn:
         conn.execute('''CREATE TABLE IF NOT EXISTS app_config (
             key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')''')
         conn.execute('INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)',
-                     ('digest_token', new_tok))
+                     (key, new_tok))
     return new_tok
 
 
@@ -1051,8 +1203,10 @@ def collect_daily_digest(target_date: str, checklists_meta: dict | None = None,
             FROM temp_readings tr
             JOIN temp_sessions ts ON ts.id = tr.session_id
             LEFT JOIN temp_food_templates ft
-              ON ft.temp_type = ts.type AND ft.food_name = tr.food_name
-            WHERE ts.date=?''', (target_date,)).fetchall()]
+              ON ft.temp_type = ts.type
+             AND ft.food_name = tr.food_name
+             AND ft.store_id = ts.store_id
+            WHERE ts.date=? AND ts.store_id=?''', (target_date, store_id)).fetchall()]
         oos_flagged = []
         for r in oos:
             if (r.get('defrosted') or 'N').upper() == 'Y':
@@ -1534,10 +1688,12 @@ def build_digest_html(data: dict, base_url: str = '') -> str:
 
 
 def send_daily_digest(target_date: str, checklists_meta: dict,
-                       temperatures_meta: dict, issue_categories: dict) -> tuple[bool, str]:
+                       temperatures_meta: dict, issue_categories: dict,
+                       store_id: int | None = None) -> tuple[bool, str]:
     """Build + send the digest synchronously. Returns (ok, message).
     Sends to recipients who have ANY event opt-in enabled."""
-    settings = get_settings()
+    sid = _resolve_store_id(store_id)
+    settings = get_settings(sid)
     if not _is_configured(settings):
         return False, 'Email service not configured.'
     # Anyone who would receive at least one event type also gets the digest.
@@ -1545,7 +1701,8 @@ def send_daily_digest(target_date: str, checklists_meta: dict,
         rows = conn.execute('''SELECT email FROM email_recipients WHERE active=1 AND (
             notify_checklist=1 OR notify_temperature=1 OR notify_violation=1 OR
             notify_issue=1 OR notify_prep=1 OR notify_training=1 OR
-            notify_pastry=1 OR notify_jobs=1) ORDER BY email''').fetchall()
+            notify_pastry=1 OR notify_jobs=1) AND store_id=? ORDER BY email''',
+            (sid,)).fetchall()
     recipients = [r['email'] for r in rows]
     if not recipients:
         return False, 'No active recipients.'
@@ -1553,7 +1710,8 @@ def send_daily_digest(target_date: str, checklists_meta: dict,
     data = collect_daily_digest(target_date,
                                  checklists_meta=checklists_meta,
                                  temperatures_meta=temperatures_meta,
-                                 issue_categories=issue_categories)
+                                 issue_categories=issue_categories,
+                                 store_id=sid)
     html = build_digest_html(data, base_url=settings.get('base_url') or '')
     equip = data.get('equipment') or {}
     equip_total_checks = equip.get('total_checks')
@@ -1608,14 +1766,15 @@ def send_daily_digest(target_date: str, checklists_meta: dict,
 
     subj = f'Daily Digest — {date_pretty}'
     if sent_to and not failures:
-        _log('digest', subj, sent_to, 'sent')
+        _log('digest', subj, sent_to, 'sent', store_id=sid)
         return True, f'Digest sent to {len(sent_to)} recipient(s).'
     if sent_to and failures:
         _log('digest', subj, recipients, 'partial',
-             f'Sent to {len(sent_to)}, failed for {len(failures)}: ' + ' | '.join(failures))
+             f'Sent to {len(sent_to)}, failed for {len(failures)}: ' + ' | '.join(failures),
+             store_id=sid)
         return True, (f'Digest sent to {len(sent_to)} recipient(s), '
                       f'{len(failures)} failed: ' + ' | '.join(failures)[:200])
-    _log('digest', subj, recipients, 'failed', ' | '.join(failures) or 'unknown')
+    _log('digest', subj, recipients, 'failed', ' | '.join(failures) or 'unknown', store_id=sid)
     return False, ' | '.join(failures) or 'unknown error'
 
 

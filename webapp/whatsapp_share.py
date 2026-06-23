@@ -188,8 +188,8 @@ def _collect_today(date_str: str, period: str | None = None) -> dict:
                        COALESCE(ft.food_kind, 'cold') AS kind
                 FROM temp_readings tr
                 LEFT JOIN temp_food_templates ft
-                  ON ft.temp_type = ? AND ft.food_name = tr.food_name
-                WHERE tr.session_id = ?''', (r['type'], r['id'])).fetchall()
+                  ON ft.temp_type = ? AND ft.food_name = tr.food_name AND ft.store_id = ?
+                WHERE tr.session_id = ?''', (r['type'], sid, r['id'])).fetchall()
             bad = 0
             for rr in reading_rows:
                 # Defrosting cold item — higher temp expected, not an alert.
@@ -1062,9 +1062,9 @@ def _temperature_detail(session_id: int) -> dict | None:
             SELECT tr.*, COALESCE(ft.food_kind, 'cold') AS food_kind
             FROM temp_readings tr
             LEFT JOIN temp_food_templates ft
-              ON ft.temp_type=? AND ft.food_name=tr.food_name
+              ON ft.temp_type=? AND ft.food_name=tr.food_name AND ft.store_id=?
             WHERE tr.session_id=?
-            ORDER BY tr.food_order''', (sess['type'], session_id)).fetchall()
+            ORDER BY tr.food_order''', (sess['type'], sess.get('store_id') or current_store_id(), session_id)).fetchall()
         sess['readings'] = [dict(r) for r in rows]
         sess['meta']     = TEMPERATURES_META.get(sess['type'], {})
     return sess

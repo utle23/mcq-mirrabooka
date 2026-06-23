@@ -82,7 +82,8 @@ def _get_staff():
     try:
         with _get_db() as conn:
             rows = conn.execute(
-                'SELECT name FROM staff_members WHERE active=1 ORDER BY name').fetchall()
+                'SELECT name FROM staff_members WHERE active=1 AND store_id=? ORDER BY name',
+                (current_store_id(),)).fetchall()
             return [r['name'] for r in rows]
     except Exception:
         return []
@@ -107,7 +108,8 @@ def init_pastry_tables(db_path):
                 id     INTEGER PRIMARY KEY AUTOINCREMENT,
                 name   TEXT NOT NULL,
                 phone  TEXT,
-                active INTEGER DEFAULT 1
+                active INTEGER DEFAULT 1,
+                store_id INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS pastry_items (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -120,7 +122,8 @@ def init_pastry_tables(db_path):
                 returnable    INTEGER DEFAULT 0,
                 on_order_only INTEGER DEFAULT 0,
                 active        INTEGER DEFAULT 1,
-                sort_order    INTEGER DEFAULT 0
+                sort_order    INTEGER DEFAULT 0,
+                store_id      INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS pastry_delivery (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,48 +149,58 @@ def init_pastry_tables(db_path):
                 UNIQUE(item_id, date)
             );
         ''')
+        for tbl in ('pastry_suppliers', 'pastry_items'):
+            try:
+                conn.execute(f'ALTER TABLE {tbl} ADD COLUMN store_id INTEGER NOT NULL DEFAULT 1')
+            except sqlite3.OperationalError:
+                pass
 
         # Seed suppliers if empty
         if conn.execute('SELECT COUNT(*) as c FROM pastry_suppliers').fetchone()['c'] == 0:
             for s in SUPPLIERS_SEED:
-                conn.execute('INSERT INTO pastry_suppliers (name, phone) VALUES (?,?)',
+                conn.execute('INSERT INTO pastry_suppliers (name, phone, store_id) VALUES (?,?,1)',
                              (s['name'], s['phone']))
 
         # Migrations: update/add specific suppliers
         conn.execute("UPDATE pastry_suppliers SET phone='0407 153 059' WHERE name='Chú Tai Yến' AND (phone='' OR phone IS NULL)")
         if not conn.execute("SELECT 1 FROM pastry_suppliers WHERE name='Cha Lua VINHAM'").fetchone():
-            conn.execute("INSERT INTO pastry_suppliers (name, phone) VALUES ('Cha Lua VINHAM','0422 785 126')")
+            conn.execute("INSERT INTO pastry_suppliers (name, phone, store_id) VALUES ('Cha Lua VINHAM','0422 785 126',1)")
 
         # Seed items if empty
         if conn.execute('SELECT COUNT(*) as c FROM pastry_items').fetchone()['c'] == 0:
             for i, item in enumerate(ITEMS_SEED):
-                sup = conn.execute('SELECT id FROM pastry_suppliers WHERE name=?', (item[2],)).fetchone()
+                sup = conn.execute('SELECT id FROM pastry_suppliers WHERE name=? AND store_id=1', (item[2],)).fetchone()
                 sup_id = sup['id'] if sup else None
                 conn.execute('''INSERT INTO pastry_items
                     (name_en, name_vi, supplier_id, selling_price, cost_price,
-                     delivery_days, returnable, on_order_only, sort_order)
-                    VALUES (?,?,?,?,?,?,?,?,?)''',
+                     delivery_days, returnable, on_order_only, sort_order, store_id)
+                    VALUES (?,?,?,?,?,?,?,?,?,1)''',
                     (item[0], item[1], sup_id, item[3], item[4], item[5], item[6], item[7], i))
 
         # Migration: add Cha Lua VINHAM item if not exists (for existing DBs)
         if not conn.execute("SELECT 1 FROM pastry_items WHERE name_en LIKE 'Cha Lua VINHAM%'").fetchone():
-            sup = conn.execute("SELECT id FROM pastry_suppliers WHERE name='Cha Lua VINHAM'").fetchone()
+            sup = conn.execute("SELECT id FROM pastry_suppliers WHERE name='Cha Lua VINHAM' AND store_id=1").fetchone()
             if sup:
-                max_order = conn.execute('SELECT COALESCE(MAX(sort_order),0) FROM pastry_items').fetchone()[0]
+                max_order = conn.execute(
+                    'SELECT COALESCE(MAX(sort_order),0) FROM pastry_items WHERE store_id=1'
+                ).fetchone()[0]
                 conn.execute('''INSERT INTO pastry_items
                     (name_en, name_vi, supplier_id, selling_price, cost_price,
-                     delivery_days, returnable, on_order_only, sort_order)
-                    VALUES (?,?,?,?,?,?,?,?,?)''',
+                     delivery_days, returnable, on_order_only, sort_order, store_id)
+                    VALUES (?,?,?,?,?,?,?,?,?,1)''',
                     ('Cha Lua VINHAM (3.5kg x 10 pcs)', 'Chả Lụa VINHAM (3.5kg x 10 pcs)',
                      sup['id'], 0, 0, '', 0, 1, max_order + 1))
 
 def _get_items_with_supplier(conn, active_only=True):
     q = '''SELECT i.*, s.name as supplier_name, s.phone as supplier_phone
            FROM pastry_items i LEFT JOIN pastry_suppliers s ON s.id=i.supplier_id'''
+    params = [current_store_id()]
     if active_only:
-        q += ' WHERE i.active=1'
+        q += ' WHERE i.store_id=? AND i.active=1'
+    else:
+        q += ' WHERE i.store_id=?'
     q += ' ORDER BY i.sort_order, i.id'
-    rows = [dict(r) for r in conn.execute(q).fetchall()]
+    rows = [dict(r) for r in conn.execute(q, params).fetchall()]
     for r in rows:
         r['margin']   = round((r['selling_price'] or 0) - (r['cost_price'] or 0), 2)
         r['margin_pct']= round(r['margin'] / r['selling_price'] * 100, 1) if r['selling_price'] else 0
@@ -247,7 +260,8 @@ def record_delivery(item_id):
             condition=excluded.condition,
             notes=excluded.notes''',
             (item_id, today, qty, received_by, now, condition, notes, current_store_id()))
-        item_row = conn.execute('SELECT name FROM pastry_items WHERE id=?', (item_id,)).fetchone()
+        item_row = conn.execute('SELECT name_en AS name FROM pastry_items WHERE id=? AND store_id=?',
+                                (item_id, current_store_id())).fetchone()
 
     # Only notify when condition is not "good" — keep the inbox quiet.
     if email_service and condition and condition.lower() != 'good':
@@ -517,8 +531,8 @@ def pastry_dashboard():
                    SUM(s.qty_sold * i.selling_price) as revenue,
                    SUM(s.qty_sold * i.margin_calc) as profit
             FROM pastry_sales s
-            JOIN (SELECT id, selling_price, (selling_price-cost_price) as margin_calc FROM pastry_items) i
-            ON i.id=s.item_id WHERE s.date=? AND s.store_id=?''', (today, sid)).fetchone()
+            JOIN (SELECT id, selling_price, (selling_price-cost_price) as margin_calc FROM pastry_items WHERE store_id=?) i
+            ON i.id=s.item_id WHERE s.date=? AND s.store_id=?''', (sid, today, sid)).fetchone()
 
         # Week stats
         week_sales = conn.execute('''
@@ -526,9 +540,9 @@ def pastry_dashboard():
                    SUM(s.qty_sold * i.selling_price) as revenue,
                    SUM(s.qty_sold * i.margin_calc) as profit
             FROM pastry_sales s
-            JOIN (SELECT id, selling_price, (selling_price-cost_price) as margin_calc FROM pastry_items) i
+            JOIN (SELECT id, selling_price, (selling_price-cost_price) as margin_calc FROM pastry_items WHERE store_id=?) i
             ON i.id=s.item_id WHERE s.date>=? AND s.date<=? AND s.store_id=?''',
-            (week_dates[0], week_dates[-1], sid)).fetchone()
+            (sid, week_dates[0], week_dates[-1], sid)).fetchone()
 
         # Per-item performance this week
         item_perf = conn.execute('''
@@ -542,9 +556,9 @@ def pastry_dashboard():
             FROM pastry_items i
             LEFT JOIN pastry_suppliers s ON s.id=i.supplier_id
             LEFT JOIN pastry_sales sl ON sl.item_id=i.id AND sl.date>=? AND sl.date<=? AND sl.store_id=?
-            WHERE i.active=1
+            WHERE i.active=1 AND i.store_id=?
             GROUP BY i.id ORDER BY week_revenue DESC''',
-            (week_dates[0], week_dates[-1], sid)).fetchall()
+            (week_dates[0], week_dates[-1], sid, sid)).fetchall()
         item_perf = [dict(r) for r in item_perf]
 
         # Recent deliveries
@@ -572,7 +586,8 @@ def pastry_items_view():
     with _get_db() as conn:
         items     = _get_items_with_supplier(conn, active_only=False)
         suppliers = [dict(r) for r in conn.execute(
-            'SELECT * FROM pastry_suppliers WHERE active=1 ORDER BY name').fetchall()]
+            'SELECT * FROM pastry_suppliers WHERE active=1 AND store_id=? ORDER BY name',
+            (current_store_id(),)).fetchall()]
     return render_template('pastry_items.html',
         items=items, suppliers=suppliers,
         days=DAYS, day_labels=DAY_LABELS, is_admin=True)
@@ -584,8 +599,8 @@ def add_item():
     with _get_db() as conn:
         conn.execute('''INSERT INTO pastry_items
             (name_en, name_vi, supplier_id, selling_price, cost_price,
-             delivery_days, returnable, on_order_only)
-            VALUES (?,?,?,?,?,?,?,?)''',
+             delivery_days, returnable, on_order_only, store_id)
+            VALUES (?,?,?,?,?,?,?,?,?)''',
             (request.form.get('name_en','').strip(),
              request.form.get('name_vi','').strip(),
              request.form.get('supplier_id') or None,
@@ -593,7 +608,8 @@ def add_item():
              float(request.form.get('cost_price',0) or 0),
              delivery_days,
              _form_bool('returnable'),
-             _form_bool('on_order_only')))
+             _form_bool('on_order_only'),
+             current_store_id()))
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return jsonify({'ok': True})
     return redirect(url_for('pastry.pastry_items_view'))
@@ -605,7 +621,7 @@ def edit_item(iid):
     with _get_db() as conn:
         conn.execute('''UPDATE pastry_items SET
             name_en=?, name_vi=?, supplier_id=?, selling_price=?, cost_price=?,
-            delivery_days=?, returnable=?, on_order_only=? WHERE id=?''',
+            delivery_days=?, returnable=?, on_order_only=? WHERE id=? AND store_id=?''',
             (request.form.get('name_en','').strip(),
              request.form.get('name_vi','').strip(),
              request.form.get('supplier_id') or None,
@@ -613,7 +629,7 @@ def edit_item(iid):
              float(request.form.get('cost_price',0) or 0),
              delivery_days,
              _form_bool('returnable'),
-             _form_bool('on_order_only'), iid))
+             _form_bool('on_order_only'), iid, current_store_id()))
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return jsonify({'ok': True})
     return redirect(url_for('pastry.pastry_items_view'))
@@ -622,10 +638,11 @@ def edit_item(iid):
 @_admin_required
 def toggle_item(iid):
     with _get_db() as conn:
-        row = conn.execute('SELECT active FROM pastry_items WHERE id=?', (iid,)).fetchone()
+        row = conn.execute('SELECT active FROM pastry_items WHERE id=? AND store_id=?',
+                           (iid, current_store_id())).fetchone()
         if row:
-            conn.execute('UPDATE pastry_items SET active=? WHERE id=?',
-                         (0 if row['active'] else 1, iid))
+            conn.execute('UPDATE pastry_items SET active=? WHERE id=? AND store_id=?',
+                         (0 if row['active'] else 1, iid, current_store_id()))
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return jsonify({'ok': True})
     return redirect(url_for('pastry.pastry_items_view'))
@@ -634,9 +651,10 @@ def toggle_item(iid):
 @_admin_required
 def add_supplier():
     with _get_db() as conn:
-        conn.execute('INSERT INTO pastry_suppliers (name, phone) VALUES (?,?)',
+        conn.execute('INSERT INTO pastry_suppliers (name, phone, store_id) VALUES (?,?,?)',
                      (request.form.get('name','').strip(),
-                      request.form.get('phone','').strip()))
+                      request.form.get('phone','').strip(),
+                      current_store_id()))
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return jsonify({'ok': True})
     return redirect(url_for('pastry.pastry_items_view'))
@@ -645,9 +663,9 @@ def add_supplier():
 @_admin_required
 def edit_supplier(sid):
     with _get_db() as conn:
-        conn.execute('UPDATE pastry_suppliers SET name=?, phone=? WHERE id=?',
+        conn.execute('UPDATE pastry_suppliers SET name=?, phone=? WHERE id=? AND store_id=?',
                      (request.form.get('name','').strip(),
-                      request.form.get('phone','').strip(), sid))
+                      request.form.get('phone','').strip(), sid, current_store_id()))
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return jsonify({'ok': True})
     return redirect(url_for('pastry.pastry_items_view'))

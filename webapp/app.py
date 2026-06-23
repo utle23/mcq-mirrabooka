@@ -28,6 +28,7 @@ from equipment_routes import equipment  as equipment_bp, init_equipment_tables
 from structure_routes import structure  as structure_bp, init_structure_tables
 from webauthn_routes  import webauthn_bp,                 init_webauthn
 from food_pricing_routes import food_pricing as food_pricing_bp, init_food_pricing_tables
+from branch_seed import seed_subiaco_branch
 import email_service
 app.register_blueprint(prep_bp)
 app.register_blueprint(pastry_bp)
@@ -352,13 +353,15 @@ STORES_SEED = [
     ('subiaco',    'MCQ Subiaco'),
 ]
 
-# Operational (store-specific) tables that carry store_id. Reference/template
-# tables (menus, task templates, rules, pricing) stay chain-wide on purpose.
+# Tables that carry store_id. This includes operational records plus the
+# branch-specific templates/catalogues that staff see when they log in.
 STORE_SCOPED_TABLES = [
     'staff_members', 'checklist_sessions', 'temp_sessions', 'packaging_orders',
     'staff_violations', 'issue_reports', 'equipment_units', 'equipment_temp_readings',
     'prep_weekly_schedules', 'prep_weekly_tasks', 'prep_daily_status',
     'pastry_delivery', 'pastry_sales', 'orders',
+    'checklist_task_templates', 'temp_food_templates', 'prep_task_templates',
+    'packaging_suppliers', 'pastry_suppliers', 'pastry_items',
     # batch 3 — HR / org-chart tables
     'staff_certificates', 'staff_birthdays', 'monthly_reward_decisions',
     'monthly_reward_adjustments', 'salary_raise_reviews',
@@ -640,6 +643,128 @@ def _rebuild_structure_meta_per_store(conn):
         conn.execute('PRAGMA foreign_keys = ON')
 
 
+def _rebuild_checklist_templates_per_store(conn):
+    """Make checklist task templates branch-specific.
+
+    Earlier versions used PRIMARY KEY(chk_type, section, task_order), which
+    meant Subiaco edits overwrote Mirrabooka. Rebuild to include store_id.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='checklist_task_templates'"
+    ).fetchone()
+    if not row or not row[0]:
+        return
+    norm = row[0].replace(' ', '').replace('\n', '')
+    if 'PRIMARYKEY(chk_type,section,task_order,store_id)' in norm:
+        return
+    cols = [r[1] for r in conn.execute('PRAGMA table_info(checklist_task_templates)')]
+    store_expr = 'COALESCE(store_id, 1)' if 'store_id' in cols else '1'
+    conn.execute('PRAGMA foreign_keys = OFF')
+    conn.execute('BEGIN')
+    try:
+        conn.execute('DROP TABLE IF EXISTS checklist_task_templates__mig')
+        conn.execute('''CREATE TABLE checklist_task_templates__mig (
+            chk_type   TEXT NOT NULL,
+            section    TEXT NOT NULL,
+            task_order INTEGER NOT NULL,
+            task_name  TEXT NOT NULL,
+            store_id   INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (chk_type, section, task_order, store_id)
+        )''')
+        conn.execute(f'''INSERT OR REPLACE INTO checklist_task_templates__mig
+            (chk_type, section, task_order, task_name, store_id)
+            SELECT chk_type, section, task_order, task_name, {store_expr}
+            FROM checklist_task_templates''')
+        conn.execute('DROP TABLE checklist_task_templates')
+        conn.execute('ALTER TABLE checklist_task_templates__mig RENAME TO checklist_task_templates')
+        conn.execute('COMMIT')
+    except Exception:
+        conn.execute('ROLLBACK')
+        raise
+    finally:
+        conn.execute('PRAGMA foreign_keys = ON')
+
+
+def _rebuild_temp_templates_per_store(conn):
+    """Make food temperature templates branch-specific."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='temp_food_templates'"
+    ).fetchone()
+    if not row or not row[0]:
+        return
+    norm = row[0].replace(' ', '').replace('\n', '')
+    if 'PRIMARYKEY(temp_type,food_order,store_id)' in norm:
+        return
+    cols = [r[1] for r in conn.execute('PRAGMA table_info(temp_food_templates)')]
+    store_expr = 'COALESCE(store_id, 1)' if 'store_id' in cols else '1'
+    kind_expr = 'COALESCE(food_kind, "cold")' if 'food_kind' in cols else '"cold"'
+    conn.execute('PRAGMA foreign_keys = OFF')
+    conn.execute('BEGIN')
+    try:
+        conn.execute('DROP TABLE IF EXISTS temp_food_templates__mig')
+        conn.execute('''CREATE TABLE temp_food_templates__mig (
+            temp_type  TEXT NOT NULL,
+            food_order INTEGER NOT NULL,
+            food_name  TEXT NOT NULL,
+            food_kind  TEXT NOT NULL DEFAULT 'cold',
+            store_id   INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (temp_type, food_order, store_id)
+        )''')
+        conn.execute(f'''INSERT OR REPLACE INTO temp_food_templates__mig
+            (temp_type, food_order, food_name, food_kind, store_id)
+            SELECT temp_type, food_order, food_name, {kind_expr}, {store_expr}
+            FROM temp_food_templates''')
+        conn.execute('DROP TABLE temp_food_templates')
+        conn.execute('ALTER TABLE temp_food_templates__mig RENAME TO temp_food_templates')
+        conn.execute('COMMIT')
+    except Exception:
+        conn.execute('ROLLBACK')
+        raise
+    finally:
+        conn.execute('PRAGMA foreign_keys = ON')
+
+
+def _rebuild_prep_schedules_per_store(conn):
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='prep_weekly_schedules'"
+    ).fetchone()
+    if not row or not row[0]:
+        return
+    norm = row[0].replace(' ', '').replace('\n', '')
+    if 'UNIQUE(week_start,store_id)' in norm:
+        return
+    cols = [r[1] for r in conn.execute('PRAGMA table_info(prep_weekly_schedules)')]
+    store_expr = 'COALESCE(store_id, 1)' if 'store_id' in cols else '1'
+    conn.execute('PRAGMA foreign_keys = OFF')
+    conn.execute('BEGIN')
+    try:
+        conn.execute('DROP TABLE IF EXISTS prep_weekly_schedules__mig')
+        conn.execute('''CREATE TABLE prep_weekly_schedules__mig (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            week_start TEXT NOT NULL,
+            created_by TEXT,
+            created_at TEXT DEFAULT (datetime('now','localtime')),
+            locked     INTEGER DEFAULT 0,
+            locked_by  TEXT,
+            locked_at  TEXT,
+            notes      TEXT,
+            store_id   INTEGER DEFAULT 1,
+            UNIQUE(week_start, store_id)
+        )''')
+        conn.execute(f'''INSERT OR REPLACE INTO prep_weekly_schedules__mig
+            (id, week_start, created_by, created_at, locked, locked_by, locked_at, notes, store_id)
+            SELECT id, week_start, created_by, created_at, locked, locked_by, locked_at, notes, {store_expr}
+            FROM prep_weekly_schedules''')
+        conn.execute('DROP TABLE prep_weekly_schedules')
+        conn.execute('ALTER TABLE prep_weekly_schedules__mig RENAME TO prep_weekly_schedules')
+        conn.execute('COMMIT')
+    except Exception:
+        conn.execute('ROLLBACK')
+        raise
+    finally:
+        conn.execute('PRAGMA foreign_keys = ON')
+
+
 def migrate_multistore(db_path):
     """All multi-store schema work on a dedicated AUTOCOMMIT connection so the
     UNIQUE-constraint rebuilds can safely toggle foreign_keys. Idempotent."""
@@ -705,6 +830,7 @@ def migrate_multistore(db_path):
               'UNIQUE(item_id, date)', 'UNIQUE(item_id, date, store_id)')
         _safe(_add_store_to_unique, 'pastry_sales',
               'UNIQUE(item_id, date)', 'UNIQUE(item_id, date, store_id)')
+        _safe(_rebuild_prep_schedules_per_store)
         # 3b) names that were globally UNIQUE become unique PER STORE.
         _safe(_rebuild_col_unique_per_store, 'staff_members', 'name')
         _safe(_rebuild_col_unique_per_store, 'staff_birthdays', 'staff_name')
@@ -713,8 +839,16 @@ def migrate_multistore(db_path):
               'UNIQUE(reward_month, award_type)', 'UNIQUE(reward_month, award_type, store_id)')
         # 3d) org-chart settings (structure_meta) are keyed per store.
         _safe(_rebuild_structure_meta_per_store)
+        # 3e) Branch-specific compliance templates.
+        _safe(_rebuild_checklist_templates_per_store)
+        _safe(_rebuild_temp_templates_per_store)
         # 4) index store_id on every scoped table (after any rebuild above)
         for tbl in STORE_SCOPED_TABLES:
+            try:
+                conn.execute(f'CREATE INDEX IF NOT EXISTS idx_{tbl}_store_id ON {tbl}(store_id)')
+            except Exception:
+                pass
+        for tbl in ('checklist_task_templates', 'temp_food_templates'):
             try:
                 conn.execute(f'CREATE INDEX IF NOT EXISTS idx_{tbl}_store_id ON {tbl}(store_id)')
             except Exception:
@@ -955,7 +1089,8 @@ def init_db():
             section    TEXT NOT NULL,
             task_order INTEGER NOT NULL,
             task_name  TEXT NOT NULL,
-            PRIMARY KEY (chk_type, section, task_order)
+            store_id   INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (chk_type, section, task_order, store_id)
         )''')
         # Temperature food item templates (admin can rename/add items)
         conn.execute('''CREATE TABLE IF NOT EXISTS temp_food_templates (
@@ -963,11 +1098,20 @@ def init_db():
             food_order INTEGER NOT NULL,
             food_name  TEXT NOT NULL,
             food_kind  TEXT NOT NULL DEFAULT 'cold',
-            PRIMARY KEY (temp_type, food_order)
+            store_id   INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (temp_type, food_order, store_id)
         )''')
         # Migrate: add food_kind for older installs that don't have it yet.
         try:
             conn.execute("ALTER TABLE temp_food_templates ADD COLUMN food_kind TEXT NOT NULL DEFAULT 'cold'")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE checklist_task_templates ADD COLUMN store_id INTEGER NOT NULL DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE temp_food_templates ADD COLUMN store_id INTEGER NOT NULL DEFAULT 1")
         except sqlite3.OperationalError:
             pass
         # Keep the holding type on each reading so historical records retain
@@ -994,7 +1138,7 @@ def init_db():
                 for section in ('opening', 'closing'):
                     for i, name in enumerate(chk_data.get(section, [])):
                         conn.execute('''INSERT OR IGNORE INTO checklist_task_templates
-                            (chk_type, section, task_order, task_name) VALUES (?,?,?,?)''',
+                            (chk_type, section, task_order, task_name, store_id) VALUES (?,?,?,?,1)''',
                             (chk_type, section, i, name))
 
         # Seed temperature food templates per type if missing.
@@ -1005,7 +1149,7 @@ def init_db():
             if existing_foods == 0:
                 for i, food in enumerate(temp_data.get('foods', [])):
                     conn.execute('''INSERT OR IGNORE INTO temp_food_templates
-                        (temp_type, food_order, food_name, food_kind) VALUES (?,?,?,?)''',
+                        (temp_type, food_order, food_name, food_kind, store_id) VALUES (?,?,?,?,1)''',
                         (temp_type, i, food['name'], food['kind']))
 
         # Migration: classify existing food rows by kind. Runs once
@@ -1148,10 +1292,12 @@ def init_db():
             'CREATE INDEX IF NOT EXISTS idx_chk_submitted_by   ON checklist_sessions(submitted_by)',
             'CREATE INDEX IF NOT EXISTS idx_chk_responsible    ON checklist_sessions(responsible)',
             'CREATE INDEX IF NOT EXISTS idx_chktasks_session   ON checklist_tasks(session_id)',
+            'CREATE UNIQUE INDEX IF NOT EXISTS idx_chktasks_session_order ON checklist_tasks(session_id, task_order)',
             'CREATE INDEX IF NOT EXISTS idx_chkphotos_session  ON checklist_photos(session_id)',
             'CREATE INDEX IF NOT EXISTS idx_temp_date          ON temp_sessions(date)',
             'CREATE INDEX IF NOT EXISTS idx_temp_type_date     ON temp_sessions(type, date)',
             'CREATE INDEX IF NOT EXISTS idx_tempreadings_sess  ON temp_readings(session_id)',
+            'CREATE UNIQUE INDEX IF NOT EXISTS idx_tempreadings_session_order ON temp_readings(session_id, food_order)',
             'CREATE INDEX IF NOT EXISTS idx_issue_date         ON issue_reports(date)',
             'CREATE INDEX IF NOT EXISTS idx_issue_status       ON issue_reports(status)',
             'CREATE INDEX IF NOT EXISTS idx_viol_date          ON staff_violations(incident_date)',
@@ -1280,13 +1426,15 @@ def log_action_conn(conn, action, record_type, record_id, user_name, details='')
     except Exception:
         pass
 
-def get_temp_foods(conn, temp_type):
+def get_temp_foods(conn, temp_type, store_id=None):
     """Return list of {name, kind} dicts in display order."""
+    if store_id is None:
+        store_id = current_store_id()
     rows = conn.execute('''
         SELECT food_name, food_kind FROM temp_food_templates
-        WHERE temp_type=?
+        WHERE temp_type=? AND store_id=?
         ORDER BY food_order
-    ''', (temp_type,)).fetchall()
+    ''', (temp_type, store_id)).fetchall()
     if rows:
         return [{'name': r['food_name'],
                  'kind': r['food_kind'] or temp_food_kind_default(temp_type, r['food_name'])}
@@ -1299,9 +1447,9 @@ def get_temp_food_names(conn, temp_type):
     return [f['name'] for f in get_temp_foods(conn, temp_type)]
 
 
-def get_temp_data_for_form(conn, temp_type):
+def get_temp_data_for_form(conn, temp_type, store_id=None):
     temp_data = dict(TEMPERATURES[temp_type])
-    temp_data['foods'] = get_temp_foods(conn, temp_type)
+    temp_data['foods'] = get_temp_foods(conn, temp_type, store_id=store_id)
     return temp_data
 
 def month_bounds(month_value=None):
@@ -1785,6 +1933,7 @@ def login_page():
     if request.method == 'POST':
         pw     = request.form.get('password', '')
         code   = request.form.get('branch', '').strip()   # store CODE
+        mode   = request.form.get('mode', 'user').strip().lower()
         store  = next((s for s in stores if s['code'] == code), None)
         if not store:
             error = 'Please select a valid branch.'
@@ -1794,10 +1943,14 @@ def login_page():
             role = None
             if pw and pw == SUPER_ADMIN_PASSWORD:
                 role = 'super_admin'
-            elif pw and pw == (store.get('admin_password') or ADMIN_PASSWORD):
+            elif mode == 'admin' and pw and pw == (store.get('admin_password') or ADMIN_PASSWORD):
                 role = 'admin'
+            elif mode == 'user' and pw and pw == (store.get('user_password') or USER_PASSWORD):
+                role = 'user'
             elif pw and pw == (store.get('kitchen_password') or KITCHEN_PASSWORD):
                 role = 'kitchen'
+            elif pw and pw == (store.get('admin_password') or ADMIN_PASSWORD):
+                role = 'admin'
             elif pw and pw == (store.get('user_password') or USER_PASSWORD):
                 role = 'user'
             if role is None:
@@ -1921,8 +2074,8 @@ def checklist_form(chk_type):
     with get_db() as conn:
         # Load task names from DB (admin may have renamed them)
         db_tasks = conn.execute(
-            'SELECT task_name FROM checklist_task_templates WHERE chk_type=? AND section=? ORDER BY task_order',
-            (chk_type, section)).fetchall()
+            'SELECT task_name FROM checklist_task_templates WHERE chk_type=? AND section=? AND store_id=? ORDER BY task_order',
+            (chk_type, section, current_store_id())).fetchall()
         if db_tasks:
             tasks = [r['task_name'] for r in db_tasks]
         else:
@@ -1961,10 +2114,13 @@ def update_checklist_task():
     if order < 0:
         return jsonify({'error': 'invalid order'}), 400
     with get_db() as conn:
-        conn.execute('''INSERT INTO checklist_task_templates (chk_type, section, task_order, task_name)
-            VALUES (?,?,?,?)
-            ON CONFLICT(chk_type, section, task_order) DO UPDATE SET task_name=excluded.task_name''',
-            (chk_type, section, order, name))
+        sid = current_store_id()
+        conn.execute('''INSERT INTO checklist_task_templates
+            (chk_type, section, task_order, task_name, store_id)
+            VALUES (?,?,?,?,?)
+            ON CONFLICT(chk_type, section, task_order, store_id) DO UPDATE
+            SET task_name=excluded.task_name''',
+            (chk_type, section, order, name, sid))
     return jsonify({'ok': True, 'name': name})
 
 @app.route('/admin/checklist-task/add', methods=['POST'])
@@ -1976,18 +2132,19 @@ def add_checklist_task():
     if not name or chk_type not in CHECKLISTS or section not in ('opening', 'closing'):
         return jsonify({'error': 'invalid'}), 400
     with get_db() as conn:
+        sid = current_store_id()
         next_order = conn.execute('''
             SELECT COALESCE(MAX(task_order), -1) + 1 as next_order
             FROM checklist_task_templates
-            WHERE chk_type=? AND section=?
-        ''', (chk_type, section)).fetchone()['next_order']
+            WHERE chk_type=? AND section=? AND store_id=?
+        ''', (chk_type, section, sid)).fetchone()['next_order']
         conn.execute('''INSERT INTO checklist_task_templates
-            (chk_type, section, task_order, task_name) VALUES (?,?,?,?)''',
-            (chk_type, section, next_order, name))
+            (chk_type, section, task_order, task_name, store_id) VALUES (?,?,?,?,?)''',
+            (chk_type, section, next_order, name, sid))
         total = conn.execute('''
             SELECT COUNT(*) as c FROM checklist_task_templates
-            WHERE chk_type=? AND section=?
-        ''', (chk_type, section)).fetchone()['c']
+            WHERE chk_type=? AND section=? AND store_id=?
+        ''', (chk_type, section, sid)).fetchone()['c']
     return jsonify({'ok': True, 'order': total - 1, 'name': name})
 
 
@@ -2007,16 +2164,17 @@ def delete_checklist_task():
         return jsonify({'error': 'invalid order'}), 400
 
     with get_db() as conn:
+        sid = current_store_id()
         conn.execute('''DELETE FROM checklist_task_templates
-            WHERE chk_type=? AND section=? AND task_order=?''',
-            (chk_type, section, order))
+            WHERE chk_type=? AND section=? AND task_order=? AND store_id=?''',
+            (chk_type, section, order, sid))
         # Pull rows above the deleted slot down by 1 so task_order stays contiguous.
         # SQLite handles UNIQUE constraint within a single UPDATE statement atomically,
         # so direct decrement is safe here (the deleted slot is empty).
         conn.execute('''UPDATE checklist_task_templates
             SET task_order = task_order - 1
-            WHERE chk_type=? AND section=? AND task_order > ?''',
-            (chk_type, section, order))
+            WHERE chk_type=? AND section=? AND task_order > ? AND store_id=?''',
+            (chk_type, section, order, sid))
     return jsonify({'ok': True})
 
 @app.route('/checklist/<chk_type>/save', methods=['POST'])
@@ -2047,8 +2205,8 @@ def checklist_save(chk_type):
 
     with get_db() as conn:
         db_tasks = conn.execute(
-            'SELECT task_name FROM checklist_task_templates WHERE chk_type=? AND section=? ORDER BY task_order',
-            (chk_type, section)).fetchall()
+            'SELECT task_name FROM checklist_task_templates WHERE chk_type=? AND section=? AND store_id=? ORDER BY task_order',
+            (chk_type, section, current_store_id())).fetchall()
         tasks = [r['task_name'] for r in db_tasks] if db_tasks else CHECKLISTS[chk_type][section]
         task_rows = []
         for i, task_name in enumerate(tasks):
@@ -2081,10 +2239,17 @@ def checklist_save(chk_type):
             (chk_type, section, chk_date, store_id)).fetchone()
         sid = row['id']
 
-        conn.execute('DELETE FROM checklist_tasks WHERE session_id=?', (sid,))
-        conn.executemany(
-            'INSERT INTO checklist_tasks (session_id,task_order,task_name,done,note) VALUES (?,?,?,?,?)',
-            [(sid, i, task_name, done, note) for i, task_name, done, note in task_rows])
+        for i, task_name, done, note in task_rows:
+            conn.execute('''INSERT INTO checklist_tasks
+                (session_id, task_order, task_name, done, note)
+                VALUES (?,?,?,?,?)
+                ON CONFLICT(session_id, task_order) DO UPDATE SET
+                    task_name=excluded.task_name,
+                    done=excluded.done,
+                    note=excluded.note''',
+                (sid, i, task_name, done, note))
+        conn.execute('DELETE FROM checklist_tasks WHERE session_id=? AND task_order>=?',
+                     (sid, len(task_rows)))
 
         # ── Handle photo uploads ──────────────────────────────────────────────
         new_photos = []
@@ -2211,7 +2376,7 @@ def temperature_form(temp_type):
         return redirect(url_for('dashboard'))
     temp_date = request.args.get('date', date.today().isoformat())
     with get_db() as conn:
-        temp_data = get_temp_data_for_form(conn, temp_type)
+        temp_data = get_temp_data_for_form(conn, temp_type, store_id=current_store_id())
         existing = conn.execute(
             'SELECT * FROM temp_sessions WHERE type=? AND date=? AND store_id=?',
             (temp_type, temp_date, current_store_id())).fetchone()
@@ -2242,10 +2407,14 @@ def update_temperature_food():
         return jsonify({'error': 'invalid order'}), 400
 
     with get_db() as conn:
-        conn.execute('''INSERT INTO temp_food_templates (temp_type, food_order, food_name)
-            VALUES (?,?,?)
-            ON CONFLICT(temp_type, food_order) DO UPDATE SET food_name=excluded.food_name''',
-            (temp_type, order, name))
+        sid = current_store_id()
+        kind = temp_food_kind_default(temp_type, name)
+        conn.execute('''INSERT INTO temp_food_templates
+            (temp_type, food_order, food_name, food_kind, store_id)
+            VALUES (?,?,?,?,?)
+            ON CONFLICT(temp_type, food_order, store_id) DO UPDATE
+            SET food_name=excluded.food_name, food_kind=excluded.food_kind''',
+            (temp_type, order, name, kind, sid))
     return jsonify({'ok': True, 'name': name})
 
 @app.route('/admin/temperature-food/add', methods=['POST'])
@@ -2256,14 +2425,16 @@ def add_temperature_food():
     if temp_type not in TEMPERATURES or not name:
         return jsonify({'error': 'invalid'}), 400
     with get_db() as conn:
+        sid = current_store_id()
         next_order = conn.execute('''
             SELECT COALESCE(MAX(food_order), -1) + 1 as next_order
             FROM temp_food_templates
-            WHERE temp_type=?
-        ''', (temp_type,)).fetchone()['next_order']
+            WHERE temp_type=? AND store_id=?
+        ''', (temp_type, sid)).fetchone()['next_order']
+        kind = temp_food_kind_default(temp_type, name)
         conn.execute('''INSERT INTO temp_food_templates
-            (temp_type, food_order, food_name) VALUES (?,?,?)''',
-            (temp_type, next_order, name))
+            (temp_type, food_order, food_name, food_kind, store_id) VALUES (?,?,?,?,?)''',
+            (temp_type, next_order, name, kind, sid))
     return jsonify({'ok': True, 'order': next_order, 'name': name})
 
 
@@ -2282,11 +2453,12 @@ def delete_temperature_food():
         return jsonify({'error': 'invalid order'}), 400
 
     with get_db() as conn:
+        sid = current_store_id()
         conn.execute('''DELETE FROM temp_food_templates
-            WHERE temp_type=? AND food_order=?''', (temp_type, order))
+            WHERE temp_type=? AND food_order=? AND store_id=?''', (temp_type, order, sid))
         conn.execute('''UPDATE temp_food_templates
             SET food_order = food_order - 1
-            WHERE temp_type=? AND food_order > ?''', (temp_type, order))
+            WHERE temp_type=? AND food_order > ? AND store_id=?''', (temp_type, order, sid))
     return jsonify({'ok': True})
 
 @app.route('/temperature/<temp_type>/save', methods=['POST'])
@@ -2304,7 +2476,7 @@ def temperature_save(temp_type):
         except: return None
 
     with get_db() as _c:
-        foods = get_temp_foods(_c, temp_type)
+        foods = get_temp_foods(_c, temp_type, store_id=current_store_id())
     readings = []
     for i, food in enumerate(foods):
         readings.append({
@@ -2329,19 +2501,40 @@ def temperature_save(temp_type):
             conn.execute(
                 "UPDATE temp_sessions SET recorded_by=?,checked_by=?,submitted_at=datetime('now','localtime'),notes=? WHERE id=?",
                 (recorded_by, checked_by, notes, sid))
-            conn.execute('DELETE FROM temp_readings WHERE session_id=?', (sid,))
         else:
             cur = conn.execute(
                 'INSERT INTO temp_sessions (type,date,recorded_by,checked_by,notes,store_id) VALUES (?,?,?,?,?,?)',
                 (temp_type, temp_date, recorded_by, checked_by, notes, store_id))
             sid = cur.lastrowid
         for r in readings:
-            conn.execute(
-                'INSERT INTO temp_readings (session_id,food_order,food_name,food_kind,c1_time,c1_temp,c2_time,c2_temp,c3_time,c3_temp,c4_time,c4_temp,c5_time,c5_temp,discarded,notes,defrosted) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            conn.execute('''
+                INSERT INTO temp_readings
+                    (session_id,food_order,food_name,food_kind,
+                     c1_time,c1_temp,c2_time,c2_temp,c3_time,c3_temp,
+                     c4_time,c4_temp,c5_time,c5_temp,discarded,notes,defrosted)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(session_id, food_order) DO UPDATE SET
+                    food_name=excluded.food_name,
+                    food_kind=excluded.food_kind,
+                    c1_time=excluded.c1_time,
+                    c1_temp=excluded.c1_temp,
+                    c2_time=excluded.c2_time,
+                    c2_temp=excluded.c2_temp,
+                    c3_time=excluded.c3_time,
+                    c3_temp=excluded.c3_temp,
+                    c4_time=excluded.c4_time,
+                    c4_temp=excluded.c4_temp,
+                    c5_time=excluded.c5_time,
+                    c5_temp=excluded.c5_temp,
+                    discarded=excluded.discarded,
+                    notes=excluded.notes,
+                    defrosted=excluded.defrosted''',
                 (sid,r['food_order'],r['food_name'],r['food_kind'],
                  r['c1_time'],r['c1_temp'],r['c2_time'],r['c2_temp'],
                  r['c3_time'],r['c3_temp'],r['c4_time'],r['c4_temp'],
                  r['c5_time'],r['c5_temp'],r['discarded'],r['notes'],r['defrosted']))
+        conn.execute('DELETE FROM temp_readings WHERE session_id=? AND food_order>=?',
+                     (sid, len(readings)))
         log_action_conn(conn, 'SAVE_TEMP', 'temperature', sid, recorded_by,
                         f'{TEMPERATURES[temp_type]["title"]} / {temp_date}')
 
@@ -4880,7 +5073,7 @@ def admin_data_vacuum():
 @admin_required
 def email_log_clear():
     with get_db() as conn:
-        conn.execute('DELETE FROM email_log')
+        conn.execute('DELETE FROM email_log WHERE store_id=?', (current_store_id(),))
     return redirect(url_for('email_settings'))
 
 
@@ -4891,7 +5084,8 @@ def email_log_clear():
 def email_digest_send_now():
     target_date = request.form.get('date', date.today().isoformat())
     ok, msg = email_service.send_daily_digest(
-        target_date, CHECKLISTS, TEMPERATURES, ISSUE_CATEGORIES)
+        target_date, CHECKLISTS, TEMPERATURES, ISSUE_CATEGORIES,
+        store_id=current_store_id())
     return jsonify({'ok': ok, 'message': msg})
 
 
@@ -4901,8 +5095,9 @@ def email_digest_preview():
     """Render the digest HTML in the browser (no send)."""
     target_date = request.args.get('date', date.today().isoformat())
     data = email_service.collect_daily_digest(
-        target_date, CHECKLISTS, TEMPERATURES, ISSUE_CATEGORIES)
-    settings = email_service.get_settings()
+        target_date, CHECKLISTS, TEMPERATURES, ISSUE_CATEGORIES,
+        store_id=current_store_id())
+    settings = email_service.get_settings(current_store_id())
     html = email_service.build_digest_html(data, base_url=settings.get('base_url') or '')
     return html
 
@@ -4910,21 +5105,33 @@ def email_digest_preview():
 @app.route('/admin/email-settings/digest/regenerate-token', methods=['POST'])
 @admin_required
 def email_digest_regenerate_token():
-    new_tok = email_service.regenerate_digest_token()
+    new_tok = email_service.regenerate_digest_token(current_store_id())
     return jsonify({'ok': True, 'token': new_tok})
 
 
 @app.route('/cron/daily-digest')
 def cron_daily_digest():
     """Public endpoint for external cron services to trigger the digest.
-    Authenticated by a secret token passed as ?token= ."""
-    expected = email_service.get_or_create_digest_token()
+    Authenticated by a secret token passed as ?token= .
+    Optional ?store=subiaco selects that branch's token, recipients and data."""
+    store_code = (request.args.get('store') or '').strip().lower()
+    store_id = 1
+    if store_code:
+        try:
+            row = next((s for s in get_stores(active_only=False)
+                        if (s.get('code') or '').lower() == store_code), None)
+            if row:
+                store_id = row['id']
+        except Exception:
+            store_id = 1
+    expected = email_service.get_or_create_digest_token(store_id)
     given = request.args.get('token', '')
     if not given or given != expected:
         return jsonify({'error': 'forbidden'}), 403
     target_date = request.args.get('date', date.today().isoformat())
     ok, msg = email_service.send_daily_digest(
-        target_date, CHECKLISTS, TEMPERATURES, ISSUE_CATEGORIES)
+        target_date, CHECKLISTS, TEMPERATURES, ISSUE_CATEGORIES,
+        store_id=store_id)
     return jsonify({'ok': ok, 'date': target_date, 'message': msg})
 
 
@@ -4933,10 +5140,10 @@ def cron_daily_digest():
 @app.route('/admin/email-settings', methods=['GET'])
 @admin_required
 def email_settings():
-    settings = email_service.get_settings()
-    recipients = email_service.list_recipients()
-    log = email_service.get_recent_log(30)
-    digest_token = email_service.get_or_create_digest_token()
+    settings = email_service.get_settings(current_store_id())
+    recipients = email_service.list_recipients(current_store_id())
+    log = email_service.get_recent_log(30, current_store_id())
+    digest_token = email_service.get_or_create_digest_token(current_store_id())
     return render_template('email_settings.html',
         settings=settings, recipients=recipients, log=log,
         event_types=email_service.EVENT_TYPES,
@@ -5050,6 +5257,8 @@ _safe_init(init_food_pricing_tables, DB_PATH)
 # equipment, prep, pastry, ...) is created by the blueprint inits above, so they
 # must all exist before we add store_id / widen UNIQUE constraints.
 _safe_init(migrate_multistore, DB_PATH)
+_safe_init(seed_subiaco_branch, DB_PATH,
+           os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates', 'branch.xlsx'))
 
 if __name__ == '__main__':
     print('\n' + '='*50)
