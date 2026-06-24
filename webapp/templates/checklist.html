@@ -51,7 +51,9 @@
   <div id="deadline-alert" class="alert mb-0 py-2 px-3 rounded-0 d-none" role="alert"></div>
   <div class="card-body">
     <form method="POST" action="/checklist/{{ chk_type }}/save"
-          id="chk-form" enctype="multipart/form-data">
+          id="chk-form" enctype="multipart/form-data"
+          data-confirmed-save="1"
+          data-draft-scope="checklist:{{ store_id }}:{{ chk_type }}:{{ section }}:{{ chk_date }}">
       <input type="hidden" name="date" value="{{ chk_date }}">
       <input type="hidden" name="section" value="{{ section }}">
 

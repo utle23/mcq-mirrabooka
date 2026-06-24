@@ -520,10 +520,17 @@ document.addEventListener('DOMContentLoaded', _updateInstallBtnVisibility);
 (function () {
   const PREFIX = 'mcqdraft::';
   const TTL = 2 * 24 * 60 * 60 * 1000;   // drafts expire after 2 days
-  const base = () => PREFIX + location.pathname + location.search + '::';
+  const PENDING_CLEAR = 'mcqDraftPendingClear';
 
   function formId(form, idx) {
     return form.getAttribute('data-draft') || form.id || ('form' + idx);
+  }
+  function formBase(form) {
+    const scope = form.getAttribute('data-draft-scope');
+    return PREFIX + (scope || (location.pathname + location.search)) + '::';
+  }
+  function formPrefix(form, idx) {
+    return formBase(form) + formId(form, idx) + '::';
   }
   function formEligible(form) {
     if ((form.getAttribute('method') || 'get').toLowerCase() !== 'post') return false;
@@ -540,7 +547,7 @@ document.addEventListener('DOMContentLoaded', _updateInstallBtnVisibility);
   }
   function keyFor(form, idx, f) {
     const name = f.name || f.id;
-    let k = base() + formId(form, idx) + '::' + name;
+    let k = formPrefix(form, idx) + name;
     if (f.type === 'checkbox') k += '::' + (f.value || 'on');
     return k;
   }
@@ -587,7 +594,11 @@ document.addEventListener('DOMContentLoaded', _updateInstallBtnVisibility);
   }
 
   function clearForm(form, idx) {
-    const p = base() + formId(form, idx) + '::';
+    const p = formPrefix(form, idx);
+    clearPrefix(p);
+  }
+
+  function clearPrefix(p) {
     try {
       Object.keys(localStorage).forEach(k => { if (k.indexOf(p) === 0) localStorage.removeItem(k); });
     } catch (e) {}
@@ -606,6 +617,13 @@ document.addEventListener('DOMContentLoaded', _updateInstallBtnVisibility);
 
   document.addEventListener('DOMContentLoaded', function () {
     purgeExpired();
+    if (new URLSearchParams(location.search).get('saved') === '1') {
+      try {
+        const pending = sessionStorage.getItem(PENDING_CLEAR);
+        if (pending) clearPrefix(pending);
+        sessionStorage.removeItem(PENDING_CLEAR);
+      } catch (e) {}
+    }
     const forms = Array.from(document.querySelectorAll('form')).filter(formEligible);
     forms.forEach((form, idx) => {
       restoreForm(form, idx);
@@ -621,7 +639,16 @@ document.addEventListener('DOMContentLoaded', _updateInstallBtnVisibility);
       };
       form.addEventListener('input', onChange);
       form.addEventListener('change', onChange);
-      form.addEventListener('submit', () => { flush(); clearForm(form, idx); });
+      form.addEventListener('submit', () => {
+        flush();
+        if (form.hasAttribute('data-confirmed-save')) {
+          // Keep the draft until the redirected page confirms `saved=1`.
+          // A database/network failure therefore never destroys typed data.
+          try { sessionStorage.setItem(PENDING_CLEAR, formPrefix(form, idx)); } catch (e) {}
+        } else {
+          clearForm(form, idx);
+        }
+      });
     });
   });
 })();

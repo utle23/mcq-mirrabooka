@@ -549,6 +549,84 @@ def get_db():
     return conn
 
 
+def _update_then_insert(conn, table, key_values, data_values):
+    """Upsert one row without depending on a UNIQUE index.
+
+    Some deployed databases can briefly miss a newly-added unique index when
+    startup migration runs while another worker holds SQLite's write lock.
+    UPDATE-first keeps saves working in that state. SQLite serializes writers,
+    and the retry handles a concurrent insert when the index is present.
+    """
+    where = ' AND '.join(f'{column}=?' for column in key_values)
+    assignments = ', '.join(f'{column}=?' for column in data_values)
+    update_values = list(data_values.values()) + list(key_values.values())
+    cur = conn.execute(
+        f'UPDATE {table} SET {assignments} WHERE {where}',
+        update_values,
+    )
+    if cur.rowcount:
+        return
+
+    combined = {**key_values, **data_values}
+    columns = ', '.join(combined)
+    placeholders = ', '.join('?' for _ in combined)
+    try:
+        conn.execute(
+            f'INSERT INTO {table} ({columns}) VALUES ({placeholders})',
+            list(combined.values()),
+        )
+    except sqlite3.IntegrityError as insert_error:
+        # Another request may have inserted the same natural key after our
+        # UPDATE. Update that row rather than surfacing a 500 to the staff.
+        retry = conn.execute(
+            f'UPDATE {table} SET {assignments} WHERE {where}',
+            update_values,
+        )
+        if not retry.rowcount:
+            raise insert_error
+
+
+def ensure_save_upsert_constraints(db_path):
+    """Repair the two child-row keys used by checklist/temperature saves.
+
+    The save path no longer requires these indexes to function, but keeping
+    them guarantees data integrity and makes accidental duplicates impossible.
+    If an older database already contains duplicates, retain the newest row.
+    """
+    conn = sqlite3.connect(db_path, timeout=30)
+    try:
+        conn.execute('PRAGMA busy_timeout = 30000')
+        conn.execute('BEGIN IMMEDIATE')
+        for table, order_column, index_name in (
+            ('checklist_tasks', 'task_order', 'idx_chktasks_session_order'),
+            ('temp_readings', 'food_order', 'idx_tempreadings_session_order'),
+        ):
+            exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
+            if not exists:
+                continue
+            conn.execute(f'''
+                DELETE FROM {table}
+                WHERE id NOT IN (
+                    SELECT MAX(id)
+                    FROM {table}
+                    GROUP BY session_id, {order_column}
+                )
+            ''')
+            conn.execute(
+                f'CREATE UNIQUE INDEX IF NOT EXISTS {index_name} '
+                f'ON {table}(session_id, {order_column})'
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def _add_store_to_unique(conn, table, old_unique, new_unique):
     """Rebuild `table` so its natural-key UNIQUE constraint also includes
     store_id. Safe + idempotent: no-op if already migrated or the old
@@ -1833,6 +1911,43 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated
 
+
+def database_save_guard(record_kind):
+    """Return staff to the form on a transient SQLite save failure.
+
+    The form draft stays in localStorage until a successful redirect includes
+    `saved=1`, so retrying does not require re-entering the record.
+    """
+    def decorator(f):
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            try:
+                return f(*args, **kwargs)
+            except sqlite3.Error:
+                app.logger.exception('Database error while saving %s', record_kind)
+                flash(
+                    'The record could not be saved yet. Your draft is still on this device. '
+                    'Please wait a moment and tap Save again.',
+                    'danger',
+                )
+                if record_kind == 'checklist':
+                    return redirect(url_for(
+                        'checklist_form',
+                        chk_type=kwargs.get('chk_type', ''),
+                        date=request.form.get('date', date.today().isoformat()),
+                        section=request.form.get('section', 'opening'),
+                        save_error=1,
+                    ), code=303)
+                return redirect(url_for(
+                    'temperature_form',
+                    temp_type=kwargs.get('temp_type', ''),
+                    date=request.form.get('date', date.today().isoformat()),
+                    save_error=1,
+                ), code=303)
+        return decorated
+    return decorator
+
+
 def admin_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -2179,6 +2294,7 @@ def delete_checklist_task():
 
 @app.route('/checklist/<chk_type>/save', methods=['POST'])
 @login_required
+@database_save_guard('checklist')
 def checklist_save(chk_type):
     if chk_type not in CHECKLISTS:
         return redirect(url_for('dashboard'))
@@ -2216,38 +2332,67 @@ def checklist_save(chk_type):
                 request.form.get(f'note_{i}', ''),
             ))
 
-        # UPSERT — avoids UNIQUE constraint race condition. Scoped per store:
-        # the UNIQUE key is (type, section, date, store_id).
+        # UPDATE-first upsert keeps this compatible with databases where a
+        # startup migration was delayed by a SQLite write lock.
         store_id = current_store_id()
-        conn.execute('''
-            INSERT INTO checklist_sessions
-                (type,section,date,day_of_week,responsible,submitted_by,general_done_by,manager_submit,general_note,is_late,store_id)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(type,section,date,store_id) DO UPDATE SET
-                responsible=excluded.responsible,
-                submitted_by=excluded.submitted_by,
-                submitted_at=datetime('now','localtime'),
-                day_of_week=excluded.day_of_week,
-                general_done_by=excluded.general_done_by,
-                manager_submit=excluded.manager_submit,
-                general_note=excluded.general_note,
-                is_late=excluded.is_late
-        ''', (chk_type, section, chk_date, day_name, responsible, submitted_by,
-              general_done_by, manager_submit, general_note, is_late, store_id))
-        row = conn.execute(
-            'SELECT id FROM checklist_sessions WHERE type=? AND section=? AND date=? AND store_id=?',
-            (chk_type, section, chk_date, store_id)).fetchone()
-        sid = row['id']
+        existing_session = conn.execute(
+            '''SELECT id FROM checklist_sessions
+               WHERE type=? AND section=? AND date=? AND store_id=?''',
+            (chk_type, section, chk_date, store_id),
+        ).fetchone()
+        if existing_session:
+            sid = existing_session['id']
+            conn.execute('''
+                UPDATE checklist_sessions SET
+                    responsible=?,
+                    submitted_by=?,
+                    submitted_at=datetime('now','localtime'),
+                    day_of_week=?,
+                    general_done_by=?,
+                    manager_submit=?,
+                    general_note=?,
+                    is_late=?
+                WHERE id=?
+            ''', (responsible, submitted_by, day_name, general_done_by,
+                  manager_submit, general_note, is_late, sid))
+        else:
+            try:
+                cur = conn.execute('''
+                    INSERT INTO checklist_sessions
+                        (type,section,date,day_of_week,responsible,submitted_by,
+                         general_done_by,manager_submit,general_note,is_late,store_id)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                ''', (chk_type, section, chk_date, day_name, responsible,
+                      submitted_by, general_done_by, manager_submit,
+                      general_note, is_late, store_id))
+                sid = cur.lastrowid
+            except sqlite3.IntegrityError:
+                # A concurrent submit created the same session first.
+                row = conn.execute(
+                    '''SELECT id FROM checklist_sessions
+                       WHERE type=? AND section=? AND date=? AND store_id=?''',
+                    (chk_type, section, chk_date, store_id),
+                ).fetchone()
+                if not row:
+                    raise
+                sid = row['id']
+                conn.execute('''
+                    UPDATE checklist_sessions SET
+                        responsible=?, submitted_by=?,
+                        submitted_at=datetime('now','localtime'),
+                        day_of_week=?, general_done_by=?, manager_submit=?,
+                        general_note=?, is_late=?
+                    WHERE id=?
+                ''', (responsible, submitted_by, day_name, general_done_by,
+                      manager_submit, general_note, is_late, sid))
 
         for i, task_name, done, note in task_rows:
-            conn.execute('''INSERT INTO checklist_tasks
-                (session_id, task_order, task_name, done, note)
-                VALUES (?,?,?,?,?)
-                ON CONFLICT(session_id, task_order) DO UPDATE SET
-                    task_name=excluded.task_name,
-                    done=excluded.done,
-                    note=excluded.note''',
-                (sid, i, task_name, done, note))
+            _update_then_insert(
+                conn,
+                'checklist_tasks',
+                {'session_id': sid, 'task_order': i},
+                {'task_name': task_name, 'done': done, 'note': note},
+            )
         conn.execute('DELETE FROM checklist_tasks WHERE session_id=? AND task_order>=?',
                      (sid, len(task_rows)))
 
@@ -2304,7 +2449,7 @@ def checklist_save(chk_type):
         link_path=f'/checklist/view/{sid}',
         actor=submitted_by,
     )
-    return redirect(url_for('checklist_view', session_id=sid))
+    return redirect(url_for('checklist_view', session_id=sid, saved=1))
 
 @app.route('/checklist/view/<int:session_id>')
 @login_required
@@ -2463,6 +2608,7 @@ def delete_temperature_food():
 
 @app.route('/temperature/<temp_type>/save', methods=['POST'])
 @login_required
+@database_save_guard('temperature')
 def temperature_save(temp_type):
     if temp_type not in TEMPERATURES:
         return redirect(url_for('dashboard'))
@@ -2502,37 +2648,45 @@ def temperature_save(temp_type):
                 "UPDATE temp_sessions SET recorded_by=?,checked_by=?,submitted_at=datetime('now','localtime'),notes=? WHERE id=?",
                 (recorded_by, checked_by, notes, sid))
         else:
-            cur = conn.execute(
-                'INSERT INTO temp_sessions (type,date,recorded_by,checked_by,notes,store_id) VALUES (?,?,?,?,?,?)',
-                (temp_type, temp_date, recorded_by, checked_by, notes, store_id))
-            sid = cur.lastrowid
+            try:
+                cur = conn.execute(
+                    'INSERT INTO temp_sessions (type,date,recorded_by,checked_by,notes,store_id) VALUES (?,?,?,?,?,?)',
+                    (temp_type, temp_date, recorded_by, checked_by, notes, store_id))
+                sid = cur.lastrowid
+            except sqlite3.IntegrityError:
+                row = conn.execute(
+                    'SELECT id FROM temp_sessions WHERE type=? AND date=? AND store_id=?',
+                    (temp_type, temp_date, store_id),
+                ).fetchone()
+                if not row:
+                    raise
+                sid = row['id']
+                conn.execute(
+                    "UPDATE temp_sessions SET recorded_by=?,checked_by=?,submitted_at=datetime('now','localtime'),notes=? WHERE id=?",
+                    (recorded_by, checked_by, notes, sid))
         for r in readings:
-            conn.execute('''
-                INSERT INTO temp_readings
-                    (session_id,food_order,food_name,food_kind,
-                     c1_time,c1_temp,c2_time,c2_temp,c3_time,c3_temp,
-                     c4_time,c4_temp,c5_time,c5_temp,discarded,notes,defrosted)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(session_id, food_order) DO UPDATE SET
-                    food_name=excluded.food_name,
-                    food_kind=excluded.food_kind,
-                    c1_time=excluded.c1_time,
-                    c1_temp=excluded.c1_temp,
-                    c2_time=excluded.c2_time,
-                    c2_temp=excluded.c2_temp,
-                    c3_time=excluded.c3_time,
-                    c3_temp=excluded.c3_temp,
-                    c4_time=excluded.c4_time,
-                    c4_temp=excluded.c4_temp,
-                    c5_time=excluded.c5_time,
-                    c5_temp=excluded.c5_temp,
-                    discarded=excluded.discarded,
-                    notes=excluded.notes,
-                    defrosted=excluded.defrosted''',
-                (sid,r['food_order'],r['food_name'],r['food_kind'],
-                 r['c1_time'],r['c1_temp'],r['c2_time'],r['c2_temp'],
-                 r['c3_time'],r['c3_temp'],r['c4_time'],r['c4_temp'],
-                 r['c5_time'],r['c5_temp'],r['discarded'],r['notes'],r['defrosted']))
+            _update_then_insert(
+                conn,
+                'temp_readings',
+                {'session_id': sid, 'food_order': r['food_order']},
+                {
+                    'food_name': r['food_name'],
+                    'food_kind': r['food_kind'],
+                    'c1_time': r['c1_time'],
+                    'c1_temp': r['c1_temp'],
+                    'c2_time': r['c2_time'],
+                    'c2_temp': r['c2_temp'],
+                    'c3_time': r['c3_time'],
+                    'c3_temp': r['c3_temp'],
+                    'c4_time': r['c4_time'],
+                    'c4_temp': r['c4_temp'],
+                    'c5_time': r['c5_time'],
+                    'c5_temp': r['c5_temp'],
+                    'discarded': r['discarded'],
+                    'notes': r['notes'],
+                    'defrosted': r['defrosted'],
+                },
+            )
         conn.execute('DELETE FROM temp_readings WHERE session_id=? AND food_order>=?',
                      (sid, len(readings)))
         log_action_conn(conn, 'SAVE_TEMP', 'temperature', sid, recorded_by,
@@ -2575,7 +2729,7 @@ def temperature_save(temp_type):
         link_path=f'/temperature/view/{sid}',
         actor=recorded_by,
     )
-    return redirect(url_for('temperature_view', session_id=sid))
+    return redirect(url_for('temperature_view', session_id=sid, saved=1))
 
 @app.route('/temperature/view/<int:session_id>')
 @login_required
@@ -5257,6 +5411,7 @@ _safe_init(init_food_pricing_tables, DB_PATH)
 # equipment, prep, pastry, ...) is created by the blueprint inits above, so they
 # must all exist before we add store_id / widen UNIQUE constraints.
 _safe_init(migrate_multistore, DB_PATH)
+_safe_init(ensure_save_upsert_constraints, DB_PATH)
 _safe_init(seed_subiaco_branch, DB_PATH,
            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates', 'branch.xlsx'))
 

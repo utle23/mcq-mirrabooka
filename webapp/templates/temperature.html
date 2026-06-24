@@ -50,7 +50,10 @@
     <small class="text-muted">Date: {{ temp_date }} — Record live during shift, do NOT pre-fill</small>
   </div>
   <div class="card-body">
-    <form method="POST" action="/temperature/{{ temp_type }}/save">
+    <form method="POST" action="/temperature/{{ temp_type }}/save"
+          id="temp-form"
+          data-confirmed-save="1"
+          data-draft-scope="temperature:{{ store_id }}:{{ temp_type }}:{{ temp_date }}">
       <input type="hidden" name="date" value="{{ temp_date }}">
 
       <div class="row g-3 mb-3">
