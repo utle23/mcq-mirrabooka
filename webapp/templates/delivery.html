@@ -14,6 +14,18 @@
   </button>
 </div>
 
+<!-- Date filter (by receiving date) -->
+<form method="GET" class="row g-2 align-items-end mb-3">
+  <div class="col-auto"><label class="form-label small mb-0 text-muted">From</label>
+    <input type="date" name="from" value="{{ date_from }}" class="form-control form-control-sm"></div>
+  <div class="col-auto"><label class="form-label small mb-0 text-muted">To</label>
+    <input type="date" name="to" value="{{ date_to }}" class="form-control form-control-sm"></div>
+  <div class="col-auto">
+    <button class="btn btn-sm btn-outline-secondary"><i class="fas fa-filter me-1"></i>Filter</button>
+    {% if date_from or date_to %}<a href="/delivery/" class="btn btn-sm btn-link text-decoration-none">Clear</a>{% endif %}
+  </div>
+</form>
+
 {% if not rows %}
 <div class="text-center text-muted py-5">
   <i class="fas fa-truck-ramp-box fa-2x mb-2 d-block opacity-50"></i>
@@ -34,6 +46,7 @@
           <th>Product</th>
           <th>Packaging</th>
           <th>Decision</th>
+          <th>Photo</th>
           <th>Checked by</th>
           <th>Note</th>
           <th></th>
@@ -62,9 +75,17 @@
               <span class="badge bg-success">Accepted</span>
             {% endif %}
           </td>
+          <td>
+            {% if r.photo %}
+              <img src="/delivery/photo/{{ r.photo }}" alt="photo"
+                   style="height:34px;width:34px;object-fit:cover;border-radius:4px;cursor:pointer"
+                   onclick="openLightbox('/delivery/photo/{{ r.photo }}', '{{ r.product_name }} — {{ r.receiving_date }}')">
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
           <td class="small">{{ r.checked_by or '—' }}</td>
           <td class="small text-muted">{{ r.note or '' }}</td>
           <td class="text-end text-nowrap">
+            {% if is_admin %}
             <button class="btn btn-sm btn-link text-secondary p-0 me-2" title="Edit"
               onclick="openDeliveryEdit(this)"
               data-id="{{ r.id }}" data-supplier="{{ r.supplier_name }}"
@@ -73,14 +94,13 @@
               data-temp="{{ r.delivery_temp if r.delivery_temp is not none else '' }}"
               data-useby="{{ r.use_by_date }}" data-pcond="{{ r.product_condition }}"
               data-pkg="{{ r.packaging_condition }}" data-accepted="{{ r.accepted }}"
-              data-note="{{ r.note }}" data-checkedby="{{ r.checked_by }}">
+              data-note="{{ r.note }}" data-checkedby="{{ r.checked_by }}" data-photo="{{ r.photo }}">
               <i class="fas fa-pen"></i></button>
-            {% if is_admin %}
             <form method="POST" action="/delivery/{{ r.id }}/delete" class="d-inline"
                   onsubmit="return confirm('Delete this delivery record?')">
               <button class="btn btn-sm btn-link text-danger p-0" title="Delete"><i class="fas fa-trash"></i></button>
             </form>
-            {% endif %}
+            {% else %}<span class="text-muted">—</span>{% endif %}
           </td>
         </tr>
         {% endfor %}
@@ -94,7 +114,7 @@
 <div class="modal fade" id="deliveryModal" tabindex="-1">
   <div class="modal-dialog modal-lg">
     <div class="modal-content">
-      <form method="POST" id="deliveryForm" action="/delivery/add" data-draft-scope="delivery-add:{{ store_id }}">
+      <form method="POST" id="deliveryForm" action="/delivery/add" enctype="multipart/form-data" data-draft-scope="delivery-add:{{ store_id }}">
         <div class="modal-header">
           <h6 class="modal-title" id="deliveryModalTitle"><i class="fas fa-truck-ramp-box me-1"></i>Add delivery inspection</h6>
           <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -152,6 +172,20 @@
               <label class="form-label small fw-semibold">Checked by</label>
               <input type="text" name="checked_by" list="staffList" class="form-control form-control-sm">
             </div>
+            <div class="col-md-8">
+              <label class="form-label small fw-semibold">Photo (optional)</label>
+              <input type="file" name="photo" accept="image/*" capture="environment" class="form-control form-control-sm">
+            </div>
+            <div class="col-md-4 d-none align-items-end" id="currentPhotoWrap">
+              <div class="small">
+                <a id="currentPhotoLink" href="#" target="_blank" class="d-inline-block mb-1">
+                  <img id="currentPhotoImg" src="" alt="current" style="height:40px;border-radius:4px"></a>
+                <div class="form-check">
+                  <input class="form-check-input" type="checkbox" name="remove_photo" value="1" id="removePhotoChk">
+                  <label class="form-check-label small" for="removePhotoChk">Remove photo</label>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
         <div class="modal-footer py-2">
@@ -180,6 +214,7 @@ function openDeliveryAdd() {
   f.receiving_date.value = {{ today|tojson }};
   f.receiving_time.value = {{ now_time|tojson }};
   f.accepted.value = 'accepted';
+  document.getElementById('currentPhotoWrap').classList.add('d-none');
   deliveryModal().show();
 }
 function openDeliveryEdit(btn) {
@@ -200,6 +235,15 @@ function openDeliveryEdit(btn) {
   f.accepted.value = d.accepted || 'accepted';
   f.note.value = d.note || '';
   f.checked_by.value = d.checkedby || '';
+  const wrap = document.getElementById('currentPhotoWrap');
+  if (d.photo) {
+    const url = '/delivery/photo/' + d.photo;
+    document.getElementById('currentPhotoImg').src = url;
+    document.getElementById('currentPhotoLink').href = url;
+    wrap.classList.remove('d-none');
+  } else {
+    wrap.classList.add('d-none');
+  }
   deliveryModal().show();
 }
 </script>

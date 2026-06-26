@@ -13,7 +13,9 @@ Reads/writes use the session store via store_scope; by-id mutations are guarded 
 one store can never touch another store's row.
 """
 from flask import (Blueprint, render_template, request, redirect, url_for,
-                   session, jsonify)
+                   session, jsonify, send_from_directory, abort)
+import os
+import secrets
 import sqlite3
 from datetime import datetime, date
 from functools import wraps
@@ -28,6 +30,9 @@ except Exception:
 defrost_bp  = Blueprint('defrost',  __name__, url_prefix='/defrost')
 delivery_bp = Blueprint('delivery', __name__, url_prefix='/delivery')
 DB_PATH = None
+
+UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
+ALLOWED_IMG_EXT = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif'}
 
 # Defrosting must happen in the fridge — safe core-temperature window.
 DEFROST_LO, DEFROST_HI = 0.0, 5.0
@@ -115,6 +120,58 @@ def _notify(kind, subject, lines, link_path, actor):
         pass
 
 
+def _date_range():
+    """Return (from, to) ISO dates from the query string, or ('', '')."""
+    df = (request.args.get('from') or '').strip()
+    dt = (request.args.get('to') or '').strip()
+    return df, dt
+
+
+def _save_delivery_photo(file_storage):
+    """Save an optional delivery photo (downscaled if Pillow is available).
+    Returns the stored filename, or '' when no/invalid file was supplied."""
+    if not file_storage:
+        return ''
+    name = (getattr(file_storage, 'filename', '') or '').strip()
+    if not name:
+        return ''
+    ext = name.rsplit('.', 1)[-1].lower() if '.' in name else ''
+    if ext not in ALLOWED_IMG_EXT:
+        return ''
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    base = f"delivery_{current_store_id()}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(3)}"
+    try:
+        from PIL import Image, ImageOps  # type: ignore
+        file_storage.stream.seek(0)
+        img = ImageOps.exif_transpose(Image.open(file_storage.stream))
+        if img.mode in ('RGBA', 'LA', 'P'):
+            img = img.convert('RGB')
+        img.thumbnail((1280, 1280))
+        dest = os.path.join(UPLOAD_FOLDER, base + '.jpg')
+        img.save(dest, 'JPEG', quality=82)
+        return os.path.basename(dest)
+    except Exception:
+        try:
+            file_storage.stream.seek(0)
+        except Exception:
+            pass
+        dest = os.path.join(UPLOAD_FOLDER, base + '.' + ext)
+        try:
+            file_storage.save(dest)
+            return os.path.basename(dest)
+        except Exception:
+            return ''
+
+
+def _delete_photo_file(filename):
+    if not filename:
+        return
+    try:
+        os.remove(os.path.join(UPLOAD_FOLDER, os.path.basename(filename)))
+    except Exception:
+        pass
+
+
 def init_food_safety_tables(db_path):
     global DB_PATH
     DB_PATH = db_path
@@ -156,6 +213,7 @@ def init_food_safety_tables(db_path):
                 accepted            TEXT NOT NULL DEFAULT 'accepted',  -- accepted | rejected
                 note                TEXT NOT NULL DEFAULT '',
                 checked_by          TEXT NOT NULL DEFAULT '',
+                photo               TEXT NOT NULL DEFAULT '',
                 created_at          TEXT DEFAULT (datetime('now','localtime'))
             );
             CREATE INDEX IF NOT EXISTS idx_defrost_store_status
@@ -165,6 +223,10 @@ def init_food_safety_tables(db_path):
             CREATE INDEX IF NOT EXISTS idx_delivery_store_date
                 ON delivery_inspections(store_id, receiving_date);
         ''')
+        # Migration: add photo column to pre-existing delivery tables.
+        cols = [r['name'] for r in conn.execute("PRAGMA table_info(delivery_inspections)").fetchall()]
+        if 'photo' not in cols:
+            conn.execute("ALTER TABLE delivery_inspections ADD COLUMN photo TEXT NOT NULL DEFAULT ''")
 
 
 # ── Defrosting Temperature Monitoring ────────────────────────────────────────
@@ -177,11 +239,17 @@ def _defrost_temp_unsafe(temp):
 @_login_required
 def defrost_home():
     sid = current_store_id()
+    df, dt = _date_range()
+    where, params = 'store_id=?', [sid]
+    if df:
+        where += ' AND started_on >= ?'; params.append(df)
+    if dt:
+        where += ' AND started_on <= ?'; params.append(dt)
     with _get_db() as conn:
         records = [dict(r) for r in conn.execute(
-            '''SELECT * FROM defrost_records WHERE store_id=?
+            f'''SELECT * FROM defrost_records WHERE {where}
                ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END,
-                        started_on DESC, id DESC''', (sid,)).fetchall()]
+                        started_on DESC, id DESC''', params).fetchall()]
         checks_by_record = {}
         for r in records:
             checks_by_record[r['id']] = [dict(c) for c in conn.execute(
@@ -195,6 +263,7 @@ def defrost_home():
         active=active, closed=closed,
         notes=DEFROST_NOTES, staff=_get_staff(),
         today=date.today().isoformat(), now_time=datetime.now().strftime('%H:%M'),
+        date_from=df, date_to=dt,
         lo=DEFROST_LO, hi=DEFROST_HI, default_supplier=DEFAULT_SUPPLIER,
         is_admin=_is_admin())
 
@@ -281,6 +350,40 @@ def defrost_check_delete(cid):
     return redirect(url_for('defrost.defrost_home'))
 
 
+@defrost_bp.route('/<int:rid>/edit', methods=['POST'])
+@_admin_required
+def defrost_edit(rid):
+    product = request.form.get('product_name', '').strip()
+    if not product:
+        return redirect(url_for('defrost.defrost_home'))
+    guard, gp = store_guard_clause()
+    with _get_db() as conn:
+        conn.execute(f'''UPDATE defrost_records SET
+            product_name=?, supplier_name=?, started_on=?, notes=?
+            WHERE id=? AND {guard}''',
+            [product,
+             request.form.get('supplier_name', '').strip() or DEFAULT_SUPPLIER,
+             (request.form.get('started_on') or date.today().isoformat()).strip(),
+             request.form.get('notes', '').strip(), rid] + gp)
+    return redirect(url_for('defrost.defrost_home'))
+
+
+@defrost_bp.route('/check/<int:cid>/edit', methods=['POST'])
+@_admin_required
+def defrost_check_edit(cid):
+    guard, gp = store_guard_clause('r')
+    with _get_db() as conn:
+        conn.execute(f'''UPDATE defrost_checks SET
+            checked_on=?, checked_time=?, core_temp=?, physical_condition=?, checked_by=?
+            WHERE id=? AND record_id IN (SELECT r.id FROM defrost_records r WHERE {guard})''',
+            [(request.form.get('checked_on') or date.today().isoformat()).strip(),
+             request.form.get('checked_time', '').strip(),
+             _float_or_none(request.form.get('core_temp')),
+             request.form.get('physical_condition', '').strip() or 'Ready to use',
+             request.form.get('checked_by', '').strip(), cid] + gp)
+    return redirect(url_for('defrost.defrost_home'))
+
+
 # ── Delivery Inspection Record ───────────────────────────────────────────────
 
 def _delivery_form_values():
@@ -304,13 +407,20 @@ def _delivery_form_values():
 @_login_required
 def delivery_home():
     sid = current_store_id()
+    df, dt = _date_range()
+    where, params = 'store_id=?', [sid]
+    if df:
+        where += ' AND receiving_date >= ?'; params.append(df)
+    if dt:
+        where += ' AND receiving_date <= ?'; params.append(dt)
     with _get_db() as conn:
         rows = [dict(r) for r in conn.execute(
-            '''SELECT * FROM delivery_inspections WHERE store_id=?
-               ORDER BY receiving_date DESC, id DESC''', (sid,)).fetchall()]
+            f'''SELECT * FROM delivery_inspections WHERE {where}
+               ORDER BY receiving_date DESC, id DESC''', params).fetchall()]
     return render_template('delivery.html',
         rows=rows, staff=_get_staff(),
         today=date.today().isoformat(), now_time=datetime.now().strftime('%H:%M'),
+        date_from=df, date_to=dt,
         default_supplier=DEFAULT_SUPPLIER, hi=DEFROST_HI, is_admin=_is_admin())
 
 
@@ -320,16 +430,17 @@ def delivery_add():
     v = _delivery_form_values()
     if not v['product_name']:
         return redirect(url_for('delivery.delivery_home'))
+    photo = _save_delivery_photo(request.files.get('photo'))
     with _get_db() as conn:
         conn.execute('''INSERT INTO delivery_inspections
             (store_id, supplier_name, receiving_date, receiving_time, product_name,
              quantity, delivery_temp, use_by_date, product_condition,
-             packaging_condition, accepted, note, checked_by)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+             packaging_condition, accepted, note, checked_by, photo)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (current_store_id(), v['supplier_name'], v['receiving_date'], v['receiving_time'],
              v['product_name'], v['quantity'], v['delivery_temp'], v['use_by_date'],
              v['product_condition'], v['packaging_condition'], v['accepted'],
-             v['note'], v['checked_by']))
+             v['note'], v['checked_by'], photo))
     if v['accepted'] == 'rejected' or (v['delivery_temp'] is not None and v['delivery_temp'] > DEFROST_HI):
         temp_txt = f"{v['delivery_temp']:g}°C" if v['delivery_temp'] is not None else '-'
         _notify('temperature',
@@ -347,21 +458,33 @@ def delivery_add():
 
 
 @delivery_bp.route('/<int:iid>/edit', methods=['POST'])
-@_login_required
+@_admin_required
 def delivery_edit(iid):
     v = _delivery_form_values()
     if not v['product_name']:
         return redirect(url_for('delivery.delivery_home'))
     guard, gp = store_guard_clause()
     with _get_db() as conn:
+        row = conn.execute(
+            f'SELECT photo FROM delivery_inspections WHERE id=? AND {guard}', [iid] + gp).fetchone()
+        if not row:
+            return redirect(url_for('delivery.delivery_home'))
+        photo = row['photo']
+        new_photo = _save_delivery_photo(request.files.get('photo'))
+        if new_photo:
+            _delete_photo_file(photo)
+            photo = new_photo
+        elif request.form.get('remove_photo') == '1':
+            _delete_photo_file(photo)
+            photo = ''
         conn.execute(f'''UPDATE delivery_inspections SET
             supplier_name=?, receiving_date=?, receiving_time=?, product_name=?,
             quantity=?, delivery_temp=?, use_by_date=?, product_condition=?,
-            packaging_condition=?, accepted=?, note=?, checked_by=?
+            packaging_condition=?, accepted=?, note=?, checked_by=?, photo=?
             WHERE id=? AND {guard}''',
             [v['supplier_name'], v['receiving_date'], v['receiving_time'], v['product_name'],
              v['quantity'], v['delivery_temp'], v['use_by_date'], v['product_condition'],
-             v['packaging_condition'], v['accepted'], v['note'], v['checked_by'], iid] + gp)
+             v['packaging_condition'], v['accepted'], v['note'], v['checked_by'], photo, iid] + gp)
     return redirect(url_for('delivery.delivery_home'))
 
 
@@ -370,5 +493,23 @@ def delivery_edit(iid):
 def delivery_delete(iid):
     guard, gp = store_guard_clause()
     with _get_db() as conn:
+        row = conn.execute(
+            f'SELECT photo FROM delivery_inspections WHERE id=? AND {guard}', [iid] + gp).fetchone()
         conn.execute(f'DELETE FROM delivery_inspections WHERE id=? AND {guard}', [iid] + gp)
+    if row:
+        _delete_photo_file(row['photo'])
     return redirect(url_for('delivery.delivery_home'))
+
+
+@delivery_bp.route('/photo/<path:filename>')
+@_login_required
+def delivery_photo(filename):
+    """Serve a delivery photo, but only if it belongs to a row in the caller's store."""
+    safe = os.path.basename(filename)
+    guard, gp = store_guard_clause()
+    with _get_db() as conn:
+        row = conn.execute(
+            f'SELECT 1 FROM delivery_inspections WHERE photo=? AND {guard}', [safe] + gp).fetchone()
+    if not row:
+        abort(404)
+    return send_from_directory(UPLOAD_FOLDER, safe, max_age=604800)

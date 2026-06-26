@@ -15,7 +15,7 @@
 </div>
 
 <!-- Safety notes -->
-<div class="card border-0 shadow-sm mb-4" style="border-left:4px solid #E65100 !important">
+<div class="card border-0 shadow-sm mb-3" style="border-left:4px solid #E65100 !important">
   <div class="card-body py-2 px-3">
     <div class="fw-semibold mb-1" style="color:#E65100"><i class="fas fa-triangle-exclamation me-1"></i>Important notes</div>
     <ul class="mb-0 small ps-3">
@@ -23,6 +23,18 @@
     </ul>
   </div>
 </div>
+
+<!-- Date filter (by start date) -->
+<form method="GET" class="row g-2 align-items-end mb-3">
+  <div class="col-auto"><label class="form-label small mb-0 text-muted">From (start date)</label>
+    <input type="date" name="from" value="{{ date_from }}" class="form-control form-control-sm"></div>
+  <div class="col-auto"><label class="form-label small mb-0 text-muted">To</label>
+    <input type="date" name="to" value="{{ date_to }}" class="form-control form-control-sm"></div>
+  <div class="col-auto">
+    <button class="btn btn-sm btn-outline-secondary"><i class="fas fa-filter me-1"></i>Filter</button>
+    {% if date_from or date_to %}<a href="/defrost/" class="btn btn-sm btn-link text-decoration-none">Clear</a>{% endif %}
+  </div>
+</form>
 
 {% if not active and not closed %}
 <div class="text-center text-muted py-5">
@@ -60,7 +72,13 @@
         </td>
         <td class="small">{{ c.checked_by or '—' }}</td>
         {% if is_admin %}
-        <td class="text-end">
+        <td class="text-end text-nowrap">
+          <button class="btn btn-sm btn-link text-secondary p-0 me-2" title="Edit row"
+            onclick="openEditCheck(this)"
+            data-id="{{ c.id }}" data-on="{{ c.checked_on }}" data-time="{{ c.checked_time }}"
+            data-temp="{{ c.core_temp if c.core_temp is not none else '' }}"
+            data-cond="{{ c.physical_condition }}" data-by="{{ c.checked_by }}">
+            <i class="fas fa-pen"></i></button>
           <form method="POST" action="/defrost/check/{{ c.id }}/delete" class="d-inline"
                 onsubmit="return confirm('Delete this check row?')">
             <button class="btn btn-sm btn-link text-danger p-0" title="Delete row"><i class="fas fa-trash"></i></button>
@@ -124,6 +142,11 @@
         <button class="btn btn-sm btn-outline-warning" title="Discard"><i class="fas fa-ban me-1"></i>Discard</button>
       </form>
       {% if is_admin %}
+      <button class="btn btn-sm btn-outline-secondary" title="Edit product"
+        onclick="openEditRecord(this)"
+        data-id="{{ rec.id }}" data-product="{{ rec.product_name }}"
+        data-supplier="{{ rec.supplier_name }}" data-started="{{ rec.started_on }}"
+        data-notes="{{ rec.notes }}"><i class="fas fa-pen"></i></button>
       <form method="POST" action="/defrost/{{ rec.id }}/delete" class="d-inline"
             onsubmit="return confirm('Delete this product and all its checks?')">
         <button class="btn btn-sm btn-outline-danger" title="Delete"><i class="fas fa-trash"></i></button>
@@ -155,6 +178,11 @@
         <button class="btn btn-sm btn-outline-secondary" title="Reopen"><i class="fas fa-rotate-left me-1"></i>Reopen</button>
       </form>
       {% if is_admin %}
+      <button class="btn btn-sm btn-outline-secondary" title="Edit product"
+        onclick="openEditRecord(this)"
+        data-id="{{ rec.id }}" data-product="{{ rec.product_name }}"
+        data-supplier="{{ rec.supplier_name }}" data-started="{{ rec.started_on }}"
+        data-notes="{{ rec.notes }}"><i class="fas fa-pen"></i></button>
       <form method="POST" action="/defrost/{{ rec.id }}/delete" class="d-inline"
             onsubmit="return confirm('Delete this product and all its checks?')">
         <button class="btn btn-sm btn-outline-danger" title="Delete"><i class="fas fa-trash"></i></button>
@@ -208,4 +236,85 @@
     </div>
   </div>
 </div>
+
+{% if is_admin %}
+<!-- Edit product modal -->
+<div class="modal fade" id="editRecordModal" tabindex="-1">
+  <div class="modal-dialog"><div class="modal-content">
+    <form method="POST" id="editRecordForm">
+      <div class="modal-header">
+        <h6 class="modal-title"><i class="fas fa-pen me-1"></i>Edit product</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body"><div class="row g-2">
+        <div class="col-12"><label class="form-label small fw-semibold">Product name *</label>
+          <input type="text" name="product_name" class="form-control form-control-sm" required></div>
+        <div class="col-md-6"><label class="form-label small fw-semibold">Supplier</label>
+          <input type="text" name="supplier_name" class="form-control form-control-sm"></div>
+        <div class="col-md-6"><label class="form-label small fw-semibold">Date started</label>
+          <input type="date" name="started_on" class="form-control form-control-sm"></div>
+        <div class="col-12"><label class="form-label small fw-semibold">Note</label>
+          <input type="text" name="notes" class="form-control form-control-sm"></div>
+      </div></div>
+      <div class="modal-footer py-2">
+        <button type="submit" class="btn btn-sm btn-success"><i class="fas fa-save me-1"></i>Save</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </form>
+  </div></div>
+</div>
+
+<!-- Edit check modal -->
+<div class="modal fade" id="editCheckModal" tabindex="-1">
+  <div class="modal-dialog"><div class="modal-content">
+    <form method="POST" id="editCheckForm">
+      <div class="modal-header">
+        <h6 class="modal-title"><i class="fas fa-pen me-1"></i>Edit check</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body"><div class="row g-2">
+        <div class="col-6"><label class="form-label small fw-semibold">Date</label>
+          <input type="date" name="checked_on" class="form-control form-control-sm" required></div>
+        <div class="col-6"><label class="form-label small fw-semibold">Time</label>
+          <input type="time" name="checked_time" class="form-control form-control-sm"></div>
+        <div class="col-6"><label class="form-label small fw-semibold">Core temp (°C)</label>
+          <input type="number" step="0.1" name="core_temp" class="form-control form-control-sm"></div>
+        <div class="col-6"><label class="form-label small fw-semibold">Checked by</label>
+          <input type="text" name="checked_by" list="staffList" class="form-control form-control-sm"></div>
+        <div class="col-12"><label class="form-label small fw-semibold">Physical condition</label>
+          <input type="text" name="physical_condition" class="form-control form-control-sm"></div>
+      </div></div>
+      <div class="modal-footer py-2">
+        <button type="submit" class="btn btn-sm btn-success"><i class="fas fa-save me-1"></i>Save</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </form>
+  </div></div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if is_admin %}
+<script>
+let _erm = null, _ecm = null;
+function erm() { if (!_erm) _erm = new bootstrap.Modal(document.getElementById('editRecordModal')); return _erm; }
+function ecm() { if (!_ecm) _ecm = new bootstrap.Modal(document.getElementById('editCheckModal')); return _ecm; }
+function openEditRecord(btn) {
+  const f = document.getElementById('editRecordForm'), d = btn.dataset;
+  f.action = '/defrost/' + d.id + '/edit';
+  f.product_name.value = d.product || ''; f.supplier_name.value = d.supplier || '';
+  f.started_on.value = d.started || ''; f.notes.value = d.notes || '';
+  erm().show();
+}
+function openEditCheck(btn) {
+  const f = document.getElementById('editCheckForm'), d = btn.dataset;
+  f.action = '/defrost/check/' + d.id + '/edit';
+  f.checked_on.value = d.on || ''; f.checked_time.value = d.time || '';
+  f.core_temp.value = d.temp || ''; f.physical_condition.value = d.cond || '';
+  f.checked_by.value = d.by || '';
+  ecm().show();
+}
+</script>
+{% endif %}
 {% endblock %}
