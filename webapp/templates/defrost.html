@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+{% block title %}Defrosting Temperature{% endblock %}
+{% block topbar_title %}<span class="fw-bold"><i class="fas fa-snowflake me-2"></i>Defrosting Temperature Monitoring</span>{% endblock %}
+
+{% block content %}
+<datalist id="staffList">
+  {% for s in staff %}<option value="{{ s }}">{% endfor %}
+</datalist>
+
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+  <h5 class="section-heading mb-0"><i class="fas fa-snowflake me-2 text-primary"></i>Products defrosting</h5>
+  <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#addProductModal">
+    <i class="fas fa-plus me-1"></i>Add product
+  </button>
+</div>
+
+<!-- Safety notes -->
+<div class="card border-0 shadow-sm mb-4" style="border-left:4px solid #E65100 !important">
+  <div class="card-body py-2 px-3">
+    <div class="fw-semibold mb-1" style="color:#E65100"><i class="fas fa-triangle-exclamation me-1"></i>Important notes</div>
+    <ul class="mb-0 small ps-3">
+      {% for n in notes %}<li>{{ n }}</li>{% endfor %}
+    </ul>
+  </div>
+</div>
+
+{% if not active and not closed %}
+<div class="text-center text-muted py-5">
+  <i class="fas fa-snowflake fa-2x mb-2 d-block opacity-50"></i>
+  No products being defrosted yet. Tap <strong>Add product</strong> to start a record.
+</div>
+{% endif %}
+
+{% macro checks_table(rec, editable) %}
+<div class="table-responsive">
+  <table class="table table-sm align-middle mb-0">
+    <thead class="small text-muted">
+      <tr>
+        <th style="min-width:140px">Date / Time</th>
+        <th>Core temp</th>
+        <th>Physical condition</th>
+        <th>Checked by</th>
+        {% if is_admin %}<th></th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in rec.checks %}
+      {% set unsafe = c.core_temp is not none and (c.core_temp < lo or c.core_temp > hi) %}
+      <tr>
+        <td class="small">{{ c.checked_on }}{% if c.checked_time %} · {{ c.checked_time }}{% endif %}</td>
+        <td>
+          {% if c.core_temp is not none %}
+            <span class="badge {% if unsafe %}bg-danger{% else %}bg-success{% endif %}">{{ '%g'|format(c.core_temp) }}°C</span>
+          {% else %}<span class="text-muted">—</span>{% endif %}
+        </td>
+        <td class="small">
+          {% if c.physical_condition|lower == 'ready to use' %}
+            <span class="text-success"><i class="fas fa-circle-check me-1"></i>{{ c.physical_condition }}</span>
+          {% else %}{{ c.physical_condition }}{% endif %}
+        </td>
+        <td class="small">{{ c.checked_by or '—' }}</td>
+        {% if is_admin %}
+        <td class="text-end">
+          <form method="POST" action="/defrost/check/{{ c.id }}/delete" class="d-inline"
+                onsubmit="return confirm('Delete this check row?')">
+            <button class="btn btn-sm btn-link text-danger p-0" title="Delete row"><i class="fas fa-trash"></i></button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+      {% else %}
+      <tr><td colspan="{{ 5 if is_admin else 4 }}" class="text-muted small text-center py-2">No checks recorded yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if editable %}
+<form method="POST" action="/defrost/{{ rec.id }}/check" class="row g-2 align-items-end mt-1 px-1 pb-1">
+  <div class="col-6 col-md-2">
+    <label class="form-label small mb-0">Date</label>
+    <input type="date" name="checked_on" value="{{ today }}" class="form-control form-control-sm" required>
+  </div>
+  <div class="col-6 col-md-2">
+    <label class="form-label small mb-0">Time</label>
+    <input type="time" name="checked_time" value="{{ now_time }}" class="form-control form-control-sm">
+  </div>
+  <div class="col-6 col-md-2">
+    <label class="form-label small mb-0">Core temp (°C)</label>
+    <input type="number" step="0.1" name="core_temp" placeholder="e.g. 3" class="form-control form-control-sm" required>
+  </div>
+  <div class="col-6 col-md-3">
+    <label class="form-label small mb-0">Physical condition</label>
+    <input type="text" name="physical_condition" value="Ready to use" class="form-control form-control-sm">
+  </div>
+  <div class="col-7 col-md-2">
+    <label class="form-label small mb-0">Checked by</label>
+    <input type="text" name="checked_by" list="staffList" class="form-control form-control-sm">
+  </div>
+  <div class="col-5 col-md-1">
+    <button class="btn btn-sm btn-primary w-100"><i class="fas fa-plus"></i></button>
+  </div>
+</form>
+{% endif %}
+{% endmacro %}
+
+<!-- Active products -->
+{% for rec in active %}
+<div class="card shadow-sm mb-3">
+  <div class="card-header bg-white d-flex justify-content-between align-items-center flex-wrap gap-2"
+       style="border-left:4px solid #1565C0">
+    <div>
+      <span class="fw-bold">{{ rec.product_name }}</span>
+      <span class="text-muted small ms-2"><i class="fas fa-truck me-1"></i>{{ rec.supplier_name }}</span>
+      <span class="text-muted small ms-2"><i class="fas fa-calendar-day me-1"></i>Started {{ rec.started_on }}</span>
+    </div>
+    <div class="d-flex gap-1">
+      <form method="POST" action="/defrost/{{ rec.id }}/status" class="d-inline">
+        <input type="hidden" name="status" value="finished">
+        <button class="btn btn-sm btn-outline-success" title="Mark finished"><i class="fas fa-check me-1"></i>Finish</button>
+      </form>
+      <form method="POST" action="/defrost/{{ rec.id }}/status" class="d-inline"
+            onsubmit="return confirm('Mark this product as discarded?')">
+        <input type="hidden" name="status" value="discarded">
+        <button class="btn btn-sm btn-outline-warning" title="Discard"><i class="fas fa-ban me-1"></i>Discard</button>
+      </form>
+      {% if is_admin %}
+      <form method="POST" action="/defrost/{{ rec.id }}/delete" class="d-inline"
+            onsubmit="return confirm('Delete this product and all its checks?')">
+        <button class="btn btn-sm btn-outline-danger" title="Delete"><i class="fas fa-trash"></i></button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+  <div class="card-body p-2">
+    {% if rec.notes %}<div class="small text-muted mb-2 px-1"><i class="fas fa-note-sticky me-1"></i>{{ rec.notes }}</div>{% endif %}
+    {{ checks_table(rec, True) }}
+  </div>
+</div>
+{% endfor %}
+
+<!-- Finished / discarded -->
+{% if closed %}
+<h6 class="section-heading mt-4"><i class="fas fa-clock-rotate-left me-2"></i>Finished &amp; discarded</h6>
+{% for rec in closed %}
+<div class="card shadow-sm mb-3 opacity-75">
+  <div class="card-header bg-light d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <div>
+      <span class="fw-semibold">{{ rec.product_name }}</span>
+      <span class="badge {% if rec.status=='discarded' %}bg-warning text-dark{% else %}bg-secondary{% endif %} ms-2">{{ rec.status|capitalize }}</span>
+      <span class="text-muted small ms-2">{{ rec.supplier_name }} · Started {{ rec.started_on }}</span>
+    </div>
+    <div class="d-flex gap-1">
+      <form method="POST" action="/defrost/{{ rec.id }}/status" class="d-inline">
+        <input type="hidden" name="status" value="active">
+        <button class="btn btn-sm btn-outline-secondary" title="Reopen"><i class="fas fa-rotate-left me-1"></i>Reopen</button>
+      </form>
+      {% if is_admin %}
+      <form method="POST" action="/defrost/{{ rec.id }}/delete" class="d-inline"
+            onsubmit="return confirm('Delete this product and all its checks?')">
+        <button class="btn btn-sm btn-outline-danger" title="Delete"><i class="fas fa-trash"></i></button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+  <div class="card-body p-2">{{ checks_table(rec, False) }}</div>
+</div>
+{% endfor %}
+{% endif %}
+
+<!-- Add product modal -->
+<div class="modal fade" id="addProductModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="POST" action="/defrost/add" data-draft-scope="defrost-add:{{ store_id }}">
+        <div class="modal-header">
+          <h6 class="modal-title"><i class="fas fa-snowflake me-1"></i>Add product to defrost</h6>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="row g-2">
+            <div class="col-12">
+              <label class="form-label small fw-semibold">Product name *</label>
+              <input type="text" name="product_name" class="form-control form-control-sm" placeholder="e.g. Pate" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small fw-semibold">Supplier</label>
+              <input type="text" name="supplier_name" value="{{ default_supplier }}" class="form-control form-control-sm">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small fw-semibold">Date started</label>
+              <input type="date" name="started_on" value="{{ today }}" class="form-control form-control-sm">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small fw-semibold">Opened by</label>
+              <input type="text" name="created_by" list="staffList" class="form-control form-control-sm">
+            </div>
+            <div class="col-12">
+              <label class="form-label small fw-semibold">Note (optional)</label>
+              <input type="text" name="notes" class="form-control form-control-sm">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer py-2">
+          <button type="submit" class="btn btn-sm btn-success"><i class="fas fa-plus me-1"></i>Add product</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

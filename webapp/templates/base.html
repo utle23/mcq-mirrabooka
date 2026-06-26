@@ -152,6 +152,21 @@
         </div>
       </div>
 
+      <!-- FOOD SAFETY -->
+      <div class="nav-group" data-group="foodsafety">
+        <button type="button" class="nav-group-head" onclick="toggleNavGroup(this)">
+          <i class="fas fa-shield-heart fa-fw"></i><span>Food Safety</span><i class="fas fa-chevron-down chev"></i>
+        </button>
+        <div class="nav-group-body">
+          <a href="/defrost/" class="nav-link-item {% if current_ep.startswith('defrost.') %}active{% endif %}" style="border-left-color:#1565C0">
+            <i class="fas fa-snowflake fa-fw"></i><span>Defrosting Temp</span>
+          </a>
+          <a href="/delivery/" class="nav-link-item {% if current_ep.startswith('delivery.') %}active{% endif %}" style="border-left-color:#2D6A4F">
+            <i class="fas fa-truck-ramp-box fa-fw"></i><span>Delivery Inspection</span>
+          </a>
+        </div>
+      </div>
+
       <!-- PREP SCHEDULE -->
       <div class="nav-group" data-group="prep">
         <button type="button" class="nav-group-head" onclick="toggleNavGroup(this)">

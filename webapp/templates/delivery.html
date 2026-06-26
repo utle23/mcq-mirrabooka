@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block title %}Delivery Inspection{% endblock %}
+{% block topbar_title %}<span class="fw-bold"><i class="fas fa-truck-ramp-box me-2"></i>Delivery Inspection Record</span>{% endblock %}
+
+{% block content %}
+<datalist id="staffList">
+  {% for s in staff %}<option value="{{ s }}">{% endfor %}
+</datalist>
+
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+  <h5 class="section-heading mb-0"><i class="fas fa-clipboard-check me-2 text-success"></i>Deliveries received</h5>
+  <button type="button" class="btn btn-success" onclick="openDeliveryAdd()">
+    <i class="fas fa-plus me-1"></i>Add delivery
+  </button>
+</div>
+
+{% if not rows %}
+<div class="text-center text-muted py-5">
+  <i class="fas fa-truck-ramp-box fa-2x mb-2 d-block opacity-50"></i>
+  No deliveries recorded yet. Tap <strong>Add delivery</strong> when a delivery arrives.
+</div>
+{% else %}
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle mb-0">
+      <thead class="small" style="background:#E9F3E6;color:#1B3A2D">
+        <tr>
+          <th>Received</th>
+          <th>Supplier</th>
+          <th>Product</th>
+          <th>Qty</th>
+          <th>Temp</th>
+          <th>Use-by</th>
+          <th>Product</th>
+          <th>Packaging</th>
+          <th>Decision</th>
+          <th>Checked by</th>
+          <th>Note</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        {% set temp_bad = r.delivery_temp is not none and r.delivery_temp > hi %}
+        <tr>
+          <td class="small text-nowrap">{{ r.receiving_date }}{% if r.receiving_time %}<div class="text-muted">{{ r.receiving_time }}</div>{% endif %}</td>
+          <td class="small">{{ r.supplier_name }}</td>
+          <td class="small fw-semibold">{{ r.product_name }}</td>
+          <td class="small text-nowrap">{{ r.quantity or '—' }}</td>
+          <td class="small text-nowrap">
+            {% if r.delivery_temp is not none %}
+              <span class="{% if temp_bad %}text-danger fw-bold{% endif %}">{{ '%g'|format(r.delivery_temp) }}°C</span>
+            {% else %}—{% endif %}
+          </td>
+          <td class="small text-nowrap">{{ r.use_by_date or '—' }}</td>
+          <td class="small">{{ r.product_condition or '—' }}</td>
+          <td class="small">{{ r.packaging_condition or '—' }}</td>
+          <td>
+            {% if r.accepted == 'rejected' %}
+              <span class="badge bg-danger">Rejected</span>
+            {% else %}
+              <span class="badge bg-success">Accepted</span>
+            {% endif %}
+          </td>
+          <td class="small">{{ r.checked_by or '—' }}</td>
+          <td class="small text-muted">{{ r.note or '' }}</td>
+          <td class="text-end text-nowrap">
+            <button class="btn btn-sm btn-link text-secondary p-0 me-2" title="Edit"
+              onclick="openDeliveryEdit(this)"
+              data-id="{{ r.id }}" data-supplier="{{ r.supplier_name }}"
+              data-date="{{ r.receiving_date }}" data-time="{{ r.receiving_time }}"
+              data-product="{{ r.product_name }}" data-qty="{{ r.quantity }}"
+              data-temp="{{ r.delivery_temp if r.delivery_temp is not none else '' }}"
+              data-useby="{{ r.use_by_date }}" data-pcond="{{ r.product_condition }}"
+              data-pkg="{{ r.packaging_condition }}" data-accepted="{{ r.accepted }}"
+              data-note="{{ r.note }}" data-checkedby="{{ r.checked_by }}">
+              <i class="fas fa-pen"></i></button>
+            {% if is_admin %}
+            <form method="POST" action="/delivery/{{ r.id }}/delete" class="d-inline"
+                  onsubmit="return confirm('Delete this delivery record?')">
+              <button class="btn btn-sm btn-link text-danger p-0" title="Delete"><i class="fas fa-trash"></i></button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- Add / Edit modal -->
+<div class="modal fade" id="deliveryModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <form method="POST" id="deliveryForm" action="/delivery/add" data-draft-scope="delivery-add:{{ store_id }}">
+        <div class="modal-header">
+          <h6 class="modal-title" id="deliveryModalTitle"><i class="fas fa-truck-ramp-box me-1"></i>Add delivery inspection</h6>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="row g-2">
+            <div class="col-md-6">
+              <label class="form-label small fw-semibold">Supplier</label>
+              <input type="text" name="supplier_name" value="{{ default_supplier }}" class="form-control form-control-sm">
+            </div>
+            <div class="col-6 col-md-3">
+              <label class="form-label small fw-semibold">Receiving date</label>
+              <input type="date" name="receiving_date" value="{{ today }}" class="form-control form-control-sm" required>
+            </div>
+            <div class="col-6 col-md-3">
+              <label class="form-label small fw-semibold">Time</label>
+              <input type="time" name="receiving_time" value="{{ now_time }}" class="form-control form-control-sm">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small fw-semibold">Product name *</label>
+              <input type="text" name="product_name" class="form-control form-control-sm" placeholder="e.g. Pate" required>
+            </div>
+            <div class="col-6 col-md-3">
+              <label class="form-label small fw-semibold">Quantity</label>
+              <input type="text" name="quantity" class="form-control form-control-sm" placeholder="e.g. 6 ctn">
+            </div>
+            <div class="col-6 col-md-3">
+              <label class="form-label small fw-semibold">Delivery temp (°C)</label>
+              <input type="number" step="0.1" name="delivery_temp" class="form-control form-control-sm" placeholder="e.g. 1.8">
+            </div>
+            <div class="col-6 col-md-3">
+              <label class="form-label small fw-semibold">Use-by date</label>
+              <input type="text" name="use_by_date" class="form-control form-control-sm" placeholder="e.g. 6/6">
+            </div>
+            <div class="col-6 col-md-3">
+              <label class="form-label small fw-semibold">Decision</label>
+              <select name="accepted" class="form-select form-select-sm">
+                <option value="accepted">Accepted</option>
+                <option value="rejected">Rejected</option>
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small fw-semibold">Product condition</label>
+              <input type="text" name="product_condition" class="form-control form-control-sm" placeholder="e.g. Intact">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small fw-semibold">Packaging condition</label>
+              <input type="text" name="packaging_condition" class="form-control form-control-sm" placeholder="e.g. OK / Intact">
+            </div>
+            <div class="col-md-8">
+              <label class="form-label small fw-semibold">Note</label>
+              <input type="text" name="note" class="form-control form-control-sm">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label small fw-semibold">Checked by</label>
+              <input type="text" name="checked_by" list="staffList" class="form-control form-control-sm">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer py-2">
+          <button type="submit" class="btn btn-sm btn-success"><i class="fas fa-save me-1"></i>Save</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let _deliveryModal = null;
+function deliveryModal() {
+  if (!_deliveryModal) _deliveryModal = new bootstrap.Modal(document.getElementById('deliveryModal'));
+  return _deliveryModal;
+}
+function openDeliveryAdd() {
+  const f = document.getElementById('deliveryForm');
+  f.reset();
+  f.action = '/delivery/add';
+  document.getElementById('deliveryModalTitle').innerHTML = '<i class="fas fa-truck-ramp-box me-1"></i>Add delivery inspection';
+  f.supplier_name.value = {{ default_supplier|tojson }};
+  f.receiving_date.value = {{ today|tojson }};
+  f.receiving_time.value = {{ now_time|tojson }};
+  f.accepted.value = 'accepted';
+  deliveryModal().show();
+}
+function openDeliveryEdit(btn) {
+  const f = document.getElementById('deliveryForm');
+  const d = btn.dataset;
+  f.reset();
+  f.action = '/delivery/' + d.id + '/edit';
+  document.getElementById('deliveryModalTitle').innerHTML = '<i class="fas fa-pen me-1"></i>Edit delivery inspection';
+  f.supplier_name.value = d.supplier || '';
+  f.receiving_date.value = d.date || '';
+  f.receiving_time.value = d.time || '';
+  f.product_name.value = d.product || '';
+  f.quantity.value = d.qty || '';
+  f.delivery_temp.value = d.temp || '';
+  f.use_by_date.value = d.useby || '';
+  f.product_condition.value = d.pcond || '';
+  f.packaging_condition.value = d.pkg || '';
+  f.accepted.value = d.accepted || 'accepted';
+  f.note.value = d.note || '';
+  f.checked_by.value = d.checkedby || '';
+  deliveryModal().show();
+}
+</script>
+{% endblock %}

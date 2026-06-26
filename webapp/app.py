@@ -28,6 +28,7 @@ from equipment_routes import equipment  as equipment_bp, init_equipment_tables
 from structure_routes import structure  as structure_bp, init_structure_tables
 from webauthn_routes  import webauthn_bp,                 init_webauthn
 from food_pricing_routes import food_pricing as food_pricing_bp, init_food_pricing_tables
+from food_safety_routes import defrost_bp, delivery_bp, init_food_safety_tables
 from branch_seed import seed_subiaco_branch
 import email_service
 app.register_blueprint(prep_bp)
@@ -43,6 +44,8 @@ app.register_blueprint(equipment_bp)
 app.register_blueprint(structure_bp)
 app.register_blueprint(webauthn_bp)
 app.register_blueprint(food_pricing_bp)
+app.register_blueprint(defrost_bp)
+app.register_blueprint(delivery_bp)
 DB_PATH      = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mcq_restaurant.db')
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -5406,6 +5409,7 @@ _safe_init(init_equipment_tables, DB_PATH)
 _safe_init(init_structure_tables, DB_PATH, UPLOAD_FOLDER)
 _safe_init(init_webauthn, DB_PATH)
 _safe_init(init_food_pricing_tables, DB_PATH)
+_safe_init(init_food_safety_tables, DB_PATH)
 
 # Multi-store schema runs LAST: every operational table (orders, packaging,
 # equipment, prep, pastry, ...) is created by the blueprint inits above, so they
