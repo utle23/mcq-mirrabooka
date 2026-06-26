@@ -26,6 +26,8 @@ from functools import wraps
 from flask import (Blueprint, Response, jsonify, redirect, render_template,
                    request, session, url_for)
 
+from store_scope import current_store_id, store_filter_clause, store_guard_clause
+
 # Import the WebAuthn library defensively: if it isn't installed yet (e.g. the
 # code was deployed before `pip install -r requirements.txt`), the app must
 # still boot and the password login must keep working — passkeys just stay off.
@@ -69,10 +71,25 @@ def init_webauthn(db_path: str) -> None:
             user_handle   TEXT NOT NULL,
             role          TEXT NOT NULL DEFAULT 'user',
             branch        TEXT NOT NULL DEFAULT '',
+            store_id      INTEGER NOT NULL DEFAULT 1,
             label         TEXT NOT NULL DEFAULT '',
             created_at    TEXT DEFAULT (datetime('now','localtime')),
             last_used_at  TEXT
         )''')
+        # Migration: bind each passkey to a store. Older rows only had `branch`
+        # text, so add store_id and backfill it from the branch name once.
+        cols = [r['name'] for r in conn.execute(
+            "PRAGMA table_info(webauthn_credentials)").fetchall()]
+        if 'store_id' not in cols:
+            conn.execute("ALTER TABLE webauthn_credentials "
+                         "ADD COLUMN store_id INTEGER NOT NULL DEFAULT 1")
+            conn.execute('''UPDATE webauthn_credentials SET store_id = COALESCE((
+                    SELECT s.id FROM stores s
+                    WHERE s.name = webauthn_credentials.branch
+                       OR s.name = 'MCQ ' || webauthn_credentials.branch
+                       OR lower(s.code) = lower(webauthn_credentials.branch)
+                ), 1)
+                WHERE COALESCE(branch, '') <> '' ''')
 
 
 def _conn() -> sqlite3.Connection:
@@ -86,6 +103,17 @@ def _login_required(f):
     def d(*a, **kw):
         if not session.get('logged_in'):
             return redirect(url_for('login_page'))
+        return f(*a, **kw)
+    return d
+
+
+def _admin_required(f):
+    @wraps(f)
+    def d(*a, **kw):
+        if not session.get('logged_in'):
+            return redirect(url_for('login_page'))
+        if session.get('role') not in ('admin', 'super_admin'):
+            return render_template('access_denied.html'), 403
         return f(*a, **kw)
     return d
 
@@ -110,9 +138,12 @@ def _origin() -> str:
 @webauthn_bp.route('/manage')
 @_login_required
 def manage():
+    # A normal admin sees only their branch's passkeys; super_admin sees all.
+    scope, sp = store_filter_clause()
     with _conn() as conn:
         creds = [dict(r) for r in conn.execute(
-            'SELECT * FROM webauthn_credentials ORDER BY created_at DESC').fetchall()]
+            f'SELECT * FROM webauthn_credentials WHERE {scope} ORDER BY created_at DESC',
+            sp).fetchall()]
     for c in creds:
         c['role_label'] = ROLE_LABELS.get(c['role'], c['role'].title())
     return render_template('passkeys.html', creds=creds,
@@ -134,10 +165,8 @@ def register_options():
 
     user_handle = secrets.token_bytes(16)
 
-    with _conn() as conn:
-        existing = [r['credential_id'] for r in conn.execute(
-            'SELECT credential_id FROM webauthn_credentials').fetchall()]
-
+    # No exclude list: one shared shop device may enrol several people's Face IDs
+    # for the same branch, and each enrolment is a separate credential row.
     opts = generate_registration_options(
         rp_id=_rp_id(),
         rp_name=RP_NAME,
@@ -149,9 +178,7 @@ def register_options():
             resident_key=ResidentKeyRequirement.REQUIRED,
             user_verification=UserVerificationRequirement.REQUIRED,
         ),
-        exclude_credentials=[
-            PublicKeyCredentialDescriptor(id=base64url_to_bytes(c)) for c in existing
-        ],
+        exclude_credentials=[],
     )
     session['wa_reg_challenge'] = bytes_to_base64url(opts.challenge)
     session['wa_reg_handle'] = bytes_to_base64url(user_handle)
@@ -185,20 +212,24 @@ def register_verify():
     try:
         with _conn() as conn:
             conn.execute('''INSERT INTO webauthn_credentials
-                (credential_id, public_key, sign_count, user_handle, role, branch, label)
-                VALUES (?,?,?,?,?,?,?)''',
+                (credential_id, public_key, sign_count, user_handle, role, branch, store_id, label)
+                VALUES (?,?,?,?,?,?,?,?)''',
                 (cred_id, pub_key, verification.sign_count, handle or '',
-                 session.get('role', 'user'), session.get('branch', ''), label))
+                 session.get('role', 'user'), session.get('branch', ''),
+                 current_store_id(), label))
     except sqlite3.IntegrityError:
         return jsonify({'ok': False, 'error': 'This device already has a passkey.'}), 400
     return jsonify({'ok': True, 'label': label})
 
 
 @webauthn_bp.route('/delete/<int:cred_id>', methods=['POST'])
-@_login_required
+@_admin_required
 def delete_credential(cred_id):
+    # Store-guarded: a branch admin can only remove its own branch's passkeys.
+    guard, gp = store_guard_clause()
     with _conn() as conn:
-        conn.execute('DELETE FROM webauthn_credentials WHERE id=?', (cred_id,))
+        conn.execute(f'DELETE FROM webauthn_credentials WHERE id=? AND {guard}',
+                     [cred_id] + gp)
     return redirect(url_for('webauthn.manage'))
 
 
@@ -249,16 +280,29 @@ def login_verify():
         return jsonify({'ok': False, 'error': f'Face ID sign-in failed: {e}'}), 400
 
     now = datetime.now()
+    store_id = row['store_id'] if 'store_id' in row.keys() and row['store_id'] else 1
     with _conn() as conn:
         conn.execute(
             'UPDATE webauthn_credentials SET sign_count=?, last_used_at=? WHERE id=?',
             (verification.new_sign_count, now.isoformat(timespec='seconds'), row['id']))
+        store = conn.execute('SELECT id, code, name FROM stores WHERE id=?', (store_id,)).fetchone()
+
+    # Mirror the password login: the passkey's store decides the branch, so a
+    # Subiaco Face ID always lands in Subiaco — no branch is chosen on screen.
+    if store:
+        display = store['name'][4:] if store['name'].startswith('MCQ ') else store['name']
+        store_code = store['code']
+    else:
+        display = row['branch']
+        store_code = ''
 
     session.clear()
     session.update({
         'logged_in':     True,
         'role':          row['role'],
-        'branch':        row['branch'],
+        'branch':        display,
+        'store_id':      store_id,
+        'store_code':    store_code,
         'login_time':    now.strftime('%Y-%m-%d %H:%M'),
         'login_ts':      now.isoformat(timespec='seconds'),
         'last_activity': now.isoformat(timespec='seconds'),
