@@ -13,7 +13,7 @@ from typing import Any
 
 from openpyxl import load_workbook
 
-from packaging_routes import JACCUS_PRICE_DATA
+from packaging_routes import JACCUS_PRICE_DATA, SUBIACO_PACKAGING_DELIVERY_DAYS
 
 
 SUBIACO_STORE_ID = 3
@@ -244,7 +244,7 @@ def _seed_packaging(conn: sqlite3.Connection, wb) -> None:
          fields.get('order email', ''),
          fields.get('phone', ''),
          fields.get('cc email', ''),
-         fields.get('delivery days', '').upper(),
+         SUBIACO_PACKAGING_DELIVERY_DAYS,
          'Saigon Alley by MCQ Street Food — SUBIACO',
          fields.get('deliver-to address', '4A Seddon St, Subiaco WA 6008'),
          SUBIACO_PACKAGING_CONTACT,
@@ -304,6 +304,14 @@ def _fix_subiaco_contact(conn: sqlite3.Connection) -> None:
     conn.execute('''INSERT INTO audit_log(action, record_type, user_name, details)
         VALUES (?, 'migration', 'system', ?)''',
         (CONTACT_FIX_MARKER, f'Restored Subiaco Jaccus contact on {cur.rowcount or 0} row(s).'))
+
+
+def _fix_subiaco_delivery_days(conn: sqlite3.Connection) -> None:
+    """Subiaco packaging orders must default to Tue/Thu supplier delivery."""
+    conn.execute('''UPDATE packaging_suppliers
+        SET delivery_days=?
+        WHERE store_id=? AND active=1''',
+        (SUBIACO_PACKAGING_DELIVERY_DAYS, SUBIACO_STORE_ID))
 
 
 def _seed_pastry(conn: sqlite3.Connection, wb) -> None:
@@ -407,6 +415,7 @@ def seed_subiaco_branch(db_path: str, workbook_path: str | None = None) -> None:
         if exists:
             _sync_packaging_prices(conn)
             _fix_subiaco_contact(conn)
+            _fix_subiaco_delivery_days(conn)
             conn.commit()
             return
         wb = load_workbook(workbook_path, data_only=True)
@@ -418,6 +427,7 @@ def seed_subiaco_branch(db_path: str, workbook_path: str | None = None) -> None:
         _seed_packaging(conn, wb)
         _sync_packaging_prices(conn)
         _fix_subiaco_contact(conn)
+        _fix_subiaco_delivery_days(conn)
         _seed_pastry(conn, wb)
         _seed_structure(conn, wb)
         _seed_email(conn)

@@ -17,7 +17,7 @@ import json
 import os
 import re
 import sqlite3
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from functools import wraps
 
 from flask import (Blueprint, render_template, request, redirect, url_for,
@@ -27,6 +27,8 @@ from store_scope import current_store_id, store_filter_clause
 
 packaging_bp = Blueprint('packaging', __name__, url_prefix='/packaging')
 DB_PATH: str | None = None
+SUBIACO_STORE_ID = 3
+SUBIACO_PACKAGING_DELIVERY_DAYS = 'TUE,THU'
 
 
 # ── Catalogue (sourced from the Word order template) ─────────────────────────
@@ -155,6 +157,16 @@ OWNER_BCC_EMAIL = 'utle23.23@gmail.com'
 # MCQ Vietnamese Street Food logo, embedded at the top of the Word order.
 LOGO_PATH = os.path.join(os.path.dirname(__file__), 'static', 'logo.png')
 
+DAY_CODES = {
+    'MON': 0, 'MONDAY': 0,
+    'TUE': 1, 'TUES': 1, 'TUESDAY': 1,
+    'WED': 2, 'WEDNESDAY': 2,
+    'THU': 3, 'THUR': 3, 'THURS': 3, 'THURSDAY': 3,
+    'FRI': 4, 'FRIDAY': 4,
+    'SAT': 5, 'SATURDAY': 5,
+    'SUN': 6, 'SUNDAY': 6,
+}
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -176,6 +188,72 @@ def _float_form(value, default=0.0):
         return max(0.0, float(value or default))
     except (TypeError, ValueError):
         return default
+
+
+def _store_delivery_days_for_supplier(supplier: dict) -> str:
+    """Return the effective supplier delivery days after branch-level rules."""
+    try:
+        store_id = int(supplier.get('store_id') or current_store_id())
+    except Exception:
+        store_id = current_store_id()
+    if store_id == SUBIACO_STORE_ID:
+        return SUBIACO_PACKAGING_DELIVERY_DAYS
+    return (supplier.get('delivery_days') or '').strip().upper()
+
+
+def _with_effective_delivery_days(supplier: dict) -> dict:
+    supplier = dict(supplier)
+    supplier['delivery_days'] = _store_delivery_days_for_supplier(supplier)
+    return supplier
+
+
+def _normalised_delivery_days(raw: str) -> list[tuple[str, int]]:
+    days: list[tuple[str, int]] = []
+    seen: set[int] = set()
+    for token in re.split(r'[,/; ]+', (raw or '').upper()):
+        if not token:
+            continue
+        weekday = DAY_CODES.get(token)
+        if weekday is None or weekday in seen:
+            continue
+        seen.add(weekday)
+        code = next(k for k, v in DAY_CODES.items() if v == weekday and len(k) == 3)
+        days.append((code, weekday))
+    return days
+
+
+def _next_delivery_date(delivery_days: str, today_value: date | None = None) -> str:
+    """Next configured delivery day after today, never same-day."""
+    today_dt = today_value or date.today()
+    best: date | None = None
+    for _, weekday in _normalised_delivery_days(delivery_days):
+        delta = (weekday - today_dt.weekday()) % 7
+        if delta == 0:
+            delta = 7
+        candidate = today_dt + timedelta(days=delta)
+        if best is None or candidate < best:
+            best = candidate
+    return (best or today_dt).isoformat()
+
+
+def _resolve_delivery_date(supplier: dict, requested: str) -> str:
+    delivery_days = _store_delivery_days_for_supplier(supplier)
+    requested = (requested or '').strip()
+    allowed = _normalised_delivery_days(delivery_days)
+    try:
+        requested_date = datetime.strptime(requested, '%Y-%m-%d').date()
+    except (TypeError, ValueError):
+        requested_date = None
+
+    if requested_date:
+        if not allowed:
+            return requested_date.isoformat()
+        today_dt = date.today()
+        allowed_weekdays = {weekday for _, weekday in allowed}
+        if requested_date > today_dt and requested_date.weekday() in allowed_weekdays:
+            return requested_date.isoformat()
+
+    return _next_delivery_date(delivery_days)
 
 
 def _sync_jaccus_catalog_prices(c):
@@ -305,6 +383,12 @@ def init_packaging(db_path: str):
         # Backfill the MCQ Mirrabooka delivery address where it's still blank.
         c.execute("UPDATE packaging_suppliers SET cafe_address=? WHERE COALESCE(cafe_address,'')=''",
                   (JACCUS_SUPPLIER_SEED['cafe_address'],))
+        # Subiaco packaging deliveries are fixed to Tuesday/Thursday. Keep this
+        # branch rule in the DB too so old rows do not render as "today".
+        c.execute(
+            "UPDATE packaging_suppliers SET delivery_days=? WHERE store_id=? AND active=1",
+            (SUBIACO_PACKAGING_DELIVERY_DAYS, SUBIACO_STORE_ID)
+        )
         # Only seed the Mirrabooka (store_id=1) contact. Other branches keep
         # their own contact (e.g. Subiaco's Kenny Ho) instead of being clobbered
         # with Mirrabooka's on every startup.
@@ -348,14 +432,14 @@ def _suppliers():
         rows = c.execute(
             'SELECT * FROM packaging_suppliers WHERE active=1 AND store_id=? '
             'ORDER BY sort_order, name', (current_store_id(),)).fetchall()
-    return [dict(r) for r in rows]
+    return [_with_effective_delivery_days(dict(r)) for r in rows]
 
 
 def _supplier(sid):
     with _conn() as c:
         row = c.execute('SELECT * FROM packaging_suppliers WHERE id=? AND store_id=?',
                         (sid, current_store_id())).fetchone()
-    return dict(row) if row else None
+    return _with_effective_delivery_days(dict(row)) if row else None
 
 
 def _items(sid):
@@ -727,27 +811,8 @@ def packaging_home():
     supplier = _supplier(sid) or suppliers[0]
     items    = _items(supplier['id'])
 
-    # Pick a sensible default delivery date — the next configured day
-    deliv_default = date.today().isoformat()
-    try:
-        days = [d.strip().upper() for d in (supplier['delivery_days'] or '').split(',') if d.strip()]
-        day_map = {'MON': 0, 'TUE': 1, 'WED': 2, 'THU': 3, 'FRI': 4, 'SAT': 5, 'SUN': 6}
-        if days:
-            today_dt = date.today()
-            best = None
-            for d_ in days:
-                target = day_map.get(d_)
-                if target is None: continue
-                delta = (target - today_dt.weekday()) % 7
-                if delta == 0: delta = 7
-                from datetime import timedelta as _td
-                cand = today_dt + _td(days=delta)
-                if best is None or cand < best:
-                    best = cand
-            if best:
-                deliv_default = best.isoformat()
-    except Exception:
-        pass
+    # Pick a sensible default delivery date: the next configured delivery day.
+    deliv_default = _next_delivery_date(supplier.get('delivery_days') or '')
 
     return render_template('packaging.html',
         supplier=supplier, suppliers=suppliers, items=items,
@@ -771,7 +836,7 @@ def packaging_compose():
     if not supplier:
         return jsonify({'error': 'supplier not found'}), 404
 
-    delivery_date = request.form.get('delivery_date', '').strip()
+    delivery_date = _resolve_delivery_date(supplier, request.form.get('delivery_date', ''))
     extra_note    = request.form.get('extra_note', '').strip()
     composed_by   = request.form.get('composed_by', session.get('role', '')).strip()
 
@@ -836,7 +901,7 @@ def packaging_docx():
     if not supplier:
         return jsonify({'error': 'supplier not found'}), 404
 
-    delivery_date = request.form.get('delivery_date', '').strip()
+    delivery_date = _resolve_delivery_date(supplier, request.form.get('delivery_date', ''))
     extra_note    = request.form.get('extra_note', '').strip()
     composed_by   = request.form.get('composed_by', session.get('role','')).strip()
     chosen = _selected_order_items(sid)
@@ -864,7 +929,7 @@ def packaging_send():
     if not supplier:
         return jsonify({'error': 'supplier not found'}), 404
 
-    delivery_date = request.form.get('delivery_date', '').strip()
+    delivery_date = _resolve_delivery_date(supplier, request.form.get('delivery_date', ''))
     extra_note    = request.form.get('extra_note', '').strip()
     composed_by   = request.form.get('composed_by', session.get('role','')).strip()
 
@@ -961,7 +1026,7 @@ def packaging_log_action():
         return jsonify({'error': 'supplier not found'}), 404
     subject = request.form.get('subject', '').strip()
     body    = request.form.get('body', '').strip()
-    delivery_date = request.form.get('delivery_date', '').strip()
+    delivery_date = _resolve_delivery_date(supplier, request.form.get('delivery_date', ''))
     composed_by = request.form.get('composed_by', session.get('role','')).strip()
     with _conn() as c:
         c.execute('''INSERT INTO packaging_orders
@@ -979,6 +1044,9 @@ def supplier_edit(sid):
     name = request.form.get('name', '').strip()
     if not name:
         return jsonify({'error': 'Supplier name required'}), 400
+    delivery_days = request.form.get('delivery_days', '').strip().upper()
+    if current_store_id() == SUBIACO_STORE_ID:
+        delivery_days = SUBIACO_PACKAGING_DELIVERY_DAYS
     with _conn() as c:
         c.execute('''UPDATE packaging_suppliers SET
             name=?, email=?, phone=?, cc_emails=?, delivery_days=?,
@@ -988,7 +1056,7 @@ def supplier_edit(sid):
              request.form.get('email', '').strip(),
              request.form.get('phone', '').strip(),
              request.form.get('cc_emails', '').strip(),
-             request.form.get('delivery_days', '').strip().upper(),
+             delivery_days,
              request.form.get('cafe_name', '').strip(),
              request.form.get('cafe_address', '').strip(),
              request.form.get('cafe_contacts', '').strip(),
@@ -1003,6 +1071,9 @@ def supplier_add():
     name = request.form.get('name', '').strip()
     if not name:
         return redirect(url_for('packaging.packaging_home'))
+    delivery_days = request.form.get('delivery_days', '').strip().upper()
+    if current_store_id() == SUBIACO_STORE_ID:
+        delivery_days = SUBIACO_PACKAGING_DELIVERY_DAYS
     with _conn() as c:
         n = c.execute(
             'SELECT COALESCE(MAX(sort_order),-1)+1 AS n FROM packaging_suppliers WHERE store_id=?',
@@ -1014,7 +1085,7 @@ def supplier_add():
              request.form.get('email', '').strip(),
              request.form.get('phone', '').strip(),
              request.form.get('cc_emails', '').strip(),
-             request.form.get('delivery_days', '').strip().upper(),
+             delivery_days,
              request.form.get('cafe_name', '').strip() or 'MCQ Vietnamese Street Food — MIRRABOOKA',
              request.form.get('cafe_contacts', '').strip(),
              n, current_store_id()))
