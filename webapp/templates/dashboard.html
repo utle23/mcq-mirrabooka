@@ -94,6 +94,9 @@
                   {% if op.get('submitted_at') %}{{ op['submitted_at'][-8:-3] }}{% endif %}
                 </span>
                 <a href="/checklist/view/{{ op.id }}" class="btn btn-sm btn-outline-secondary ms-auto">View</a>
+              {% elif opening_locked %}
+                <span class="badge bg-secondary me-1"><i class="fas fa-lock me-1"></i>Locked</span>
+                <a href="/history" class="btn btn-sm btn-outline-secondary ms-auto" title="Opening locked after 3 PM — view in History">History</a>
               {% else %}
                 <span class="badge bg-secondary me-1">Pending</span>
                 <a href="/checklist/{{ key }}?section=opening" class="btn btn-sm btn-success ms-auto">

@@ -12,15 +12,23 @@
                onchange="location.href='/checklist/{{ chk_type }}?date='+this.value+'&section={{ section }}'">
       </div>
       <div class="btn-group">
+        {% if opening_locked %}
+        <span class="btn btn-sm btn-outline-secondary disabled" tabindex="-1" aria-disabled="true"
+              title="Opening is locked after 3 PM — view it in History">
+          <i class="fas fa-lock me-1"></i>Opening
+        </span>
+        {% else %}
         <a href="/checklist/{{ chk_type }}?date={{ chk_date }}&section=opening"
            class="btn btn-sm {% if section=='opening' %}btn-success{% else %}btn-outline-success{% endif %}">
           <i class="fas fa-sun me-1"></i>Opening
         </a>
+        {% endif %}
         <a href="/checklist/{{ chk_type }}?date={{ chk_date }}&section=closing"
            class="btn btn-sm {% if section=='closing' %}btn-success{% else %}btn-outline-success{% endif %}">
           <i class="fas fa-moon me-1"></i>Closing
         </a>
       </div>
+      {% if opening_locked %}<span class="badge bg-secondary"><i class="fas fa-lock me-1"></i>Opening locked after 3 PM</span>{% endif %}
       <span class="badge bg-light text-dark border">{{ day_name }}</span>
       {% if existing %}
         <span class="badge bg-{% if existing.verified %}success{% else %}warning text-dark{% endif %}">

@@ -1,7 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_file, send_from_directory, flash, abort
 from functools import wraps
 import sqlite3, os, json, calendar, uuid
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from io import BytesIO
 from werkzeug.utils import secure_filename
 
@@ -1973,6 +1973,21 @@ def super_admin_required(f):
         return f(*args, **kwargs)
     return decorated
 
+# Perth is UTC+8 year-round (no daylight saving), so a fixed offset is exact and
+# works even when the server (PythonAnywhere) runs on UTC.
+PERTH_TZ = timezone(timedelta(hours=8))
+OPENING_LOCK_HOUR = 15   # 3 PM Perth: the Opening checklist locks for everyone
+
+
+def perth_now():
+    return datetime.now(PERTH_TZ)
+
+
+def opening_locked():
+    """After 3 PM Perth the Opening checklist is view-only (history) for everyone."""
+    return perth_now().hour >= OPENING_LOCK_HOUR
+
+
 @app.context_processor
 def inject_globals():
     _today = date.today()
@@ -1996,6 +2011,8 @@ def inject_globals():
         issue_categories=ISSUE_CATEGORIES,
         temp_kind_rules=TEMP_KIND_RULES,
         temp_is_unsafe=temp_is_unsafe,
+        opening_locked=opening_locked(),
+        default_section=('closing' if opening_locked() else 'opening'),
     )
 
 # Paths that should NOT trigger or be affected by the timeout middleware:
@@ -2182,7 +2199,13 @@ def checklist_form(chk_type):
     if chk_type not in CHECKLISTS:
         return redirect(url_for('dashboard'))
     chk_date = request.args.get('date', date.today().isoformat())
-    section  = request.args.get('section', 'opening')
+    # After 3 PM Perth the default is Closing; Opening is locked (view via History).
+    locked = opening_locked()
+    section  = request.args.get('section') or ('closing' if locked else 'opening')
+    section  = 'closing' if section not in ('opening', 'closing') else section
+    if section == 'opening' and locked:
+        flash('Opening checklist is locked after 3 PM. View it in History.', 'warning')
+        return redirect(url_for('checklist_form', chk_type=chk_type, date=chk_date, section='closing'))
     chk_data = CHECKLISTS[chk_type]
     try:
         day_name = datetime.strptime(chk_date, '%Y-%m-%d').strftime('%A')
@@ -2303,6 +2326,10 @@ def checklist_save(chk_type):
         return redirect(url_for('dashboard'))
     chk_date       = request.form.get('date', date.today().isoformat())
     section        = request.form.get('section', 'opening')
+    # Server-side lock: Opening can't be filled/edited after 3 PM Perth (any role).
+    if section == 'opening' and opening_locked():
+        flash('Opening checklist is locked after 3 PM. View it in History.', 'warning')
+        return redirect(url_for('checklist_form', chk_type=chk_type, section='closing'))
     responsible    = request.form.get('responsible', '')
     # Banh Mi station can have two people responsible — combine into one field.
     responsible2   = request.form.get('responsible2', '').strip()

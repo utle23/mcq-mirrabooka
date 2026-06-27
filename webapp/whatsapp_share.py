@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 
 from flask import Blueprint, render_template, request, send_file, redirect, url_for, session
@@ -22,7 +22,8 @@ UPLOAD_DIR: str | None = None
 CHECKLISTS_META: dict = {}
 TEMPERATURES_META: dict = {}
 
-SHARE_CUTOFF_HOUR = 16
+SHARE_CUTOFF_HOUR = 15   # 3 PM Perth → default to the Closing report
+PERTH_TZ = timezone(timedelta(hours=8))   # Perth = UTC+8 year-round (no DST)
 SHARE_PERIODS = {
     'opening': {
         'label': 'Opening',
@@ -75,7 +76,7 @@ def _resolve_share_period(raw: str | None = None) -> str:
         return 'closing'
     if value in ('opening', 'open', 'morning', 'am'):
         return 'opening'
-    return 'closing' if datetime.now().hour >= SHARE_CUTOFF_HOUR else 'opening'
+    return 'closing' if datetime.now(PERTH_TZ).hour >= SHARE_CUTOFF_HOUR else 'opening'
 
 
 def _filter_equipment_for_period(equip: dict | None, period: str) -> dict | None:

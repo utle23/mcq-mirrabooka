@@ -79,12 +79,27 @@
       <div class="checks">
         {% for check in check_types %}
         {% set rd = row.checks[check.key] %}
-        <div class="check-box {% if rd.temp is not none %}{% if row.defrosted %}defrost{% elif rd.unsafe %}bad{% else %}good{% endif %}{% endif %}">
+        <div class="check-box {% if rd.temp is not none %}{% if row.defrosted %}defrost{% elif rd.unsafe %}bad{% else %}good{% endif %}{% endif %}"
+             id="cb_{{ check.key }}_{{ row.unit.id }}">
           <label>{{ check.label }}<small>{{ check.deadline }}</small></label>
-          <input type="number" step="0.1" name="{{ check.key }}_temp_{{ row.unit.id }}"
+          <input type="number" step="0.1" id="temp_{{ check.key }}_{{ row.unit.id }}"
+                 name="{{ check.key }}_temp_{{ row.unit.id }}"
                  data-lo="{{ row.meta.lo }}" data-hi="{{ row.meta.hi if row.meta.hi is not none else '' }}"
                  value="{{ '%g'|format(rd.temp) if rd.temp is not none else '' }}"
                  placeholder="°C" oninput="colorEq(this)">
+          <button type="button" class="btn btn-sm btn-outline-info w-100 mt-1 ai-scan-btn"
+                  onclick="document.getElementById('aiphoto_{{ check.key }}_{{ row.unit.id }}').click()"
+                  title="Take a photo of the thermometer — AI reads &amp; saves the temperature">
+            <i class="fas fa-camera me-1"></i>Scan
+          </button>
+          <input type="file" accept="image/*" capture="environment" class="d-none"
+                 id="aiphoto_{{ check.key }}_{{ row.unit.id }}"
+                 data-unit="{{ row.unit.id }}" data-check="{{ check.key }}"
+                 onchange="aiScanTemp(this)">
+          <div class="ai-thumb text-center mt-1" id="thumb_{{ check.key }}_{{ row.unit.id }}">
+            {% if rd.photo %}<img src="/equipment/photo/{{ rd.photo }}" style="height:30px;border-radius:5px;cursor:pointer"
+                 onclick="openLightbox('/equipment/photo/{{ rd.photo }}','Thermometer')">{% endif %}
+          </div>
         </div>
         {% endfor %}
       </div>
@@ -192,6 +207,43 @@ function eqShowToast(msg, kind){
   document.getElementById('eqToastMsg').textContent = msg;
   clearTimeout(eqToastTimer);
   eqToastTimer = setTimeout(() => t.classList.remove('show'), 4200);
+}
+
+// Photo of the thermometer → GPT-4o reads the number → auto-saved (no confirm).
+async function aiScanTemp(input){
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const uid = input.dataset.unit, check = input.dataset.check;
+  const tempInput = document.getElementById('temp_' + check + '_' + uid);
+  const btn = input.previousElementSibling;   // the Scan button
+  const old = btn ? btn.innerHTML : '';
+  if (btn){ btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Reading…'; }
+  const fd = new FormData();
+  fd.append('unit_id', uid);
+  fd.append('check', check);
+  const dateEl = document.querySelector('#eqForm input[name="date"]');
+  fd.append('date', dateEl ? dateEl.value : '');
+  const rb = document.querySelector('input[name="recorded_by"]');
+  fd.append('recorded_by', rb ? rb.value : '');
+  fd.append('photo', file);
+  try {
+    const resp = await fetch('/equipment/ai-temp', { method:'POST', body: fd });
+    const d = await resp.json();
+    if (!resp.ok || !d.ok) throw new Error(d.error || 'AI could not read it');
+    if (tempInput){ tempInput.value = d.temp; colorEq(tempInput); }
+    eqShowToast('AI read ' + d.temp + '°C — saved' + (d.unsafe ? ' · OUT OF RANGE' : ''),
+                d.unsafe ? 'warn' : 'ok');
+    const thumb = document.getElementById('thumb_' + check + '_' + uid);
+    if (thumb && d.photo_url){
+      thumb.innerHTML = '<img src="' + d.photo_url + '" style="height:30px;border-radius:5px;cursor:pointer" '
+        + 'onclick="openLightbox(\'' + d.photo_url + '\',\'Thermometer\')">';
+    }
+  } catch (err){
+    eqShowToast((err && err.message) || 'AI failed — type it manually', 'err');
+  } finally {
+    if (btn){ btn.disabled = false; btn.innerHTML = old; }
+    input.value = '';   // allow re-scanning the same unit
+  }
 }
 
 document.getElementById('eqForm').addEventListener('submit', async function(e){

@@ -38,6 +38,9 @@
 .items-table td { vertical-align: middle; font-size: 0.92rem; }
 .items-table .qty-input { width: 80px; text-align: center; font-weight: 700; }
 .items-table .qty-input:focus { background: #FFF8E1; }
+.items-table .qty-stepper { width: 132px; margin: 0 auto; }
+.items-table .qty-stepper .qty-input { width: 50px; font-weight: 700; }
+.items-table .qty-stepper .qty-btn { font-weight: 700; font-size: 1.1rem; line-height: 1; min-width: 38px; padding: 0; }
 .items-table tbody tr.has-qty { background: #FFF8E1; }
 .items-table tbody tr.has-qty:hover { background: #FFF3CD; }
 .code-cell { font-family: ui-monospace, Menlo, monospace; font-size: 0.82rem; color: #555; }
@@ -190,9 +193,15 @@
             data-unit-measure="{{ it.unit_measure|e }}"
             data-unit-price="{{ it.unit_price or 0 }}">
           <td>
-            <input type="number" name="qty_{{ it.id }}" class="form-control form-control-sm qty-input"
-                   min="0" max="999" value="0"
-                   oninput="updateRowState(this); refreshSummary();">
+            <div class="qty-stepper input-group input-group-sm flex-nowrap">
+              <button type="button" class="btn btn-outline-secondary qty-btn" tabindex="-1"
+                      onclick="stepQty(this,-1)" aria-label="Decrease">&minus;</button>
+              <input type="number" name="qty_{{ it.id }}" class="form-control form-control-sm qty-input text-center"
+                     min="0" max="999" value="0" inputmode="numeric"
+                     oninput="updateRowState(this); refreshSummary();">
+              <button type="button" class="btn btn-outline-secondary qty-btn" tabindex="-1"
+                      onclick="stepQty(this,1)" aria-label="Increase">+</button>
+            </div>
           </td>
           <td class="unit-cell">{{ it.unit }}</td>
           <td>
@@ -509,6 +518,17 @@ function money(v) {
   return '$' + n.toFixed(2);
 }
 
+// −/+ stepper: change the quantity without typing (mobile-friendly, no typos).
+function stepQty(btn, delta) {
+  const input = btn.parentElement.querySelector('.qty-input');
+  if (!input) return;
+  let v = parseInt(input.value || '0', 10);
+  if (isNaN(v)) v = 0;
+  input.value = Math.max(0, Math.min(999, v + delta));
+  // Fire input + change so row total, summary and the live order preview all update.
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+}
 function updateRowState(input) {
   const tr = input.closest('tr');
   if (!tr) return;

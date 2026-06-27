@@ -12,8 +12,14 @@ Exposes helper `collect_equipment_for_date(conn, date_str)` used by the daily
 WhatsApp / Gmail share to embed equipment temperatures.
 """
 from flask import (Blueprint, render_template, request, redirect, url_for,
-                   session, jsonify, flash)
+                   session, jsonify, flash, send_from_directory, abort)
 import sqlite3
+import os
+import re
+import json
+import base64
+import secrets
+import urllib.request
 from datetime import datetime, date, timedelta
 from functools import wraps
 
@@ -37,6 +43,11 @@ except Exception:
 
 equipment = Blueprint('equipment', __name__, url_prefix='/equipment')
 DB_PATH = None
+
+UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
+ALLOWED_IMG_EXT = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif'}
+OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
+OPENAI_MODEL = 'gpt-4o'
 
 DAYS_FULL = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 DAYS_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -127,7 +138,7 @@ def _check_columns(check_type):
             f'{check_type}_recorded_at')
 
 
-def _reading(temp, kind, recorded_by='', recorded_at='', defrosted=False):
+def _reading(temp, kind, recorded_by='', recorded_at='', defrosted=False, photo=''):
     # A unit being defrosted is expected to run warm — never flag it unsafe.
     return {
         'temp': temp,
@@ -135,6 +146,7 @@ def _reading(temp, kind, recorded_by='', recorded_at='', defrosted=False):
         'defrosted': bool(defrosted),
         'recorded_by': recorded_by or '',
         'recorded_at': recorded_at or '',
+        'photo': photo or '',
     }
 
 
@@ -202,6 +214,8 @@ def init_equipment_tables(db_path):
             ('closing_recorded_by', "ALTER TABLE equipment_temp_readings ADD COLUMN closing_recorded_by TEXT"),
             ('closing_recorded_at', "ALTER TABLE equipment_temp_readings ADD COLUMN closing_recorded_at TEXT"),
             ('defrosted', "ALTER TABLE equipment_temp_readings ADD COLUMN defrosted TEXT DEFAULT 'N'"),
+            ('morning_photo', "ALTER TABLE equipment_temp_readings ADD COLUMN morning_photo TEXT"),
+            ('closing_photo', "ALTER TABLE equipment_temp_readings ADD COLUMN closing_photo TEXT"),
         ]:
             try:
                 conn.execute(ddl)
@@ -304,7 +318,9 @@ def _cell_checks(u, r):
                 by = r['recorded_by'] if 'recorded_by' in r.keys() else ''
             if not at and r:
                 at = r['recorded_at'] if 'recorded_at' in r.keys() else ''
-        checks[check['key']] = _reading(temp, u['kind'], by, at, defrosted=defrosted)
+        photo_col = f"{check['key']}_photo"
+        photo = r[photo_col] if r and photo_col in r.keys() else ''
+        checks[check['key']] = _reading(temp, u['kind'], by, at, defrosted=defrosted, photo=photo)
     return checks
 
 
@@ -407,6 +423,180 @@ def save_today():
                         'alert_list': alerts[:10], 'saved_at': now, 'message': msg})
     flash(msg, 'warning' if alerts else 'success')
     return redirect(url_for('equipment.today_view'))
+
+
+# ── AI temperature reading (photo → GPT-4o → auto-save) ──────────────────────
+
+def _app_config(key, default=''):
+    try:
+        with _get_db() as conn:
+            row = conn.execute('SELECT value FROM app_config WHERE key=?', (key,)).fetchone()
+            return (row['value'] if row and row['value'] else default)
+    except Exception:
+        return default
+
+
+def _save_eq_photo(file_storage):
+    """Downscale + save the thermometer photo as evidence. Returns (filename, jpeg_bytes)."""
+    if not file_storage:
+        return '', None
+    name = (getattr(file_storage, 'filename', '') or '').strip()
+    ext = name.rsplit('.', 1)[-1].lower() if '.' in name else ''
+    if ext not in ALLOWED_IMG_EXT:
+        return '', None
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    base = f"eqtemp_{current_store_id()}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(3)}"
+    try:
+        from PIL import Image, ImageOps  # type: ignore
+        file_storage.stream.seek(0)
+        img = ImageOps.exif_transpose(Image.open(file_storage.stream))
+        if img.mode in ('RGBA', 'LA', 'P'):
+            img = img.convert('RGB')
+        img.thumbnail((1024, 1024))
+        dest = os.path.join(UPLOAD_FOLDER, base + '.jpg')
+        img.save(dest, 'JPEG', quality=82)
+        with open(dest, 'rb') as f:
+            return os.path.basename(dest), f.read()
+    except Exception:
+        try:
+            file_storage.stream.seek(0)
+            data = file_storage.read()
+            dest = os.path.join(UPLOAD_FOLDER, base + '.' + ext)
+            with open(dest, 'wb') as f:
+                f.write(data)
+            return os.path.basename(dest), data
+        except Exception:
+            return '', None
+
+
+def _delete_eq_photo(fname):
+    if not fname:
+        return
+    try:
+        os.remove(os.path.join(UPLOAD_FOLDER, os.path.basename(fname)))
+    except Exception:
+        pass
+
+
+def _openai_extract_temp(jpeg_bytes, api_key):
+    """Ask GPT-4o for ONLY the Celsius number on the thermometer. Returns float or None."""
+    b64 = base64.b64encode(jpeg_bytes).decode('ascii')
+    payload = {
+        'model': OPENAI_MODEL,
+        'temperature': 0,
+        'max_tokens': 10,
+        'messages': [{'role': 'user', 'content': [
+            {'type': 'text', 'text': (
+                "This photo shows a fridge/freezer thermometer or temperature display. "
+                "Reply with ONLY the temperature as a number in Celsius (e.g. 3.2 or -18.5). "
+                "No words, no degree sign. If you cannot read a number, reply NULL.")},
+            {'type': 'image_url', 'image_url': {
+                'url': f'data:image/jpeg;base64,{b64}', 'detail': 'low'}},
+        ]}],
+    }
+    ctx = email_service._ssl_context() if email_service else None
+    req = urllib.request.Request(
+        OPENAI_URL, data=json.dumps(payload).encode('utf-8'), method='POST',
+        headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {api_key}'})
+    with urllib.request.urlopen(req, timeout=45, context=ctx) as resp:
+        data = json.loads(resp.read().decode('utf-8', 'replace'))
+    text = ((data.get('choices') or [{}])[0].get('message', {}).get('content') or '').strip()
+    if 'null' in text.lower():
+        return None
+    m = re.search(r'-?\d+(?:\.\d+)?', text)
+    return float(m.group(0)) if m else None
+
+
+@equipment.route('/ai-temp', methods=['POST'])
+@_login_required
+def ai_temp():
+    """Photo of the thermometer → GPT-4o reads the temp → auto-saved (no confirm)."""
+    api_key = _app_config('openai_api_key')
+    if not api_key:
+        return jsonify({'ok': False, 'error': 'AI temperature reading is not set up yet (no OpenAI key).'}), 400
+    try:
+        uid = int(request.form.get('unit_id', 0))
+    except ValueError:
+        return jsonify({'ok': False, 'error': 'invalid unit'}), 400
+    check = (request.form.get('check') or 'morning').strip().lower()
+    if check not in CHECK_META:
+        check = 'morning'
+    date_iso = (request.form.get('date') or date.today().isoformat()).strip()
+    recorded_by = request.form.get('recorded_by', '').strip()
+    sid = current_store_id()
+
+    with _get_db() as conn:
+        unit = conn.execute(
+            'SELECT * FROM equipment_units WHERE id=? AND store_id=? AND active=1',
+            (uid, sid)).fetchone()
+    if not unit:
+        return jsonify({'ok': False, 'error': 'unit not found'}), 404
+
+    fname, jpeg = _save_eq_photo(request.files.get('photo'))
+    if not jpeg:
+        return jsonify({'ok': False, 'error': 'No photo received. Please take a clear photo.'}), 400
+
+    try:
+        temp = _openai_extract_temp(jpeg, api_key)
+    except Exception as e:
+        _delete_eq_photo(fname)
+        return jsonify({'ok': False, 'error': f'AI read failed ({type(e).__name__}). Try again or type it.'}), 502
+    if temp is None:
+        _delete_eq_photo(fname)
+        return jsonify({'ok': False, 'error': 'Could not read a number from the photo. Retake or type it.'}), 422
+
+    now = datetime.now().strftime('%Y-%m-%d %H:%M')
+    temp_col, by_col, at_col = _check_columns(check)
+    photo_col = f'{check}_photo'
+    with _get_db() as conn:
+        conn.execute('INSERT OR IGNORE INTO equipment_temp_readings (unit_id, date, store_id) VALUES (?,?,?)',
+                     (uid, date_iso, sid))
+        conn.execute(f'''UPDATE equipment_temp_readings
+            SET {temp_col}=?, {by_col}=?, {at_col}=?, {photo_col}=?
+            WHERE unit_id=? AND date=? AND store_id=?''',
+            (temp, recorded_by, now, fname, uid, date_iso, sid))
+        if check == 'morning':
+            conn.execute('''UPDATE equipment_temp_readings
+                SET temp=?, recorded_by=?, recorded_at=? WHERE unit_id=? AND date=? AND store_id=?''',
+                (temp, recorded_by, now, uid, date_iso, sid))
+        row = conn.execute(
+            'SELECT defrosted FROM equipment_temp_readings WHERE unit_id=? AND date=? AND store_id=?',
+            (uid, date_iso, sid)).fetchone()
+
+    defrosted = bool(row and row['defrosted'] == 'Y')
+    unsafe = (not defrosted) and is_unsafe(unit['kind'], temp)
+    if unsafe and email_service:
+        try:
+            meta = KIND_META.get(unit['kind'], KIND_META['cold'])
+            email_service.send_notification('temperature',
+                subject=f'⚠️ Equipment temp out of range — {unit["name"]} ({temp:g}°C)',
+                lines=[f'Unit: {unit["name"]}',
+                       f'Check: {CHECK_META[check]["label"]}',
+                       f'Temp: {temp:g}°C  (safe {meta["range"]})',
+                       f'Date: {date_iso}', 'Read by AI from a photo'],
+                link_path='/equipment/today', actor=recorded_by)
+        except Exception:
+            pass
+
+    return jsonify({'ok': True, 'temp': temp, 'unsafe': unsafe, 'saved_at': now,
+                    'check': check, 'unit_id': uid,
+                    'photo_url': (url_for('equipment.equipment_photo', filename=fname) if fname else '')})
+
+
+@equipment.route('/photo/<path:filename>')
+@_login_required
+def equipment_photo(filename):
+    """Serve a thermometer photo, but only if it belongs to a reading in the caller's store."""
+    safe = os.path.basename(filename)
+    guard, gp = store_guard_clause()
+    with _get_db() as conn:
+        row = conn.execute(
+            f'''SELECT 1 FROM equipment_temp_readings
+                WHERE (morning_photo=? OR closing_photo=?) AND {guard}''',
+            [safe, safe] + gp).fetchone()
+    if not row:
+        abort(404)
+    return send_from_directory(UPLOAD_FOLDER, safe, max_age=604800)
 
 
 @equipment.route('/report')
