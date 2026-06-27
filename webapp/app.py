@@ -1983,9 +1983,16 @@ def perth_now():
     return datetime.now(PERTH_TZ)
 
 
-def opening_locked():
-    """After 3 PM Perth the Opening checklist is view-only (history) for everyone."""
-    return perth_now().hour >= OPENING_LOCK_HOUR
+def opening_locked(for_date=None):
+    """Opening locks only for TODAY's record after 3 PM Perth (for everyone).
+
+    Past (and future) dates stay open so staff/admin can review or correct earlier
+    Opening checklists at any time. `for_date` is an ISO 'YYYY-MM-DD' string; when
+    omitted it means today, so the dashboard/nav 'today' behaviour is unchanged.
+    """
+    now = perth_now()
+    today = now.date().isoformat()
+    return (for_date or today) == today and now.hour >= OPENING_LOCK_HOUR
 
 
 @app.context_processor
@@ -2199,8 +2206,8 @@ def checklist_form(chk_type):
     if chk_type not in CHECKLISTS:
         return redirect(url_for('dashboard'))
     chk_date = request.args.get('date', date.today().isoformat())
-    # After 3 PM Perth the default is Closing; Opening is locked (view via History).
-    locked = opening_locked()
+    # Only TODAY's Opening locks after 3 PM Perth; past dates stay open for review.
+    locked = opening_locked(chk_date)
     section  = request.args.get('section') or ('closing' if locked else 'opening')
     section  = 'closing' if section not in ('opening', 'closing') else section
     if section == 'opening' and locked:
@@ -2236,6 +2243,7 @@ def checklist_form(chk_type):
         chk_date=chk_date, day_name=day_name, tasks=tasks,
         existing=dict(existing) if existing else None,
         existing_tasks=existing_tasks, staff=get_active_staff(), managers=MANAGERS,
+        opening_locked=locked,   # date-aware: overrides the global (today) lock
     )
 
 
@@ -2326,10 +2334,11 @@ def checklist_save(chk_type):
         return redirect(url_for('dashboard'))
     chk_date       = request.form.get('date', date.today().isoformat())
     section        = request.form.get('section', 'opening')
-    # Server-side lock: Opening can't be filled/edited after 3 PM Perth (any role).
-    if section == 'opening' and opening_locked():
+    # Server-side lock: only TODAY's Opening is locked after 3 PM Perth; past dates
+    # stay editable so earlier records can be corrected.
+    if section == 'opening' and opening_locked(chk_date):
         flash('Opening checklist is locked after 3 PM. View it in History.', 'warning')
-        return redirect(url_for('checklist_form', chk_type=chk_type, section='closing'))
+        return redirect(url_for('checklist_form', chk_type=chk_type, date=chk_date, section='closing'))
     responsible    = request.form.get('responsible', '')
     # Banh Mi station can have two people responsible — combine into one field.
     responsible2   = request.form.get('responsible2', '').strip()
