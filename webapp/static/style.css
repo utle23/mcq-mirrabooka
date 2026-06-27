@@ -44,7 +44,7 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
   padding: 14px 12px;
   border-bottom: 1px solid rgba(255,255,255,0.08);
 }
-.logo-img { width: 40px; height: 40px; object-fit: contain; border-radius: 6px; flex-shrink: 0; }
+.logo-img { width: 42px; height: 42px; object-fit: contain; border-radius: 9px; flex-shrink: 0; background: #fff; padding: 3px; }
 .logo-text .logo-name { color: #fff; font-weight: 800; font-size: 15px; letter-spacing: 1px; }
 .logo-text .logo-sub  { color: #95D5B2; font-size: 9px; letter-spacing: 1.5px; }
 

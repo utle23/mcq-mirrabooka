@@ -28,6 +28,9 @@ SHARE_PERIODS = {
     'opening': {
         'label': 'Opening',
         'cover': 'OPENING OPERATIONS REPORT',
+        'report_word': 'OPENING REPORT',
+        'accent': '#2E9E4B',      # green — sunrise
+        'accent_dk': '#1F7A39',
         'equipment_check': 'morning',
         'equipment_label': 'Morning Equipment Check',
         'includes_food_temps': True,
@@ -35,6 +38,9 @@ SHARE_PERIODS = {
     'closing': {
         'label': 'Closing',
         'cover': 'CLOSING OPERATIONS REPORT',
+        'report_word': 'CLOSING REPORT',
+        'accent': '#7A3FB0',      # purple — evening
+        'accent_dk': '#5A2C86',
         'equipment_check': 'closing',
         'equipment_label': 'Closing Equipment Check',
         'includes_food_temps': False,
@@ -66,6 +72,17 @@ def _conn() -> sqlite3.Connection:
     c = sqlite3.connect(DB_PATH, timeout=30)
     c.row_factory = sqlite3.Row
     return c
+
+
+def _store_name() -> str:
+    """The current branch's display name for report covers (multi-store aware)."""
+    try:
+        with _conn() as c:
+            row = c.execute('SELECT name FROM stores WHERE id=?', (current_store_id(),)).fetchone()
+        name = (row['name'] if row else '') or ''
+        return name.strip() or 'MCQ Vietnamese Street Food'
+    except Exception:
+        return 'MCQ Vietnamese Street Food'
 
 
 # ── Data collection ──────────────────────────────────────────────────────────
@@ -444,9 +461,13 @@ def build_daily_png(date_str: str, period: str | None = None) -> bytes:
     img = Image.new('RGB', (W, total_h), LIGHT_BG)
     draw = ImageDraw.Draw(img)
 
-    # ── HEADER (gradient-ish solid + brand) ───────────────────────────────
-    draw.rectangle((0, 0, W, h_header), fill=NAVY)
-    draw.rectangle((0, h_header - 6, W, h_header), fill=BRAND)
+    # ── HEADER (period-accent band + brand) ───────────────────────────────
+    def _hx(s):
+        s = s.lstrip('#'); return tuple(int(s[i:i + 2], 16) for i in (0, 2, 4))
+    _acc = _hx(period_meta.get('accent', '#2E9E4B'))
+    _acc_dk = _hx(period_meta.get('accent_dk', '#1F7A39'))
+    draw.rectangle((0, 0, W, h_header), fill=_acc)
+    draw.rectangle((0, h_header - 6, W, h_header), fill=_acc_dk)
 
     logo_path = os.path.join(STATIC_DIR, 'logo.png') if STATIC_DIR else ''
     if os.path.exists(logo_path):
@@ -467,10 +488,10 @@ def build_daily_png(date_str: str, period: str | None = None) -> bytes:
         date_pretty = datetime.strptime(date_str, '%Y-%m-%d').strftime('%A, %d %b %Y').upper()
     except Exception:
         date_pretty = date_str
-    draw.text((text_x, 36), 'MCQ MIRRABOOKA CAFE', fill=(255, 255, 255), font=f_title)
+    draw.text((text_x, 36), _store_name(), fill=(255, 255, 255), font=f_title)
     draw.text((text_x, 96), period_meta['cover'],
               fill=(255, 255, 255, 200), font=f_sub)
-    draw.text((text_x, 134), date_pretty, fill=(255, 200, 200), font=f_body_b)
+    draw.text((text_x, 134), date_pretty, fill=(236, 246, 239), font=f_body_b)
 
     y = h_header + 24
 
@@ -1305,14 +1326,14 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
     base = getSampleStyleSheet()
     S = {
         'cover_brand': ParagraphStyle('cover_brand', parent=base['Title'],
-            fontName=bold_font, fontSize=40, leading=46,
-            textColor=colors.white, alignment=TA_CENTER, spaceAfter=4),
+            fontName=bold_font, fontSize=30, leading=35,
+            textColor=colors.HexColor('#1A1A2E'), alignment=TA_CENTER, spaceAfter=2),
         'cover_sub':   ParagraphStyle('cover_sub', parent=base['Normal'],
-            fontName=font_name, fontSize=14, leading=18,
-            textColor=colors.HexColor('#FFE082'), alignment=TA_CENTER, spaceAfter=4),
+            fontName=font_name, fontSize=12.5, leading=16,
+            textColor=colors.HexColor('#6E757E'), alignment=TA_CENTER, spaceAfter=10),
         'cover_date':  ParagraphStyle('cover_date', parent=base['Normal'],
-            fontName=bold_font, fontSize=20, leading=24,
-            textColor=colors.white, alignment=TA_CENTER, spaceBefore=20),
+            fontName=bold_font, fontSize=15, leading=19,
+            textColor=colors.HexColor('#3A3F4A'), alignment=TA_CENTER, spaceBefore=10),
         'page_title':  ParagraphStyle('page_title', parent=base['Title'],
             fontName=bold_font, fontSize=22, leading=26,
             textColor=colors.white, alignment=TA_LEFT, spaceAfter=0),
@@ -1349,72 +1370,61 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
     MARGIN = 14 * mm
     USABLE_W = PAGE_W - 2 * MARGIN
 
+    # Period accent (Opening = green, Closing = purple) for a modern cover.
+    ACC    = colors.HexColor(period_meta.get('accent', '#2E9E4B'))
+    ACC_DK = colors.HexColor(period_meta.get('accent_dk', '#1F7A39'))
+
     # ── Cover page background painter (drawn on the canvas, behind story) ──
     def _draw_cover(canvas, doc_obj):
         canvas.saveState()
-        # Full-bleed deep-navy base
-        canvas.setFillColor(NAVY_DK)
+        BAND_H = 88 * mm
+
+        # Clean white page
+        canvas.setFillColor(colors.white)
         canvas.rect(0, 0, PAGE_W, PAGE_H, fill=1, stroke=0)
-        # Vertical gradient feel via stacked translucent bands (top lighter)
-        bands = 16
+
+        # Top gradient band: accent (top) → darker accent (bottom)
+        bands = 48
+        r1, g1, b1 = ACC.red, ACC.green, ACC.blue
+        r2, g2, b2 = ACC_DK.red, ACC_DK.green, ACC_DK.blue
+        seg = BAND_H / bands
         for i in range(bands):
             t = i / float(bands - 1)
-            r = int(26 + t * 14); g = int(22 + t * 12); b = int(48 + t * 20)
-            canvas.setFillColorRGB(r/255, g/255, b/255)
-            canvas.rect(0, PAGE_H - (i + 1) * (PAGE_H / bands), PAGE_W,
-                        PAGE_H / bands + 1, fill=1, stroke=0)
+            canvas.setFillColorRGB(r1 + (r2 - r1) * t, g1 + (g2 - g1) * t, b1 + (b2 - b1) * t)
+            canvas.rect(0, PAGE_H - (i + 1) * seg, PAGE_W, seg + 1, fill=1, stroke=0)
+        # Crisp darker line at the band's lower edge
+        canvas.setFillColor(ACC_DK)
+        canvas.rect(0, PAGE_H - BAND_H, PAGE_W, 1.6 * mm, fill=1, stroke=0)
 
-        # Decorative gold double-frame inset from the edges
-        inset = 9 * mm
-        canvas.setStrokeColor(GOLD)
-        canvas.setLineWidth(1.4)
-        canvas.rect(inset, inset, PAGE_W - 2 * inset, PAGE_H - 2 * inset, fill=0, stroke=1)
-        canvas.setLineWidth(0.5)
-        canvas.rect(inset + 2.2 * mm, inset + 2.2 * mm,
-                    PAGE_W - 2 * (inset + 2.2 * mm), PAGE_H - 2 * (inset + 2.2 * mm),
-                    fill=0, stroke=1)
-        # Corner accents
-        canvas.setFillColor(GOLD)
-        for cx, cy in [(inset, PAGE_H - inset), (PAGE_W - inset, PAGE_H - inset),
-                       (inset, inset), (PAGE_W - inset, inset)]:
-            canvas.circle(cx, cy, 1.6 * mm, fill=1, stroke=0)
-
-        # Bottom brand band + gold rule
-        canvas.setFillColor(BRAND)
-        canvas.rect(0, 0, PAGE_W, 22 * mm, fill=1, stroke=0)
-        canvas.setFillColor(GOLD)
-        canvas.rect(0, 22 * mm, PAGE_W, 1.4 * mm, fill=1, stroke=0)
-        # Tagline inside the brand band
-        canvas.setFont(bold_font, 13)
-        canvas.setFillColor(colors.white)
-        canvas.drawCentredString(PAGE_W / 2, 13.5 * mm, 'Freshly made · authentically Vietnamese')
-        canvas.setFont(font_name, 8.5)
-        canvas.setFillColor(colors.HexColor('#FFE082'))
-        canvas.drawCentredString(PAGE_W / 2, 8 * mm,
-                                 'THANK YOU FOR SUPPORTING LOCAL · MCQ MIRRABOOKA CAFE')
-
-        # Logo (centered, large) on a white rounded card with gold ring
+        # Floating white logo card straddling the band's lower edge (soft shadow)
+        card = 58 * mm
+        cx = PAGE_W / 2
+        card_cy = PAGE_H - BAND_H
+        cl = cx - card / 2
+        cb = card_cy - card / 2
+        canvas.setFillColor(colors.HexColor('#C7CDD6'))           # shadow
+        canvas.roundRect(cl + 1.3 * mm, cb - 2.0 * mm, card, card, 16, fill=1, stroke=0)
+        canvas.setFillColor(colors.white)                         # card
+        canvas.roundRect(cl, cb, card, card, 16, fill=1, stroke=0)
         logo_path = os.path.join(STATIC_DIR, 'logo.png') if STATIC_DIR else ''
         if os.path.exists(logo_path):
             try:
-                size = 66 * mm
-                lx = (PAGE_W - size) / 2
-                ly = PAGE_H - 92 * mm
-                canvas.setFillColor(GOLD)
-                canvas.roundRect(lx - 7.4 * mm, ly - 7.4 * mm, size + 14.8 * mm, size + 14.8 * mm,
-                                 12, fill=1, stroke=0)
-                canvas.setFillColor(colors.white)
-                canvas.roundRect(lx - 6 * mm, ly - 6 * mm, size + 12 * mm, size + 12 * mm,
-                                 10, fill=1, stroke=0)
-                canvas.drawImage(logo_path, lx, ly, width=size, height=size,
+                ls = card - 11 * mm
+                canvas.drawImage(logo_path, cx - ls / 2, card_cy - ls / 2, width=ls, height=ls,
                                  preserveAspectRatio=True, mask='auto')
             except Exception:
                 pass
 
-        # Footer line above the brand band
-        canvas.setFont(font_name, 8)
-        canvas.setFillColor(colors.HexColor('#9AA3B2'))
-        canvas.drawCentredString(PAGE_W / 2, 25 * mm,
+        # Bottom accent footer with tagline + generated timestamp
+        fb = 17 * mm
+        canvas.setFillColor(ACC_DK)
+        canvas.rect(0, 0, PAGE_W, fb, fill=1, stroke=0)
+        canvas.setFont(bold_font, 11)
+        canvas.setFillColor(colors.white)
+        canvas.drawCentredString(PAGE_W / 2, fb - 6.6 * mm, 'Freshly made · authentically Vietnamese')
+        canvas.setFont(font_name, 7.5)
+        canvas.setFillColor(colors.HexColor('#E9F3EC'))
+        canvas.drawCentredString(PAGE_W / 2, 3.4 * mm,
                           f'Generated {datetime.now().strftime("%a %d %b %Y · %H:%M")}')
         canvas.restoreState()
 
@@ -1453,9 +1463,21 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
     story = []
 
     # ── Cover content (positioned via Spacers because background is canvas) ──
-    story.append(Spacer(1, 100 * mm))     # leave room for logo painted by _draw_cover
-    story.append(Paragraph('MCQ MIRRABOOKA CAFE', S['cover_brand']))
-    story.append(Paragraph(f'VIETNAMESE STREET FOOD · {period_meta["cover"]}', S['cover_sub']))
+    story.append(Spacer(1, 104 * mm))     # clear the gradient band + floating logo card
+    story.append(Paragraph(_esc(_store_name()), S['cover_brand']))
+    story.append(Paragraph('VIETNAMESE STREET FOOD', S['cover_sub']))
+    _pill_para = Paragraph(period_meta.get('report_word', 'DAILY REPORT'),
+        ParagraphStyle('pill_cover', fontName=bold_font, fontSize=12, leading=15,
+                       textColor=colors.white, alignment=TA_CENTER))
+    _pill = Table([[_pill_para]], colWidths=[54 * mm], rowHeights=[9 * mm])
+    _pill.hAlign = 'CENTER'
+    _pill.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), ACC),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    story.append(_pill)
     try:
         date_pretty = datetime.strptime(date_str, '%Y-%m-%d').strftime('%A · %d %B %Y').upper()
     except Exception:
@@ -1464,11 +1486,11 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
     story.append(Spacer(1, 12 * mm))
 
     # ── Elegant eyebrow + gold hairline ────────────────────────────────────
-    story.append(HRFlowable(width=58 * mm, thickness=1, color=GOLD,
+    story.append(HRFlowable(width=58 * mm, thickness=1.4, color=ACC,
                             spaceBefore=0, spaceAfter=6, hAlign='CENTER'))
     story.append(Paragraph(' '.join('OPERATIONS · SUMMARY'),
         ParagraphStyle('eyebrow', fontName=bold_font, fontSize=11, leading=13,
-                       textColor=GOLD, alignment=TA_CENTER, spaceAfter=6)))
+                       textColor=ACC, alignment=TA_CENTER, spaceAfter=6)))
 
     # ── Headline stats ─────────────────────────────────────────────────────
     chk_done = sum(1 for c in data['checklists']
