@@ -233,19 +233,26 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
 
 /* ── Login Page ── */
 .login-body {
-  background: linear-gradient(135deg, #1B3A2D 0%, #2D6A4F 50%, #52B788 100%);
+  /* Deep emerald "luxe" backdrop with subtle gold + green glows */
+  background:
+    radial-gradient(900px 480px at 50% -12%, rgba(212,175,55,0.16), transparent 60%),
+    radial-gradient(760px 460px at 112% 116%, rgba(82,183,136,0.22), transparent 55%),
+    radial-gradient(640px 420px at -10% 90%, rgba(33,150,243,0.10), transparent 60%),
+    linear-gradient(140deg, #0A1812 0%, #0F2A20 42%, #1C4D3C 78%, #246A4F 100%);
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 20px;
 }
-.login-wrapper { width: 100%; max-width: 420px; }
+.login-wrapper { width: 100%; max-width: 430px; }
 .login-card {
-  background: #fff;
-  border-radius: 16px;
+  background: rgba(255,255,255,0.98);
+  border-radius: 22px;
   padding: 40px 36px;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.6);
+  box-shadow: 0 30px 80px rgba(0,0,0,0.45), 0 2px 0 rgba(255,255,255,0.5) inset;
+  backdrop-filter: blur(6px);
 }
 .login-header { text-align: center; margin-bottom: 28px; }
 .login-logo { width: 132px; height: 132px; object-fit: contain; margin-bottom: 14px;
@@ -277,22 +284,37 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
 /* ── Login Page Additions ── */
 .login-modes { display: flex; gap: 10px; }
 .mode-btn {
-  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px;
-  padding: 14px 6px; border-radius: 14px; border: 2px solid #e6e8ec;
-  background: #fff; font-size: 12.5px; font-weight: 700; color: #6b7280;
-  cursor: pointer; transition: transform .15s, box-shadow .2s, border-color .2s, background .2s, color .2s;
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 9px;
+  padding: 15px 6px 13px; border-radius: 16px; border: 1.5px solid #ebedf1;
+  background: #fff; font-size: 12.5px; font-weight: 700; color: #707783;
+  cursor: pointer; position: relative; overflow: hidden;
+  transition: transform .18s, box-shadow .22s, border-color .22s, background .22s, color .22s;
 }
-.mode-btn i { font-size: 22px; color: #9aa0a8; transition: color .2s, transform .2s; }
+/* circular icon chip — fills with the role colour when active */
+.mode-btn i {
+  display: flex; align-items: center; justify-content: center;
+  width: 42px; height: 42px; border-radius: 50%;
+  background: #f1f3f6; color: #9aa0a8; font-size: 18px;
+  transition: all .22s;
+}
 .mode-btn span { letter-spacing: .2px; line-height: 1.1; text-align: center; }
-.mode-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 18px rgba(0,0,0,.08); }
-.mode-btn[data-role="user"]  { --role-c: #2E9E4B; --role-bg: #E9F7EE; }
-.mode-btn[data-role="admin"] { --role-c: #1565C0; --role-bg: #E7F0FB; }
-.mode-btn[data-role="super"] { --role-c: #D4AF37; --role-bg: #FBF4DC; }
+.mode-btn:hover { transform: translateY(-3px); box-shadow: 0 12px 24px -10px rgba(20,40,30,.35); border-color: #dfe2e7; }
+.mode-btn[data-role="user"]  { --role-c: #2E9E4B; --role-c2: #46C46A; --role-bg: #ECF8F0; }
+.mode-btn[data-role="admin"] { --role-c: #1565C0; --role-c2: #3D8BE8; --role-bg: #E9F1FC; }
+.mode-btn[data-role="super"] { --role-c: #C99A12; --role-c2: #E9C75A; --role-bg: #FBF3D8; }
 .mode-btn.active {
   border-color: var(--role-c); background: var(--role-bg); color: var(--role-c);
-  box-shadow: 0 8px 20px -6px var(--role-c);
+  box-shadow: 0 14px 28px -12px var(--role-c);
 }
-.mode-btn.active i { color: var(--role-c); transform: scale(1.08); }
+.mode-btn.active::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px;
+  background: linear-gradient(90deg, var(--role-c), var(--role-c2));
+}
+.mode-btn.active i {
+  background: linear-gradient(135deg, var(--role-c), var(--role-c2));
+  color: #fff; transform: scale(1.06);
+  box-shadow: 0 6px 14px -4px var(--role-c);
+}
 .mode-info {
   padding: 8px 12px; border-radius: 8px; font-size: 12px; margin-bottom: 16px;
 }

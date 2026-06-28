@@ -2275,6 +2275,21 @@ def dashboard():
 
 # ─── Checklists ────────────────────────────────────────────────────────────────
 
+def _template_tasks(conn, chk_type, section, store_id=None):
+    """Live task list for a checklist type+section: per-store editable templates,
+    falling back to the built-in defaults. Single source of truth shared by the
+    checklist form AND the printable blank PDF, so adding/deleting a task is
+    reflected everywhere."""
+    sid = store_id if store_id is not None else current_store_id()
+    rows = conn.execute(
+        'SELECT task_name FROM checklist_task_templates '
+        'WHERE chk_type=? AND section=? AND store_id=? ORDER BY task_order',
+        (chk_type, section, sid)).fetchall()
+    if rows:
+        return [r['task_name'] for r in rows]
+    return CHECKLISTS.get(chk_type, {}).get(section, [])
+
+
 @app.route('/checklist/<chk_type>')
 @login_required
 def checklist_form(chk_type):
@@ -2295,14 +2310,8 @@ def checklist_form(chk_type):
         day_name = ''
 
     with get_db() as conn:
-        # Load task names from DB (admin may have renamed them)
-        db_tasks = conn.execute(
-            'SELECT task_name FROM checklist_task_templates WHERE chk_type=? AND section=? AND store_id=? ORDER BY task_order',
-            (chk_type, section, current_store_id())).fetchall()
-        if db_tasks:
-            tasks = [r['task_name'] for r in db_tasks]
-        else:
-            tasks = chk_data.get(section, [])
+        # Live task names (admin may have added / renamed / deleted them)
+        tasks = _template_tasks(conn, chk_type, section)
 
         existing = conn.execute(
             'SELECT * FROM checklist_sessions WHERE type=? AND section=? AND date=? AND store_id=?',
@@ -3784,14 +3793,16 @@ def export_checklist_pdf(session_id):
 @login_required
 def checklist_blank_pdf(chk_type):
     """Elegant BLANK checklist sheet for staff to print and tick by hand daily.
+    Tasks follow the LIVE per-store template (add/delete a task → reflected here).
     ?section=opening|closing|both (default both)."""
     from html import escape
     from reportlab.lib import colors
-    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.lib.enums import TA_LEFT
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import mm
-    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from reportlab.platypus import (Paragraph, SimpleDocTemplate, Spacer, Table,
+                                    TableStyle, Image as RLImage)
 
     chk = CHECKLISTS.get(chk_type)
     if not chk:
@@ -3803,12 +3814,25 @@ def checklist_blank_pdf(chk_type):
 
     with get_db() as conn:
         row = conn.execute('SELECT name FROM stores WHERE id=?', (current_store_id(),)).fetchone()
-    store_name = ((row['name'] if row else '') or 'MCQ Cafe').strip()
+        store_name = ((row['name'] if row else '') or 'MCQ Cafe').strip()
+        tasks_by_section = {sec: _template_tasks(conn, chk_type, sec) for sec in sections}
 
     accent = colors.HexColor(chk.get('color') or '#2E7D32')
-    INK = colors.HexColor('#1A1A2E')
+
+    def _blend(hex_color, pct, other=(255, 255, 255)):
+        c = hex_color.lstrip('#')
+        r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+        return colors.Color((r * pct + other[0] * (1 - pct)) / 255,
+                            (g * pct + other[1] * (1 - pct)) / 255,
+                            (b * pct + other[2] * (1 - pct)) / 255)
+
+    accent_hex = chk.get('color') or '#2E7D32'
+    accent_dk = _blend(accent_hex, 0.78, (0, 0, 0))     # darker top strip
+    tint_row = _blend(accent_hex, 0.07)                 # very light row tint
+    tint_card = _blend(accent_hex, 0.10)                # info card bg
+    INK = colors.HexColor('#1A2230')
     MUTED = colors.HexColor('#6E757E')
-    SOFT = colors.HexColor('#E8EBEF')
+    GRIDC = _blend(accent_hex, 0.22)
     font_name, bold_font = register_pdf_fonts()
     MARGIN = 12 * mm
     USABLE = A4[0] - 2 * MARGIN
@@ -3816,96 +3840,129 @@ def checklist_blank_pdf(chk_type):
     base = getSampleStyleSheet()
     S = {
         'task': ParagraphStyle('task', parent=base['BodyText'], fontName=font_name,
-                               fontSize=10, leading=12.5, textColor=INK),
-        'th': ParagraphStyle('th', parent=base['Normal'], fontName=bold_font, fontSize=9,
+                               fontSize=10.5, leading=13, textColor=INK),
+        'th': ParagraphStyle('th', parent=base['Normal'], fontName=bold_font, fontSize=9.5,
                              leading=11, textColor=colors.white),
-        'small': ParagraphStyle('small', parent=base['Normal'], fontName=font_name,
-                                fontSize=8.5, leading=11, textColor=MUTED),
+        'num': ParagraphStyle('num', parent=base['Normal'], fontName=bold_font, fontSize=9,
+                              leading=11, textColor=accent),
         'wr': ParagraphStyle('wr', parent=base['Normal'], fontName=bold_font, fontSize=10,
-                             leading=14, textColor=INK),
+                             leading=15, textColor=INK),
     }
 
     def checkbox():
-        b = Table([['']], colWidths=[5.5 * mm], rowHeights=[5.5 * mm])
-        b.setStyle(TableStyle([('BOX', (0, 0), (-1, -1), 0.9, colors.HexColor('#9AA0A8')),
-                               ('ROUNDEDCORNERS', [1, 1, 1, 1])]))
+        b = Table([['']], colWidths=[6 * mm], rowHeights=[6 * mm])
+        b.setStyle(TableStyle([('BOX', (0, 0), (-1, -1), 1.1, accent),
+                               ('ROUNDEDCORNERS', [2, 2, 2, 2])]))
         return b
 
     story = []
-    # Header band
-    hdr = Table([[Paragraph(
-        f'<font color="white" size="18"><b>{escape(chk.get("title", chk_type))} Checklist</b></font><br/>'
-        f'<font color="#FFFFFF" size="10">{escape(store_name)} &middot; Daily — tick each task as it is completed</font>',
-        ParagraphStyle('h', fontName=bold_font, leading=22))]], colWidths=[USABLE])
+
+    # ── Masthead: logo + title, with a darker top strip for a premium feel ──
+    title_block = Paragraph(
+        f'<font color="white" size="19"><b>{escape(chk.get("title", chk_type))}</b></font>'
+        f'<font color="#FFFFFF" size="12"> &nbsp;Daily Checklist</font><br/>'
+        f'<font color="#EAF4EE" size="9.5">{escape(store_name)} &nbsp;&middot;&nbsp; '
+        f'Tick (&#10003;) each task as it is completed</font>',
+        ParagraphStyle('h', fontName=bold_font, leading=23))
+    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'logo.png')
+    head_cells, head_widths = [], []
+    if os.path.exists(logo_path):
+        try:
+            lg = RLImage(logo_path)
+            ratio = (16 * mm) / float(lg.imageWidth or 1)
+            lg.drawWidth = 16 * mm
+            lg.drawHeight = (lg.imageHeight or 1) * ratio
+            head_cells.append(lg); head_widths.append(20 * mm)
+        except Exception:
+            pass
+    head_cells.append(title_block)
+    head_widths.append(USABLE - sum(head_widths))
+    hdr = Table([head_cells], colWidths=head_widths)
     hdr.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, -1), accent),
-        ('LEFTPADDING', (0, 0), (-1, -1), 16), ('RIGHTPADDING', (0, 0), (-1, -1), 16),
+        ('LINEABOVE', (0, 0), (-1, 0), 5, accent_dk),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 14), ('RIGHTPADDING', (0, 0), (-1, -1), 14),
         ('TOPPADDING', (0, 0), (-1, -1), 14), ('BOTTOMPADDING', (0, 0), (-1, -1), 14),
     ]))
     story.append(hdr)
     story.append(Spacer(1, 5 * mm))
 
-    # Write-in fields
-    line = '<font color="#9AA0A8">______________________</font>'
-    wr = Table([[Paragraph(f'Date: {line}', S['wr']),
-                 Paragraph(f'Staff name: {line}', S['wr']),
-                 Paragraph(f'Branch: {line}', S['wr'])]],
-               colWidths=[USABLE * 0.30, USABLE * 0.40, USABLE * 0.30])
-    wr.setStyle(TableStyle([('BOTTOMPADDING', (0, 0), (-1, -1), 2),
-                            ('TOPPADDING', (0, 0), (-1, -1), 2)]))
-    story.append(wr)
-    story.append(Spacer(1, 5 * mm))
+    # ── Write-in info card ──
+    uline = '<font color="#B9C0C9">________________</font>'
+    info = Table([[Paragraph(f'<font color="#6E757E" size="8">DATE</font><br/>{uline}', S['wr']),
+                   Paragraph(f'<font color="#6E757E" size="8">STAFF NAME</font><br/>{uline}', S['wr']),
+                   Paragraph(f'<font color="#6E757E" size="8">BRANCH</font><br/>{escape(store_name)}', S['wr']),
+                   Paragraph(f'<font color="#6E757E" size="8">SHIFT</font><br/>{uline}', S['wr'])]],
+                 colWidths=[USABLE * 0.25] * 4)
+    info.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), tint_card),
+        ('LINEBEFORE', (0, 0), (0, -1), 3, accent),
+        ('LEFTPADDING', (0, 0), (-1, -1), 12), ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+        ('TOPPADDING', (0, 0), (-1, -1), 9), ('BOTTOMPADDING', (0, 0), (-1, -1), 9),
+    ]))
+    story.append(info)
+    story.append(Spacer(1, 6 * mm))
 
-    col_widths = [10 * mm, 8 * mm, USABLE - (10 + 8 + 26 + 20 + 26) * mm, 26 * mm, 20 * mm, 26 * mm]
+    deadline = {'opening': '10:30 AM', 'closing': '6:30 PM'}
+    col_widths = [11 * mm, 9 * mm, USABLE - (11 + 9 + 46) * mm, 46 * mm]
     for sec in sections:
-        tasks = chk.get(sec) or []
+        tasks = tasks_by_section.get(sec) or []
         if not tasks:
             continue
-        bar = Table([[Paragraph(f'<font color="white"><b>{sec.upper()} TASKS</b>'
-                                f'<font size="9"> &middot; {len(tasks)} items</font></font>',
-                                ParagraphStyle('bar', fontName=bold_font, fontSize=12))]],
-                    colWidths=[USABLE])
+        bar = Table([[Paragraph(
+            f'<font color="white"><b>{"&#9728; " if sec == "opening" else "&#9789; "}{sec.upper()}</b>'
+            f'<font size="9">  &middot;  {len(tasks)} tasks  &middot;  deadline {deadline.get(sec, "")}</font></font>',
+            ParagraphStyle('bar', fontName=bold_font, fontSize=12, textColor=colors.white))]],
+            colWidths=[USABLE])
         bar.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, -1), accent),
+            ('BACKGROUND', (0, 0), (-1, -1), accent_dk),
             ('LEFTPADDING', (0, 0), (-1, -1), 12), ('TOPPADDING', (0, 0), (-1, -1), 7),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 7)]))
         story.append(bar)
 
-        data = [[Paragraph('✓', S['th']), Paragraph('#', S['th']), Paragraph('Task', S['th']),
-                 Paragraph('Done by', S['th']), Paragraph('Time', S['th']), Paragraph('Note', S['th'])]]
+        data = [[Paragraph('&#10003;', S['th']), Paragraph('#', S['th']),
+                 Paragraph('Task', S['th']), Paragraph('Notes', S['th'])]]
         for i, t in enumerate(tasks, 1):
-            data.append([checkbox(), Paragraph(str(i), S['small']),
-                         Paragraph(escape(t), S['task']), '', '', ''])
+            data.append([checkbox(), Paragraph(str(i), S['num']),
+                         Paragraph(escape(t), S['task']), ''])
         tbl = Table(data, colWidths=col_widths, repeatRows=1)
         tbl.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), accent),
-            ('ALIGN', (0, 0), (1, -1), 'CENTER'), ('ALIGN', (4, 0), (4, -1), 'CENTER'),
+            ('ALIGN', (0, 0), (1, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('GRID', (0, 0), (-1, -1), 0.4, SOFT),
-            ('TOPPADDING', (0, 1), (-1, -1), 7), ('BOTTOMPADDING', (0, 1), (-1, -1), 7),
-            ('LEFTPADDING', (0, 0), (-1, -1), 6), ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#FAFBFD')]),
+            ('LINEBELOW', (0, 0), (-1, -1), 0.5, GRIDC),
+            ('LINEAFTER', (0, 0), (-2, -1), 0.4, GRIDC),
+            ('BOX', (0, 0), (-1, -1), 0.8, accent),
+            ('TOPPADDING', (0, 1), (-1, -1), 8), ('BOTTOMPADDING', (0, 1), (-1, -1), 8),
+            ('TOPPADDING', (0, 0), (-1, 0), 6), ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8), ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, tint_row]),
         ]))
         story.append(tbl)
-        story.append(Spacer(1, 6 * mm))
+        story.append(Spacer(1, 7 * mm))
 
-    story.append(Spacer(1, 2 * mm))
-    sign = Table([[Paragraph('Staff signature: ' + line, S['wr']),
-                   Paragraph('Manager verify: ' + line, S['wr'])]],
-                 colWidths=[USABLE * 0.5, USABLE * 0.5])
+    sign = Table([[Paragraph('Staff signature: ' + uline, S['wr']),
+                   Paragraph('Manager verify: ' + uline, S['wr']),
+                   Paragraph('Date: ' + uline, S['wr'])]],
+                 colWidths=[USABLE * 0.4, USABLE * 0.35, USABLE * 0.25])
+    sign.setStyle(TableStyle([('TOPPADDING', (0, 0), (-1, -1), 4),
+                              ('LINEABOVE', (0, 0), (-1, 0), 0.6, GRIDC)]))
     story.append(sign)
 
     def footer(canvas, doc_obj):
         canvas.saveState()
+        canvas.setFillColor(accent)
+        canvas.rect(0, 0, A4[0], 4 * mm, stroke=0, fill=1)
         canvas.setFont(font_name, 8)
         canvas.setFillColor(MUTED)
-        canvas.drawString(MARGIN, 7 * mm, f'{store_name} — {chk.get("title", chk_type)} blank checklist')
+        canvas.drawString(MARGIN, 7 * mm, f'{store_name} — {chk.get("title", chk_type)} checklist')
         canvas.drawRightString(A4[0] - MARGIN, 7 * mm, f'Page {doc_obj.page}')
         canvas.restoreState()
 
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=MARGIN, rightMargin=MARGIN,
-                            topMargin=12 * mm, bottomMargin=12 * mm)
+                            topMargin=12 * mm, bottomMargin=14 * mm)
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
     buf.seek(0)
     fname = f'MCQ_BlankChecklist_{chk_type}_{section}.pdf'
