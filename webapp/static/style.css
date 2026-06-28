@@ -233,12 +233,12 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
 
 /* ── Login Page ── */
 .login-body {
-  /* Warm cream "luxe" backdrop with soft gold + green glows — bright, elegant */
+  /* Elegant royal-blue backdrop with luminous sky + indigo glows */
   background:
-    radial-gradient(820px 460px at 50% -10%, rgba(233,199,90,0.34), transparent 60%),
-    radial-gradient(720px 460px at 112% 115%, rgba(149,213,178,0.34), transparent 58%),
-    radial-gradient(620px 420px at -8% 92%, rgba(212,175,55,0.18), transparent 60%),
-    linear-gradient(140deg, #FCF8F0 0%, #F6EFE0 52%, #F0EADB 100%);
+    radial-gradient(820px 460px at 50% -10%, rgba(255,255,255,0.20), transparent 60%),
+    radial-gradient(760px 480px at 112% 115%, rgba(56,189,248,0.45), transparent 58%),
+    radial-gradient(640px 440px at -8% 92%, rgba(99,102,241,0.38), transparent 60%),
+    linear-gradient(140deg, #1E40AF 0%, #2563EB 48%, #3B82F6 100%);
   min-height: 100vh;
   display: flex;
   align-items: center;
@@ -247,11 +247,11 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
 }
 .login-wrapper { width: 100%; max-width: 430px; }
 .login-card {
-  background: #FFFDF8;
+  background: #FFFFFF;
   border-radius: 22px;
   padding: 40px 36px;
-  border: 1px solid rgba(201,154,18,0.30);   /* thin gold edge */
-  box-shadow: 0 26px 64px rgba(120,90,20,0.20), 0 1px 0 rgba(255,255,255,0.7) inset;
+  border: 1px solid rgba(255,255,255,0.75);
+  box-shadow: 0 28px 70px rgba(13,38,76,0.42), 0 1px 0 rgba(255,255,255,0.7) inset;
 }
 .login-header { text-align: center; margin-bottom: 28px; }
 .login-logo { width: 132px; height: 132px; object-fit: contain; margin-bottom: 14px;
@@ -298,9 +298,9 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
 }
 .mode-btn span { letter-spacing: .2px; line-height: 1.1; text-align: center; }
 .mode-btn:hover { transform: translateY(-3px); box-shadow: 0 12px 24px -10px rgba(20,40,30,.35); border-color: #dfe2e7; }
-.mode-btn[data-role="user"]  { --role-c: #1E7A52; --role-c2: #2E9E63; --role-bg: #EAF6EF; }
-.mode-btn[data-role="admin"] { --role-c: #20457A; --role-c2: #3A6BB0; --role-bg: #EAF0F8; }
-.mode-btn[data-role="super"] { --role-c: #C99A12; --role-c2: #E9C75A; --role-bg: #FBF3D8; }
+.mode-btn[data-role="user"]  { --role-c: #10B981; --role-c2: #34D399; --role-bg: #E7FAF2; }
+.mode-btn[data-role="admin"] { --role-c: #4F46E5; --role-c2: #6366F1; --role-bg: #EDEDFC; }
+.mode-btn[data-role="super"] { --role-c: #E0A11B; --role-c2: #F5C242; --role-bg: #FCF3DA; }
 .mode-btn.active {
   border-color: var(--role-c); background: var(--role-bg); color: var(--role-c);
   box-shadow: 0 14px 28px -12px var(--role-c);
