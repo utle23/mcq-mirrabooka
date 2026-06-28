@@ -233,12 +233,13 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
 
 /* ── Login Page ── */
 .login-body {
-  /* Elegant royal-blue backdrop with luminous sky + indigo glows */
+  /* Navy + Gold "5-star" backdrop: deep navy → royal blue, with a warm gold
+     glow up top and a royal glow bottom-right for depth. */
   background:
-    radial-gradient(820px 460px at 50% -10%, rgba(255,255,255,0.20), transparent 60%),
-    radial-gradient(760px 480px at 112% 115%, rgba(56,189,248,0.45), transparent 58%),
-    radial-gradient(640px 440px at -8% 92%, rgba(99,102,241,0.38), transparent 60%),
-    linear-gradient(140deg, #1E40AF 0%, #2563EB 48%, #3B82F6 100%);
+    radial-gradient(720px 420px at 50% -8%,  rgba(233,199,90,0.42), transparent 58%),
+    radial-gradient(680px 460px at 112% 112%, rgba(59,130,246,0.40), transparent 56%),
+    radial-gradient(560px 420px at -6% 98%,  rgba(212,175,55,0.20), transparent 60%),
+    linear-gradient(140deg, #08182F 0%, #0F2A57 45%, #1D4ED8 100%);
   min-height: 100vh;
   display: flex;
   align-items: center;
@@ -250,8 +251,16 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
   background: #FFFFFF;
   border-radius: 22px;
   padding: 40px 36px;
-  border: 1px solid rgba(255,255,255,0.75);
-  box-shadow: 0 28px 70px rgba(13,38,76,0.42), 0 1px 0 rgba(255,255,255,0.7) inset;
+  border: 1px solid rgba(212,175,55,0.55);   /* gold edge */
+  box-shadow: 0 30px 76px rgba(4,16,38,0.58),
+              0 0 0 4px rgba(255,255,255,0.06),
+              0 1px 0 rgba(255,255,255,0.7) inset;
+}
+/* thin gold accent bar across the top of the card */
+.login-card::before {
+  content: ''; display: block; height: 4px; margin: -40px -36px 26px;
+  border-radius: 22px 22px 0 0;
+  background: linear-gradient(90deg, #C99A12, #F5D77A, #C99A12);
 }
 .login-header { text-align: center; margin-bottom: 28px; }
 .login-logo { width: 132px; height: 132px; object-fit: contain; margin-bottom: 14px;
