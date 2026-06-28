@@ -426,3 +426,40 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
   .photo-gallery-grid { grid-template-columns: repeat(3, 1fr); }
   .completion-time-bar { gap: 10px; }
 }
+
+/* ── Daily Tasks quick-bar (under the topbar) ── */
+.daily-bar {
+  display: flex; align-items: center; gap: 10px;
+  background: #fff; border-bottom: 1px solid #e6eae8;
+  padding: 8px 14px;
+}
+.daily-bar-label {
+  font-weight: 800; color: var(--brand-green); font-size: 12px;
+  text-transform: uppercase; letter-spacing: .5px; white-space: nowrap; flex-shrink: 0;
+}
+.daily-bar-scroll { display: flex; gap: 8px; overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 2px; }
+.daily-bar-scroll::-webkit-scrollbar { height: 4px; }
+.daily-bar-scroll::-webkit-scrollbar-thumb { background: #cfd8d3; border-radius: 4px; }
+.daily-pill {
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; text-decoration: none;
+  background: #f1f5f3; color: #2D3A34; border: 1px solid #dfe6e2; border-radius: 999px;
+  padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all .15s;
+}
+.daily-pill:hover { background: #e3efe8; color: #1B3A2D; }
+.daily-pill.active { background: var(--brand-green); color: #fff; border-color: var(--brand-green); }
+
+/* ── Today's Tasks hub tiles (dashboard) ── */
+.task-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.task-tile {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-decoration: none;
+  background: #fff; border: 1px solid #e6eae8; border-left: 4px solid var(--brand-green);
+  border-radius: 12px; padding: 14px 16px; color: #1B3A2D; box-shadow: 0 2px 8px rgba(0,0,0,.06);
+  transition: all .15s;
+}
+.task-tile:hover { box-shadow: 0 5px 16px rgba(0,0,0,.13); transform: translateY(-2px); }
+.task-tile > i { font-size: 20px; color: var(--brand-green); }
+.task-tile .tt-name { font-weight: 700; font-size: 14px; line-height: 1.2; }
+.task-tile .tt-status { font-size: 11.5px; color: #8a8f8c; }
+.task-tile .tt-status.ok { color: #2e7d32; font-weight: 700; }
+.task-tile .tt-status.pending { color: #E65100; font-weight: 600; }
+@media (max-width: 600px) { .daily-bar-label span { display: none; } }

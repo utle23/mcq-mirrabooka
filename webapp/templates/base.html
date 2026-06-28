@@ -379,6 +379,11 @@
       </div>
     </header>
 
+    {% set _daily_eps = ['dashboard','checklist_form','checklist_view','temperature_form','temperature_view'] %}
+    {% if user_role != 'kitchen' and (current_ep in _daily_eps or current_ep.startswith(('equipment.','prep.','defrost.','delivery.'))) %}
+      {% include '_daily_tasks_bar.html' %}
+    {% endif %}
+
     <main class="page-body">
       {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}

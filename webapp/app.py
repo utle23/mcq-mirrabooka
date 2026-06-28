@@ -2161,6 +2161,17 @@ def dashboard():
                                (t, today_str, sid)).fetchone()
             temp_status[t] = dict(rec) if rec else None
 
+        # Equipment temperature status for today (for the "Today's Tasks" hub).
+        equip_total = conn.execute(
+            'SELECT COUNT(*) c FROM equipment_units WHERE active=1 AND store_id=?', (sid,)).fetchone()['c']
+        try:
+            equip_done = conn.execute(
+                '''SELECT COUNT(*) c FROM equipment_temp_readings WHERE date=? AND store_id=?
+                   AND (morning_temp IS NOT NULL OR closing_temp IS NOT NULL OR temp IS NOT NULL)''',
+                (today_str, sid)).fetchone()['c']
+        except Exception:
+            equip_done = 0
+
         recent = [dict(r) for r in conn.execute(
             'SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 15').fetchall()]
 
@@ -2195,7 +2206,7 @@ def dashboard():
         chk_status=chk_status, temp_status=temp_status,
         recent=recent, pending_count=pending_count,
         total_week_chk=total_week_chk, total_week_temp=total_week_temp,
-        alerts=alerts,
+        alerts=alerts, equip_done=equip_done, equip_total=equip_total,
     )
 
 # ─── Checklists ────────────────────────────────────────────────────────────────

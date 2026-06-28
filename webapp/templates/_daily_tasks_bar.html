@@ -1,0 +1,33 @@
+{# Shared quick-nav bar for the daily tasks. Built from injected globals
+   (checklists, temperatures, week_start_nav). Included by base.html on the
+   operational pages so staff can hop between tasks without the sidebar. #}
+<div class="daily-bar">
+  <span class="daily-bar-label"><i class="fas fa-bolt me-1"></i><span>Daily</span></span>
+  <div class="daily-bar-scroll">
+    <div class="dropdown">
+      <button class="daily-pill {% if current_ep in ('checklist_form','checklist_view') %}active{% endif %}"
+              type="button" data-bs-toggle="dropdown" aria-expanded="false">
+        <i class="fas fa-clipboard-check"></i><span>Checklists</span><i class="fas fa-caret-down"></i>
+      </button>
+      <ul class="dropdown-menu">
+        {% for key, chk in checklists.items() %}
+        <li><a class="dropdown-item" href="/checklist/{{ key }}">
+          <i class="fas fa-clipboard-check fa-fw me-1" style="color:{{ chk.color }}"></i>{{ chk.title }}</a></li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% for key, t in temperatures.items() %}
+    <a class="daily-pill {% if current_ep=='temperature_form' and request.view_args.get('temp_type')==key %}active{% endif %}"
+       href="/temperature/{{ key }}">
+      <i class="fas fa-thermometer-half"></i><span>{{ t.short }}&deg;</span></a>
+    {% endfor %}
+    <a class="daily-pill {% if current_ep.startswith('equipment.') %}active{% endif %}" href="/equipment/today">
+      <i class="fas fa-temperature-half"></i><span>Equipment&deg;</span></a>
+    <a class="daily-pill {% if current_ep.startswith('prep.') %}active{% endif %}" href="/prep/weekly/{{ week_start_nav }}">
+      <i class="fas fa-calendar-week"></i><span>Schedule</span></a>
+    <a class="daily-pill {% if current_ep.startswith('defrost.') %}active{% endif %}" href="/defrost/">
+      <i class="fas fa-snowflake"></i><span>Defrost</span></a>
+    <a class="daily-pill {% if current_ep.startswith('delivery.') %}active{% endif %}" href="/delivery/">
+      <i class="fas fa-truck-ramp-box"></i><span>Delivery</span></a>
+  </div>
+</div>

@@ -13,6 +13,39 @@
 </div>
 {% endif %}
 
+<!-- Today's Tasks quick hub -->
+<h5 class="section-heading"><i class="fas fa-bolt me-2 text-success"></i>Today's Tasks</h5>
+<div class="task-grid mb-4">
+  {% set chk_done = chk_status.values()|selectattr('opening')|list|length + chk_status.values()|selectattr('closing')|list|length %}
+  <a class="task-tile" href="#checklists">
+    <i class="fas fa-clipboard-check"></i>
+    <span class="tt-name">Checklists</span>
+    <span class="tt-status {% if chk_done >= checklists|length * 2 %}ok{% else %}pending{% endif %}">{{ chk_done }}/{{ checklists|length * 2 }} sections</span>
+  </a>
+  {% for key, t in temperatures.items() %}
+  <a class="task-tile" href="/temperature/{{ key }}">
+    <i class="fas fa-thermometer-half"></i>
+    <span class="tt-name">{{ t.short }} &deg;C</span>
+    <span class="tt-status {% if temp_status.get(key) %}ok{% else %}pending{% endif %}">
+      {% if temp_status.get(key) %}<i class="fas fa-check me-1"></i>done{% else %}pending{% endif %}</span>
+  </a>
+  {% endfor %}
+  <a class="task-tile" href="/equipment/today">
+    <i class="fas fa-temperature-half"></i>
+    <span class="tt-name">Equipment &deg;C</span>
+    <span class="tt-status {% if equip_total and equip_done >= equip_total %}ok{% else %}pending{% endif %}">{{ equip_done }}/{{ equip_total }} units</span>
+  </a>
+  <a class="task-tile" href="/prep/weekly/{{ week_start_nav }}">
+    <i class="fas fa-calendar-week"></i><span class="tt-name">Weekly Schedule</span><span class="tt-status">open</span>
+  </a>
+  <a class="task-tile" href="/defrost/">
+    <i class="fas fa-snowflake"></i><span class="tt-name">Defrost Temp</span><span class="tt-status">open</span>
+  </a>
+  <a class="task-tile" href="/delivery/">
+    <i class="fas fa-truck-ramp-box"></i><span class="tt-name">Delivery Check</span><span class="tt-status">open</span>
+  </a>
+</div>
+
 <!-- Stats -->
 <div class="row g-3 mb-4">
   <div class="col-6 col-md-3">
@@ -45,33 +78,12 @@
   </div>
 </div>
 
-<!-- Food Safety quick links -->
-<h5 class="section-heading"><i class="fas fa-shield-heart me-2 text-success"></i>Food Safety Records</h5>
-<div class="row g-3 mb-4">
-  <div class="col-6 col-md-3">
-    <a href="/defrost/" class="text-decoration-none">
-      <div class="stat-card stat-blue">
-        <div class="stat-icon"><i class="fas fa-snowflake"></i></div>
-        <div class="stat-label">Defrosting Temperature Monitoring</div>
-      </div>
-    </a>
-  </div>
-  <div class="col-6 col-md-3">
-    <a href="/delivery/" class="text-decoration-none">
-      <div class="stat-card stat-green">
-        <div class="stat-icon"><i class="fas fa-truck-ramp-box"></i></div>
-        <div class="stat-label">Delivery Inspection Record</div>
-      </div>
-    </a>
-  </div>
-</div>
-
 <div class="row g-4">
   <!-- Left: Checklists + Temps -->
   <div class="col-12 col-xl-8">
 
     <!-- Checklists -->
-    <h5 class="section-heading"><i class="fas fa-clipboard-check me-2 text-success"></i>Daily Checklist Status</h5>
+    <h5 class="section-heading" id="checklists"><i class="fas fa-clipboard-check me-2 text-success"></i>Daily Checklist Status</h5>
     <div class="row g-3 mb-4">
       {% for key, chk in checklists.items() %}
       {% set status = chk_status.get(key, {}) %}
