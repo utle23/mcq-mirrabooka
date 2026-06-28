@@ -441,12 +441,29 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
 .daily-bar-scroll::-webkit-scrollbar { height: 4px; }
 .daily-bar-scroll::-webkit-scrollbar-thumb { background: #cfd8d3; border-radius: 4px; }
 .daily-pill {
+  --c: #2D6A4F; --bg: #f1f5f3;
   display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; text-decoration: none;
-  background: #f1f5f3; color: #2D3A34; border: 1px solid #dfe6e2; border-radius: 999px;
-  padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all .15s;
+  background: var(--bg); color: #2b352f; border: 1.5px solid transparent; border-radius: 999px;
+  padding: 8px 15px; font-size: 13px; font-weight: 700; cursor: pointer;
+  transition: transform .18s cubic-bezier(.34,1.56,.64,1), box-shadow .18s ease,
+              background .18s, color .18s, border-color .18s;
 }
-.daily-pill:hover { background: #e3efe8; color: #1B3A2D; }
-.daily-pill.active { background: var(--brand-green); color: #fff; border-color: var(--brand-green); }
+.daily-pill > i:first-child { color: var(--c); transition: transform .18s; }
+.daily-pill:hover {
+  transform: translateY(-3px) scale(1.05);
+  border-color: var(--c);
+  box-shadow: 0 8px 18px -4px var(--c);
+  color: #18221d;
+}
+.daily-pill:hover > i:first-child { animation: dp-bounce .55s ease; }
+.daily-pill:active { transform: translateY(-1px) scale(.98); }
+.daily-pill.active { background: var(--c); color: #fff; border-color: var(--c); box-shadow: 0 5px 14px -3px var(--c); }
+.daily-pill.active > i { color: #fff; }
+@keyframes dp-bounce {
+  0%, 100% { transform: translateY(0) scale(1); }
+  35%      { transform: translateY(-5px) scale(1.25); }
+  65%      { transform: translateY(0) scale(.9); }
+}
 
 /* ── Today's Tasks hub tiles (dashboard) ── */
 .task-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }

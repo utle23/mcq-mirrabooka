@@ -1,13 +1,16 @@
 {# Shared quick-nav bar for the daily tasks. Built from injected globals
-   (checklists, temperatures, week_start_nav). Included by base.html on the
-   operational pages so staff can hop between tasks without the sidebar.
-   NOTE: the Checklists dropdown sits OUTSIDE .daily-bar-scroll so its menu is
-   not clipped by the horizontal-scroll overflow. #}
+   (checklists, temperatures, week_start_nav). Each pill carries its own colour
+   via --c (accent) + --bg (soft tint). Checklists dropdown sits OUTSIDE the
+   horizontal-scroll container so its menu is not clipped. #}
+{% set temp_colors = {
+     'banh_mi': ['#FB8C00','#FFF3E0'],
+     'chef':    ['#E53935','#FDECEA'],
+     'pastry':  ['#8E24AA','#F5E9F7']} %}
 <div class="daily-bar">
   <span class="daily-bar-label"><i class="fas fa-bolt me-1"></i><span>Daily</span></span>
   <div class="dropdown daily-dd">
     <button class="daily-pill {% if current_ep in ('checklist_form','checklist_view') %}active{% endif %}"
-            type="button" data-bs-toggle="dropdown" data-bs-auto-close="true" aria-expanded="false">
+            style="--c:#2E9E4B;--bg:#E6F4EA" type="button" data-bs-toggle="dropdown" aria-expanded="false">
       <i class="fas fa-clipboard-check"></i><span>Checklists</span><i class="fas fa-caret-down"></i>
     </button>
     <ul class="dropdown-menu">
@@ -19,17 +22,25 @@
   </div>
   <div class="daily-bar-scroll">
     {% for key, t in temperatures.items() %}
+    {% set tc = temp_colors.get(key, ['#00897B','#E0F2F1']) %}
     <a class="daily-pill {% if current_ep=='temperature_form' and request.view_args.get('temp_type')==key %}active{% endif %}"
-       href="/temperature/{{ key }}">
+       style="--c:{{ tc[0] }};--bg:{{ tc[1] }}" href="/temperature/{{ key }}">
       <i class="fas fa-thermometer-half"></i><span>{{ t.short }}&deg;</span></a>
     {% endfor %}
-    <a class="daily-pill {% if current_ep.startswith('equipment.') %}active{% endif %}" href="/equipment/today">
+    <a class="daily-pill {% if current_ep.startswith('equipment.') %}active{% endif %}"
+       style="--c:#00897B;--bg:#E0F2F1" href="/equipment/today">
       <i class="fas fa-temperature-half"></i><span>Equipment&deg;</span></a>
-    <a class="daily-pill {% if current_ep.startswith('prep.') %}active{% endif %}" href="/prep/weekly/{{ week_start_nav }}">
+    <a class="daily-pill {% if current_ep.startswith('prep.') %}active{% endif %}"
+       style="--c:#1E88E5;--bg:#E3F2FD" href="/prep/weekly/{{ week_start_nav }}">
       <i class="fas fa-calendar-week"></i><span>Schedule</span></a>
-    <a class="daily-pill {% if current_ep.startswith('defrost.') %}active{% endif %}" href="/defrost/">
+    <a class="daily-pill {% if current_ep.startswith('defrost.') %}active{% endif %}"
+       style="--c:#00ACC1;--bg:#E0F7FA" href="/defrost/">
       <i class="fas fa-snowflake"></i><span>Defrost</span></a>
-    <a class="daily-pill {% if current_ep.startswith('delivery.') %}active{% endif %}" href="/delivery/">
+    <a class="daily-pill {% if current_ep.startswith('delivery.') %}active{% endif %}"
+       style="--c:#C2185B;--bg:#FCE4EC" href="/delivery/">
       <i class="fas fa-truck-ramp-box"></i><span>Delivery</span></a>
+    <a class="daily-pill {% if current_ep.startswith('packaging.') %}active{% endif %}"
+       style="--c:#5E35B1;--bg:#EDE7F6" href="/packaging/">
+      <i class="fas fa-box-open"></i><span>Ordering Packaging</span></a>
   </div>
 </div>
