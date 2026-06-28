@@ -74,11 +74,12 @@ def _conn() -> sqlite3.Connection:
     return c
 
 
-def _store_name() -> str:
+def _store_name(store_id=None) -> str:
     """The current branch's display name for report covers (multi-store aware)."""
     try:
+        sid = store_id if store_id is not None else current_store_id()
         with _conn() as c:
-            row = c.execute('SELECT name FROM stores WHERE id=?', (current_store_id(),)).fetchone()
+            row = c.execute('SELECT name FROM stores WHERE id=?', (sid,)).fetchone()
         name = (row['name'] if row else '') or ''
         return name.strip() or 'MCQ Vietnamese Street Food'
     except Exception:
@@ -153,15 +154,16 @@ def _filter_equipment_for_period(equip: dict | None, period: str) -> dict | None
     }
 
 
-def _collect_today(date_str: str, period: str | None = None) -> dict:
+def _collect_today(date_str: str, period: str | None = None, store_id=None) -> dict:
     """Pull today's checklist + temperature submissions with photo paths,
     plus equipment temperatures and any logged violations / reported issues."""
     period = _resolve_share_period(period)
     period_meta = SHARE_PERIODS[period]
     out = {'date': date_str, 'checklists': [], 'temperatures': [],
            'equipment': None, 'violations': [], 'issues': [], 'prep_timetable': {},
+           'delivery_inspections': {}, 'defrost_records': {},
            'period': period, 'period_meta': period_meta}
-    sid = current_store_id()
+    sid = store_id if store_id is not None else current_store_id()
     with _conn() as conn:
         # Checklists — one entry per (type, section) combination submitted today
         chk_rows = conn.execute('''
@@ -239,6 +241,72 @@ def _collect_today(date_str: str, period: str | None = None) -> dict:
         # Prep timetable for the day — shared by the opening & closing reports.
         out['prep_timetable'] = _collect_prep_timetable(conn, date_str, sid)
 
+        # Delivery inspections received on this date (food-safety module).
+        out['delivery_inspections'] = _collect_delivery(conn, date_str, sid)
+
+        # Defrosting temperature — records still defrosting on this date.
+        out['defrost_records'] = _collect_defrost(conn, date_str, sid)
+
+    return out
+
+
+def _collect_delivery(conn, date_str, sid) -> dict:
+    """Delivery inspections received on date_str for this store. 'pending' when empty."""
+    out = {'inspections': [], 'total': 0, 'rejected': 0, 'temp_alerts': 0}
+    try:
+        rows = [dict(r) for r in conn.execute('''
+            SELECT supplier_name, receiving_time, product_name, quantity,
+                   delivery_temp, use_by_date, product_condition,
+                   packaging_condition, accepted, checked_by
+            FROM delivery_inspections
+            WHERE store_id=? AND receiving_date=?
+            ORDER BY receiving_time DESC, id DESC''', (sid, date_str)).fetchall()]
+    except Exception:
+        rows = []
+    for r in rows:
+        t = r.get('delivery_temp')
+        r['temp_alert'] = (t is not None and t > 5.0)
+        r['is_rejected'] = (str(r.get('accepted') or '').lower() == 'rejected')
+        if r['temp_alert']:
+            out['temp_alerts'] += 1
+        if r['is_rejected']:
+            out['rejected'] += 1
+    out['inspections'] = rows
+    out['total'] = len(rows)
+    return out
+
+
+def _collect_defrost(conn, date_str, sid) -> dict:
+    """Defrost records active on/before date_str for this store, each with its
+    latest temperature check. 'pending' when empty."""
+    out = {'records': [], 'total': 0, 'temp_alerts': 0}
+    try:
+        recs = [dict(r) for r in conn.execute('''
+            SELECT id, product_name, supplier_name, started_on, notes
+            FROM defrost_records
+            WHERE store_id=? AND started_on<=? AND status='active'
+            ORDER BY started_on DESC, id DESC''', (sid, date_str)).fetchall()]
+    except Exception:
+        recs = []
+    for r in recs:
+        last = None
+        try:
+            last = conn.execute('''
+                SELECT checked_on, checked_time, core_temp, physical_condition, checked_by
+                FROM defrost_checks
+                WHERE record_id=? AND checked_on<=?
+                ORDER BY checked_on DESC, checked_time DESC, id DESC
+                LIMIT 1''', (r['id'], date_str)).fetchone()
+            last = dict(last) if last else None
+        except Exception:
+            last = None
+        r['last_check'] = last
+        ct = last.get('core_temp') if last else None
+        r['temp_alert'] = (ct is not None and (ct < 0.0 or ct > 5.0))
+        if r['temp_alert']:
+            out['temp_alerts'] += 1
+    out['records'] = recs
+    out['total'] = len(recs)
     return out
 
 
@@ -1283,7 +1351,7 @@ def _pdf_photo_buffer(src, max_px=850):
         return None
 
 
-def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
+def build_daily_pdf(date_str: str, period: str | None = None, store_id=None) -> bytes:
     """Compose a magazine-style A4 PDF combining cover, every checklist
     (with all photos at large size), and every temperature record into one
     document that's pleasant to scroll on a phone and lands well as a
@@ -1301,8 +1369,9 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
 
     # Reuse the live data collector + the per-session helpers already in
     # this module — keeps the PDF in sync with what the page shows.
-    data = _collect_today(date_str, period)
+    data = _collect_today(date_str, period, store_id)
     period_meta = data.get('period_meta') or SHARE_PERIODS['opening']
+    brand_name = _store_name(store_id)
 
     # Try the app's font registration helper so we get a TTF that supports
     # Vietnamese diacritics; ReportLab Helvetica doesn't.
@@ -1442,7 +1511,7 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
         canvas.setFont(bold_font, 9)
         canvas.setFillColor(colors.white)
         canvas.drawString(MARGIN, PAGE_H - 8 * mm,
-                          f'{_store_name().upper()} · {period_meta["label"].upper()} REPORT')
+                          f'{brand_name.upper()} · {period_meta["label"].upper()} REPORT')
         try:
             d_str = datetime.strptime(date_str, '%Y-%m-%d').strftime('%a %d %b %Y')
         except Exception:
@@ -1464,7 +1533,7 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
 
     # ── Cover content (positioned via Spacers because background is canvas) ──
     story.append(Spacer(1, 104 * mm))     # clear the gradient band + floating logo card
-    story.append(Paragraph(_esc(_store_name()), S['cover_brand']))
+    story.append(Paragraph(_esc(brand_name), S['cover_brand']))
     story.append(Paragraph('VIETNAMESE STREET FOOD', S['cover_sub']))
     _pill_para = Paragraph(period_meta.get('report_word', 'DAILY REPORT'),
         ParagraphStyle('pill_cover', fontName=bold_font, fontSize=12, leading=15,
@@ -2096,6 +2165,146 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
         ]))
         story.append(et)
 
+    # ── Delivery Inspection + Defrosting Temperature (both reports) ─────────
+    def _band(title, subtitle, bg_hex, sub_hex='#FFFFFF'):
+        h = Table([[Paragraph(
+            f'<font color="white" size="20"><b>{_esc(title)}</b></font><br/>'
+            f'<font color="{sub_hex}" size="11">{_esc(subtitle)}</font>',
+            ParagraphStyle('band', fontName=bold_font, leading=24))]], colWidths=[USABLE_W])
+        h.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor(bg_hex)),
+            ('LEFTPADDING', (0, 0), (-1, -1), 16), ('RIGHTPADDING', (0, 0), (-1, -1), 16),
+            ('TOPPADDING', (0, 0), (-1, -1), 14), ('BOTTOMPADDING', (0, 0), (-1, -1), 14),
+        ]))
+        return h
+
+    def _pill_row(pills):
+        cells = []
+        for txt, c_ in pills:
+            cell = Table([[Paragraph(f'<font color="white"><b>{_esc(txt)}</b></font>',
+                ParagraphStyle('pl', fontName=bold_font, fontSize=9, alignment=TA_CENTER))]],
+                rowHeights=[7 * mm])
+            cell.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, -1), c_),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 10), ('RIGHTPADDING', (0, 0), (-1, -1), 10)]))
+            cells.append(cell)
+        pr = Table([cells], colWidths=[USABLE_W / len(pills)] * len(pills))
+        pr.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 2), ('RIGHTPADDING', (0, 0), (-1, -1), 2)]))
+        return pr
+
+    def _cell(text, align='LEFT', color='#2B2F36', bold=False):
+        return Paragraph(
+            f'<font color="{color}">{"<b>" if bold else ""}{_esc(str(text))}{"</b>" if bold else ""}</font>',
+            ParagraphStyle('cl', fontName=(bold_font if bold else font_name),
+                           fontSize=8.5, leading=10,
+                           alignment={'LEFT': TA_LEFT, 'CENTER': TA_CENTER}[align]))
+
+    def _data_table(header, rows, col_widths):
+        t = Table([header] + rows, colWidths=col_widths, repeatRows=1)
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), NAVY),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), bold_font), ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 0.3, SOFT),
+            ('TOPPADDING', (0, 0), (-1, -1), 7), ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8), ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#FAFBFD')]),
+        ]))
+        return t
+
+    try:
+        _dd = datetime.strptime(date_str, '%Y-%m-%d').strftime('%a %d %b %Y')
+    except Exception:
+        _dd = date_str
+
+    # Delivery Inspection page
+    delivery = data.get('delivery_inspections') or {}
+    d_rows = delivery.get('inspections') or []
+    story.append(PageBreak())
+    story.append(_band('DELIVERY INSPECTION',
+                       f'GOODS RECEIVING · {_dd}', '#C2185B', '#FCE4EC'))
+    story.append(Spacer(1, 4 * mm))
+    story.append(_pill_row([
+        (f'{delivery.get("total", 0)} DELIVERIES', OK if d_rows else MUTED),
+        (f'{delivery.get("temp_alerts", 0)} TEMP ALERTS',
+         BAD if delivery.get('temp_alerts') else OK),
+        (f'{delivery.get("rejected", 0)} REJECTED',
+         BAD if delivery.get('rejected') else OK),
+    ]))
+    story.append(Spacer(1, 4 * mm))
+    if d_rows:
+        header = ['Time', 'Supplier', 'Product', 'Qty', 'Temp', 'Use-by', 'Condition', 'Status']
+        body = []
+        for r in d_rows:
+            t = r.get('delivery_temp')
+            tcol = '#C62828' if r.get('temp_alert') else '#2E7D32'
+            tstr = (f'{t:g}°C' if t is not None else '—')
+            rej = r.get('is_rejected')
+            body.append([
+                _cell(r.get('receiving_time') or '—', 'CENTER'),
+                _cell(r.get('supplier_name') or '—'),
+                _cell(r.get('product_name') or '—'),
+                _cell(r.get('quantity') or '—', 'CENTER'),
+                _cell(tstr, 'CENTER', tcol, bold=True),
+                _cell(r.get('use_by_date') or '—', 'CENTER'),
+                _cell(((r.get('product_condition') or '') + (
+                    ' / ' + r.get('packaging_condition') if r.get('packaging_condition') else '')) or '—'),
+                _cell('REJECTED' if rej else 'ACCEPTED', 'CENTER',
+                      '#C62828' if rej else '#2E7D32', bold=True),
+            ])
+        col_widths = [USABLE_W * w for w in (0.08, 0.15, 0.20, 0.09, 0.10, 0.12, 0.13, 0.13)]
+        story.append(_data_table(header, body, col_widths))
+    else:
+        story.append(Paragraph(
+            '<font color="#9A9FA6"><b>PENDING</b></font> — no delivery inspections '
+            'recorded for this date.', S['body']))
+
+    # Defrosting Temperature page
+    defrost = data.get('defrost_records') or {}
+    f_rows = defrost.get('records') or []
+    story.append(PageBreak())
+    story.append(_band('DEFROSTING TEMPERATURE',
+                       f'ACTIVE DEFROST · SAFE 0 to 5°C · {_dd}', '#00838F', '#D7F2F5'))
+    story.append(Spacer(1, 4 * mm))
+    story.append(_pill_row([
+        (f'{defrost.get("total", 0)} DEFROSTING', OK if f_rows else MUTED),
+        (f'{defrost.get("temp_alerts", 0)} OUT OF RANGE',
+         BAD if defrost.get('temp_alerts') else OK),
+    ]))
+    story.append(Spacer(1, 4 * mm))
+    if f_rows:
+        header = ['Product', 'Supplier', 'Started', 'Last check', 'Core', 'Condition', 'Status']
+        body = []
+        for r in f_rows:
+            lc = r.get('last_check') or {}
+            ct = lc.get('core_temp')
+            tcol = '#C62828' if r.get('temp_alert') else ('#2E7D32' if ct is not None else '#9A9FA6')
+            tstr = (f'{ct:g}°C' if ct is not None else 'PENDING')
+            when = ((lc.get('checked_on') or '') + (' ' + lc.get('checked_time') if lc.get('checked_time') else '')).strip() or '—'
+            if not lc:
+                status_txt, status_col = 'NO CHECK YET', '#9A9FA6'
+            elif r.get('temp_alert'):
+                status_txt, status_col = 'OUT OF RANGE', '#C62828'
+            else:
+                status_txt, status_col = 'OK', '#2E7D32'
+            body.append([
+                _cell(r.get('product_name') or '—', 'LEFT', color='#2B2F36', bold=True),
+                _cell(r.get('supplier_name') or '—'),
+                _cell(r.get('started_on') or '—', 'CENTER'),
+                _cell(when, 'CENTER'),
+                _cell(tstr, 'CENTER', tcol, bold=True),
+                _cell(lc.get('physical_condition') or '—'),
+                _cell(status_txt, 'CENTER', status_col, bold=True),
+            ])
+        col_widths = [USABLE_W * w for w in (0.20, 0.15, 0.12, 0.16, 0.10, 0.14, 0.13)]
+        story.append(_data_table(header, body, col_widths))
+    else:
+        story.append(Paragraph(
+            '<font color="#9A9FA6"><b>PENDING</b></font> — no defrosting records '
+            'active for this date.', S['body']))
+
     # ── Prep timetable (same content on the opening & closing reports) ─────
     prep_tt = data.get('prep_timetable') or {}
     prep_stations = prep_tt.get('stations') or []
@@ -2286,13 +2495,13 @@ def _remember_pdf_photo(key, data: bytes) -> BytesIO:
     return BytesIO(data)
 
 
-def _pdf_signature(date_str: str, period: str) -> str:
+def _pdf_signature(date_str: str, period: str, store_id=None) -> str:
     """Cheap fingerprint of every record the PDF renders for (date, period).
     Changes on any save / edit / verify / new photo so a stale PDF is never
     served from cache."""
     period = _resolve_share_period(period)
     meta = SHARE_PERIODS[period]
-    sid = current_store_id()
+    sid = store_id if store_id is not None else current_store_id()
     parts: list = [('store', sid)]   # never share a cached PDF across stores
     try:
         with _conn() as conn:
@@ -2348,21 +2557,37 @@ def _pdf_signature(date_str: str, period: str) -> str:
                     (date_str, sid)).fetchone()))
             except Exception:
                 parts.append(('vi?',))
+            # Delivery inspections + defrosting temps rendered on the report.
+            try:
+                parts.append(tuple(conn.execute(
+                    "SELECT COUNT(*), COALESCE(MAX(id),0) FROM delivery_inspections "
+                    "WHERE receiving_date=? AND store_id=?", (date_str, sid)).fetchone()))
+                parts.append(tuple(conn.execute(
+                    "SELECT COUNT(*), COALESCE(MAX(dr.id),0) FROM defrost_records dr "
+                    "WHERE dr.store_id=? AND dr.started_on<=? AND dr.status='active'",
+                    (sid, date_str)).fetchone()))
+                parts.append(tuple(conn.execute(
+                    "SELECT COUNT(*), COALESCE(MAX(dc.id),0), COALESCE(MAX(dc.created_at),'') "
+                    "FROM defrost_checks dc JOIN defrost_records dr ON dr.id=dc.record_id "
+                    "WHERE dr.store_id=? AND dc.checked_on<=?", (sid, date_str)).fetchone()))
+            except Exception:
+                parts.append(('dd?',))
     except Exception:
         # On any probe failure, force a rebuild rather than risk a stale PDF.
         return f'err-{datetime.now().timestamp()}'
     return repr(parts)
 
 
-def get_daily_pdf(date_str: str, period: str | None = None) -> bytes:
+def get_daily_pdf(date_str: str, period: str | None = None, store_id=None) -> bytes:
     """Return the daily PDF, re-rendering only when the day's data changed."""
     period = _resolve_share_period(period)
-    key = (date_str, period)
-    sig = _pdf_signature(date_str, period)
+    sid = store_id if store_id is not None else current_store_id()
+    key = (date_str, period, sid)
+    sig = _pdf_signature(date_str, period, sid)
     hit = _PDF_CACHE.get(key)
     if hit and hit[0] == sig:
         return hit[1]
-    pdf = build_daily_pdf(date_str, period)
+    pdf = build_daily_pdf(date_str, period, sid)
     _PDF_CACHE[key] = (sig, pdf)
     if len(_PDF_CACHE) > _PDF_CACHE_MAX:
         for old_key in list(_PDF_CACHE.keys())[:-_PDF_CACHE_MAX]:

@@ -464,6 +464,22 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
   35%      { transform: translateY(-5px) scale(1.25); }
   65%      { transform: translateY(0) scale(.9); }
 }
+/* Colored checklist dropdown items — tinted per section like the pills */
+.daily-dd .dropdown-item.daily-dd-item {
+  border-left: 4px solid var(--c);
+  font-weight: 600;
+  transition: background .15s, color .15s;
+}
+.daily-dd .dropdown-item.daily-dd-item:hover,
+.daily-dd .dropdown-item.daily-dd-item:focus {
+  background: color-mix(in srgb, var(--c) 14%, #fff);
+  color: var(--c);
+}
+.daily-dd .dropdown-item.daily-dd-item:active {
+  background: var(--c);
+  color: #fff;
+}
+.daily-dd .dropdown-item.daily-dd-item:active > i { color: #fff !important; }
 
 /* ── Super-admin store switcher in the topbar ── */
 .topbar-store-select {

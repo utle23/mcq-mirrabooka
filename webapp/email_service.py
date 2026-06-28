@@ -226,6 +226,26 @@ def init_email_tables(db_path: str) -> None:
                 'UPDATE email_settings SET sender_email=? WHERE store_id=1',
                 (row['smtp_user'],))
 
+        # ── Super-admin daily-digest recipients (global, not per-store) ──
+        # These few people receive ONE automatic combined email with every active
+        # store's opening + closing PDFs + a per-store summary. Managed only in
+        # the super-admin Daily Digest page.
+        conn.execute('''CREATE TABLE IF NOT EXISTS digest_recipients (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            email      TEXT NOT NULL UNIQUE,
+            name       TEXT NOT NULL DEFAULT '',
+            active     INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        )''')
+        have = conn.execute('SELECT COUNT(*) AS n FROM digest_recipients').fetchone()
+        if not have or not have['n']:
+            for em, nm in (('utle23.23@gmail.com', 'Owner'),
+                           ('checklist@mcqinternational.com', 'Checklist'),
+                           ('nhi.le@mcqinternational.com', 'Nhi Le')):
+                conn.execute(
+                    'INSERT OR IGNORE INTO digest_recipients (email, name) VALUES (?,?)',
+                    (em, nm))
+
 
 def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -1155,6 +1175,299 @@ def regenerate_digest_token(store_id: int | None = None) -> str:
         conn.execute('INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)',
                      (key, new_tok))
     return new_tok
+
+
+# ── Super-admin combined digest (global recipients, all stores) ─────────────────
+
+def list_digest_recipients() -> list[dict]:
+    with _conn() as conn:
+        return [dict(r) for r in conn.execute(
+            'SELECT * FROM digest_recipients ORDER BY active DESC, email').fetchall()]
+
+
+def add_digest_recipient(email: str, name: str = '') -> int:
+    email = (email or '').strip().lower()
+    if not email or '@' not in email:
+        raise ValueError('Invalid email address.')
+    with _conn() as conn:
+        cur = conn.execute(
+            'INSERT OR IGNORE INTO digest_recipients (email, name) VALUES (?,?)',
+            (email, (name or '').strip()))
+        return cur.lastrowid or 0
+
+
+def toggle_digest_recipient(rid: int) -> int:
+    with _conn() as conn:
+        row = conn.execute('SELECT active FROM digest_recipients WHERE id=?', (rid,)).fetchone()
+        if not row:
+            return 0
+        new_val = 0 if row['active'] else 1
+        conn.execute('UPDATE digest_recipients SET active=? WHERE id=?', (new_val, rid))
+        return new_val
+
+
+def delete_digest_recipient(rid: int) -> None:
+    with _conn() as conn:
+        conn.execute('DELETE FROM digest_recipients WHERE id=?', (rid,))
+
+
+def get_or_create_superdigest_token() -> str:
+    """Secret token for the public 8 PM super-admin digest cron URL."""
+    with _conn() as conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS app_config (
+            key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')''')
+        row = conn.execute("SELECT value FROM app_config WHERE key='superdigest_token'").fetchone()
+        if row and row['value']:
+            return row['value']
+        tok = secrets.token_urlsafe(24)
+        conn.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES ('superdigest_token', ?)", (tok,))
+        return tok
+
+
+def regenerate_superdigest_token() -> str:
+    tok = secrets.token_urlsafe(24)
+    with _conn() as conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS app_config (
+            key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')''')
+        conn.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES ('superdigest_token', ?)", (tok,))
+    return tok
+
+
+def _pick_brevo_settings() -> dict | None:
+    """The first active store with Brevo configured — used as the sender for the
+    combined super-admin digest. Tries store 1 first, then any other store."""
+    s = get_settings(1)
+    if _is_configured(s):
+        return s
+    try:
+        with _conn() as conn:
+            ids = [r['store_id'] for r in conn.execute(
+                'SELECT store_id FROM email_settings ORDER BY store_id').fetchall()]
+    except Exception:
+        ids = []
+    for sid in ids:
+        s = get_settings(sid)
+        if _is_configured(s):
+            return s
+    return None
+
+
+def _store_has_activity(d: dict) -> bool:
+    """True when a store did anything on the date worth reporting."""
+    equip = d.get('equipment') or {}
+    return bool(d.get('chk_total_done') or d.get('temp_count')
+                or d.get('issues') or d.get('violations')
+                or equip.get('recorded') or d.get('pastry_alerts')
+                or d.get('training'))
+
+
+def _superdigest_store_section(name: str, d: dict) -> str:
+    """Compact HTML block summarising one store, with violations + issues detailed."""
+    equip = d.get('equipment') or {}
+    issues = d.get('issues') or []
+    violations = d.get('violations') or []
+    oos = d.get('oos_flagged') or []
+    has_alert = bool(issues or violations or oos)
+    head_bg = '#C62828' if has_alert else '#2E7D32'
+    parts = [
+        f'<tr><td style="padding:14px 4px 4px">'
+        f'<div style="background:{head_bg};color:#fff;border-radius:8px 8px 0 0;'
+        f'padding:10px 14px;font-size:15px;font-weight:700">'
+        f'🏪 {escape(name)}'
+        f'{"  ·  ⚠ " + str(len(violations)) + " violation(s), " + str(len(issues)) + " issue(s)" if has_alert else "  ·  ✓ all clear"}'
+        f'</div>'
+        f'<div style="border:1px solid #eef0f3;border-top:0;border-radius:0 0 8px 8px;padding:12px 14px">'
+    ]
+    parts.append(
+        f'<div style="font-size:12px;color:#555;margin-bottom:8px">'
+        f'Checklists <b>{d.get("chk_total_done",0)}/{d.get("chk_expected",0)}</b> '
+        f'(verified {d.get("chk_verified",0)}) · '
+        f'Temps <b>{d.get("temp_count",0)}/{d.get("temp_expected",0)}</b> '
+        f'(out-of-zone {len(oos)}) · '
+        f'Equipment <b>{equip.get("recorded",0)}</b> recorded (alerts {equip.get("alerts",0)})'
+        f'</div>')
+    if violations:
+        rows = ''.join(
+            f'<li><b>{escape(v.get("staff_name") or "—")}</b> — '
+            f'{escape(v.get("rule_title") or v.get("rule_category") or "violation")} '
+            f'<span style="color:#C62828">[{escape((v.get("severity") or "").upper())}]</span>'
+            f'{": " + escape((v.get("description") or "")[:140]) if v.get("description") else ""}</li>'
+            for v in violations)
+        parts.append(f'<div style="font-size:12px;color:#B71C1C;font-weight:700;margin-top:6px">Violations</div>'
+                     f'<ul style="margin:4px 0 6px 18px;padding:0;font-size:12px;color:#444">{rows}</ul>')
+    if issues:
+        rows = ''.join(
+            f'<li><b>{escape(it.get("title") or "—")}</b> '
+            f'<span style="color:#E65100">[{escape((it.get("priority") or "normal").upper())}]</span> '
+            f'· {escape(it.get("category_label") or it.get("category") or "")} '
+            f'· {escape((it.get("status") or "open").replace("_"," "))}'
+            f'{": " + escape((it.get("description") or "")[:140]) if it.get("description") else ""}</li>'
+            for it in issues)
+        parts.append(f'<div style="font-size:12px;color:#E65100;font-weight:700;margin-top:6px">Issues</div>'
+                     f'<ul style="margin:4px 0 6px 18px;padding:0;font-size:12px;color:#444">{rows}</ul>')
+    if oos:
+        rows = ''.join(
+            f'<li>{escape(o.get("food") or "—")} ({escape(o.get("type") or "")}) — '
+            f'{escape(", ".join(o.get("readings") or []))}</li>' for o in oos)
+        parts.append(f'<div style="font-size:12px;color:#C62828;font-weight:700;margin-top:6px">Temperature out-of-zone</div>'
+                     f'<ul style="margin:4px 0 2px 18px;padding:0;font-size:12px;color:#444">{rows}</ul>')
+    parts.append('</div></td></tr>')
+    return ''.join(parts)
+
+
+def _superdigest_store_text(name: str, d: dict) -> str:
+    equip = d.get('equipment') or {}
+    issues = d.get('issues') or []
+    violations = d.get('violations') or []
+    oos = d.get('oos_flagged') or []
+    lines = [f'== {name} ==',
+             f'  Checklists {d.get("chk_total_done",0)}/{d.get("chk_expected",0)} '
+             f'(verified {d.get("chk_verified",0)})',
+             f'  Temps {d.get("temp_count",0)}/{d.get("temp_expected",0)} '
+             f'(out-of-zone {len(oos)})',
+             f'  Equipment {equip.get("recorded",0)} recorded (alerts {equip.get("alerts",0)})',
+             f'  Violations: {len(violations)} · Issues: {len(issues)}']
+    for v in violations:
+        lines.append(f'   ! VIOLATION [{(v.get("severity") or "").upper()}] '
+                     f'{v.get("staff_name") or "-"} — {v.get("rule_title") or "-"}')
+    for it in issues:
+        lines.append(f'   ! ISSUE [{(it.get("priority") or "normal").upper()}] '
+                     f'{it.get("title") or "-"} ({it.get("status") or "open"})')
+    for o in oos:
+        lines.append(f'   ! TEMP {o.get("food") or "-"}: {", ".join(o.get("readings") or [])}')
+    return '\n'.join(lines)
+
+
+def send_superadmin_digest(target_date: str, checklists_meta: dict,
+                            temperatures_meta: dict, issue_categories: dict) -> tuple[bool, str]:
+    """ONE combined email to the global digest recipients: every active store's
+    opening + closing WhatsApp PDF attached + a per-store summary that details any
+    violations / issues / out-of-zone temps tied to the store name. Stores with no
+    activity on the date are skipped. Returns (ok, message)."""
+    import base64
+    recips = [r['email'] for r in list_digest_recipients() if r.get('active')]
+    if not recips:
+        return False, 'No active digest recipients.'
+    settings = _pick_brevo_settings()
+    if not settings:
+        return False, 'No store has Brevo configured (set the API key + sender email first).'
+
+    # Active stores (query the canonical stores table directly).
+    try:
+        with _conn() as conn:
+            stores = [dict(r) for r in conn.execute(
+                'SELECT id, name FROM stores WHERE active=1 ORDER BY id').fetchall()]
+    except Exception:
+        stores = [{'id': 1, 'name': 'MCQ'}]
+
+    # Make sure whatsapp_share can hit the DB head-less.
+    try:
+        import whatsapp_share
+        if not whatsapp_share.DB_PATH:
+            whatsapp_share.DB_PATH = DB_PATH
+    except Exception:
+        whatsapp_share = None
+
+    try:
+        date_pretty = datetime.strptime(target_date, '%Y-%m-%d').strftime('%a %d %b %Y')
+    except Exception:
+        date_pretty = target_date
+
+    included: list[tuple[str, dict]] = []
+    attachments: list[dict] = []
+    for st in stores:
+        sid, sname = st['id'], st['name']
+        try:
+            d = collect_daily_digest(target_date, checklists_meta, temperatures_meta,
+                                     issue_categories, store_id=sid)
+        except Exception:
+            continue
+        if not _store_has_activity(d):
+            continue
+        included.append((sname, d))
+        if whatsapp_share is not None:
+            safe = ''.join(c for c in sname if c.isalnum() or c in ' -_').strip().replace(' ', '_') or f'store{sid}'
+            for period in ('opening', 'closing'):
+                try:
+                    pdf = whatsapp_share.get_daily_pdf(target_date, period, store_id=sid)
+                    attachments.append({
+                        'content': base64.b64encode(pdf).decode('ascii'),
+                        'name': f'{safe}_{period.title()}_{target_date}.pdf',
+                    })
+                except Exception:
+                    pass
+
+    if not included:
+        _log('super_digest', f'Daily Digest — {date_pretty}', recips, 'failed',
+             'No store activity on this date.')
+        return False, 'No store had any activity on this date — nothing sent.'
+
+    total_v = sum(len(d.get('violations') or []) for _, d in included)
+    total_i = sum(len(d.get('issues') or []) for _, d in included)
+    banner = ''
+    if total_v or total_i:
+        banner = (f'<tr><td style="padding:0 0 12px"><div style="background:#FDECEA;'
+                  f'border:1px solid #F5B7B1;border-radius:8px;padding:10px 14px;'
+                  f'color:#B71C1C;font-size:13px;font-weight:700">'
+                  f'⚠ {total_v} violation(s) and {total_i} issue(s) across '
+                  f'{len(included)} store(s) — details below.</div></td></tr>')
+
+    sections = ''.join(_superdigest_store_section(n, d) for n, d in included)
+    html = (f'<!DOCTYPE html><html><body style="margin:0;background:#f4f6fa;'
+            f'font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif">'
+            f'<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6fa;padding:18px">'
+            f'<tr><td align="center"><table width="640" cellpadding="0" cellspacing="0" '
+            f'style="background:#fff;border-radius:12px;overflow:hidden;'
+            f'box-shadow:0 2px 10px rgba(0,0,0,.06)">'
+            f'<tr><td style="background:#1A1A2E;color:#fff;padding:18px 22px">'
+            f'<div style="font-size:18px;font-weight:800">MCQ — Daily Operations Digest</div>'
+            f'<div style="font-size:13px;color:#cfd3dc">{escape(date_pretty)} · '
+            f'{len(included)} store(s) · opening + closing PDFs attached</div></td></tr>'
+            f'<tr><td style="padding:18px 22px">'
+            f'<table width="100%" cellpadding="0" cellspacing="0">{banner}{sections}</table>'
+            f'<div style="margin-top:14px;font-size:11px;color:#9aa0a8">'
+            f'Each store has an Opening and a Closing PDF attached (full checklists, '
+            f'temperatures, equipment, delivery + defrosting records). Automatic digest · '
+            f'generated {datetime.now().strftime("%H:%M")}.</div>'
+            f'</td></tr></table></td></tr></table></body></html>')
+
+    text = (f'MCQ — Daily Operations Digest\n{date_pretty}\n'
+            f'{len(included)} store(s) · opening + closing PDFs attached\n')
+    if total_v or total_i:
+        text += f'\n!! {total_v} violation(s), {total_i} issue(s) across stores !!\n'
+    text += '\n' + '\n\n'.join(_superdigest_store_text(n, d) for n, d in included) + '\n'
+
+    sent_to: list[str] = []
+    failures: list[str] = []
+    for recipient in recips:
+        payload = {
+            'sender': {'name': settings.get('from_name') or 'MCQ',
+                       'email': settings['sender_email']},
+            'to':          [{'email': recipient}],
+            'subject':     f'[MCQ] Daily Digest — {date_pretty}',
+            'htmlContent': html,
+            'textContent': text,
+        }
+        if attachments:
+            payload['attachment'] = attachments
+        ok, msg = _brevo_post(payload, settings['brevo_api_key'])
+        if ok:
+            sent_to.append(recipient)
+        else:
+            failures.append(f'{recipient}: {msg}')
+
+    subj = f'Daily Digest — {date_pretty}'
+    note = (f'{len(included)} store(s), {len(attachments)} PDF(s)')
+    if sent_to and not failures:
+        _log('super_digest', subj, sent_to, 'sent', note)
+        return True, f'Digest sent to {len(sent_to)} recipient(s) · {note}.'
+    if sent_to and failures:
+        _log('super_digest', subj, recips, 'partial',
+             f'{note} · failed: ' + ' | '.join(failures))
+        return True, (f'Sent to {len(sent_to)}, {len(failures)} failed: '
+                      + ' | '.join(failures)[:200])
+    _log('super_digest', subj, recips, 'failed', ' | '.join(failures) or 'unknown')
+    return False, ' | '.join(failures) or 'unknown error'
 
 
 def collect_daily_digest(target_date: str, checklists_meta: dict | None = None,

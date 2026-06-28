@@ -15,7 +15,7 @@
     </button>
     <ul class="dropdown-menu">
       {% for key, chk in checklists.items() %}
-      <li><a class="dropdown-item" href="/checklist/{{ key }}">
+      <li><a class="dropdown-item daily-dd-item" href="/checklist/{{ key }}" style="--c:{{ chk.color }}">
         <i class="fas fa-clipboard-check fa-fw me-1" style="color:{{ chk.color }}"></i>{{ chk.title }}</a></li>
       {% endfor %}
     </ul>

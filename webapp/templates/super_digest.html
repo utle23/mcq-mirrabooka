@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}Daily Digest (Super Admin){% endblock %}
+{% block topbar_title %}
+  <span class="fw-bold"><i class="fas fa-paper-plane me-2" style="color:#2E7D32"></i>Daily Digest — Super Admin</span>
+{% endblock %}
+
+{% block content %}
+<div class="row g-3">
+  <div class="col-12 col-lg-7">
+
+    <!-- How it works -->
+    <div class="card shadow-sm mb-3">
+      <div class="card-header py-2" style="background:#1A1A2E;color:#fff">
+        <i class="fas fa-circle-info me-2"></i>Automatic combined daily email
+      </div>
+      <div class="card-body small">
+        <p class="mb-2">One email is sent automatically every evening to the recipients below.
+        It contains a <strong>per-store summary</strong> (with any violations / issues / out-of-zone
+        temperatures tied to the store name) and attaches each active store's
+        <strong>Opening + Closing PDF</strong> (Mirrabooka, Subiaco… — a store with no activity that
+        day is skipped).</p>
+        {% if not configured %}
+        <div class="alert alert-warning py-2 mb-0">
+          <i class="fas fa-triangle-exclamation me-1"></i>No store has Brevo configured yet.
+          Set the API key + sender email in a store's <a href="/admin/email-settings">Email Settings</a> first.
+        </div>
+        {% else %}
+        <div class="text-success mb-0"><i class="fas fa-check-circle me-1"></i>Brevo sender configured — ready to send.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Recipients -->
+    <div class="card shadow-sm mb-3">
+      <div class="card-header py-2 d-flex align-items-center">
+        <span class="fw-bold"><i class="fas fa-users me-2 text-success"></i>Recipients</span>
+        <span class="badge bg-success ms-auto">{{ recipients|selectattr('active')|list|length }} active</span>
+      </div>
+      <div class="card-body">
+        <form method="POST" action="/admin/super/digest/recipients/add" class="row g-2 align-items-end mb-3">
+          <div class="col-md-6"><label class="form-label small fw-semibold mb-1">Email</label>
+            <input name="email" type="email" class="form-control form-control-sm" placeholder="name@example.com" required></div>
+          <div class="col-md-4"><label class="form-label small fw-semibold mb-1">Name</label>
+            <input name="name" class="form-control form-control-sm" placeholder="optional"></div>
+          <div class="col-md-2"><button class="btn btn-sm btn-success w-100"><i class="fas fa-plus me-1"></i>Add</button></div>
+        </form>
+        <table class="table table-sm align-middle mb-0">
+          <tbody>
+            {% for r in recipients %}
+            <tr class="{% if not r.active %}text-muted{% endif %}">
+              <td>
+                <span class="fw-semibold">{{ r.email }}</span>
+                {% if r.name %}<span class="text-muted small ms-1">· {{ r.name }}</span>{% endif %}
+              </td>
+              <td class="text-end text-nowrap">
+                <span class="badge bg-{{ 'success' if r.active else 'secondary' }} me-1">{{ 'Active' if r.active else 'Off' }}</span>
+                <form method="POST" action="/admin/super/digest/recipients/{{ r.id }}/toggle" class="d-inline">
+                  <button class="btn btn-sm btn-outline-secondary">{{ 'Disable' if r.active else 'Enable' }}</button>
+                </form>
+                <form method="POST" action="/admin/super/digest/recipients/{{ r.id }}/delete" class="d-inline"
+                      onsubmit="return confirm('Remove {{ r.email }} from the daily digest?');">
+                  <button class="btn btn-sm btn-outline-danger"><i class="fas fa-trash"></i></button>
+                </form>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="2" class="text-center text-muted py-3">No recipients yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Send now -->
+    <div class="card shadow-sm mb-3">
+      <div class="card-header py-2"><span class="fw-bold"><i class="fas fa-rocket me-2 text-primary"></i>Send now (test)</span></div>
+      <div class="card-body">
+        <div class="row g-2 align-items-end">
+          <div class="col-auto"><label class="form-label small fw-semibold mb-1">Date</label>
+            <input type="date" id="sendDate" class="form-control form-control-sm" value="{{ today }}"></div>
+          <div class="col-auto"><button id="sendBtn" class="btn btn-sm btn-primary"><i class="fas fa-paper-plane me-1"></i>Send digest now</button></div>
+          <div class="col"><div id="sendMsg" class="small"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scheduling -->
+  <div class="col-12 col-lg-5">
+    <div class="card shadow-sm mb-3">
+      <div class="card-header py-2"><span class="fw-bold"><i class="fas fa-clock me-2 text-warning"></i>Schedule at 8:00 PM</span></div>
+      <div class="card-body small">
+        <p class="mb-2">Create <strong>one</strong> scheduled task that opens this URL daily at
+        <strong>20:00 Perth time</strong>. Remove the old 7:00 PM per-store digest jobs — this replaces them.</p>
+        <label class="form-label small fw-semibold mb-1">Cron URL</label>
+        <div class="input-group input-group-sm mb-2">
+          <input id="cronUrl" class="form-control" readonly value="{{ cron_url }}">
+          <button class="btn btn-outline-secondary" onclick="navigator.clipboard.writeText(document.getElementById('cronUrl').value)"><i class="fas fa-copy"></i></button>
+        </div>
+        <p class="mb-2 text-muted">PythonAnywhere → <em>Tasks</em> tab → add a daily task at <code>20:00</code>:</p>
+        <pre class="bg-light p-2 rounded small mb-2" style="white-space:pre-wrap">curl -s "{{ cron_url }}"</pre>
+        <button id="regenBtn" class="btn btn-sm btn-outline-danger"><i class="fas fa-rotate me-1"></i>Regenerate token</button>
+        <div class="text-muted mt-2">Regenerating invalidates the old URL — update your scheduled task after.</div>
+      </div>
+    </div>
+
+    <!-- Recent log -->
+    <div class="card shadow-sm">
+      <div class="card-header py-2"><span class="fw-bold"><i class="fas fa-list me-2 text-info"></i>Recent sends</span></div>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0 small align-middle">
+          <thead class="table-light"><tr><th>When</th><th>Event</th><th>Status</th><th>Detail</th></tr></thead>
+          <tbody>
+            {% for l in log %}
+            <tr>
+              <td class="text-muted text-nowrap">{{ l.sent_at }}</td>
+              <td>{{ l.event_type }}</td>
+              <td><span class="badge bg-{{ 'success' if l.status=='sent' else 'warning text-dark' if l.status=='partial' else 'danger' }}">{{ l.status }}</span></td>
+              <td class="text-muted">{{ (l.error_detail or l.recipients)[:60] }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="text-center text-muted py-3">No sends yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+document.getElementById('sendBtn').addEventListener('click', async function(){
+  const btn = this, msg = document.getElementById('sendMsg');
+  btn.disabled = true; msg.className = 'small text-muted'; msg.textContent = 'Sending…';
+  try {
+    const fd = new FormData(); fd.append('date', document.getElementById('sendDate').value);
+    const r = await fetch('/admin/super/digest/send-now', {method:'POST', body:fd});
+    const j = await r.json();
+    msg.className = 'small ' + (j.ok ? 'text-success' : 'text-danger');
+    msg.textContent = j.message;
+  } catch(e){ msg.className='small text-danger'; msg.textContent = e; }
+  btn.disabled = false;
+});
+document.getElementById('regenBtn').addEventListener('click', async function(){
+  if(!confirm('Regenerate the cron token? The current URL stops working.')) return;
+  const r = await fetch('/admin/super/digest/regenerate-token', {method:'POST'});
+  const j = await r.json();
+  if(j.ok){ location.reload(); }
+});
+</script>
+{% endblock %}

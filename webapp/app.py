@@ -5387,6 +5387,75 @@ def cron_daily_digest():
     return jsonify({'ok': ok, 'date': target_date, 'message': msg})
 
 
+# ── Super-admin combined daily digest (8 PM, all stores, fixed recipients) ─────
+
+@app.route('/admin/super/digest')
+@super_admin_required
+def super_digest_page():
+    token = email_service.get_or_create_superdigest_token()
+    cron_url = request.url_root.rstrip('/') + '/cron/superadmin-digest?token=' + token
+    return render_template('super_digest.html',
+        recipients=email_service.list_digest_recipients(),
+        log=email_service.get_recent_log(40, store_id=1),
+        token=token, cron_url=cron_url,
+        configured=bool(email_service._pick_brevo_settings()),
+        today=date.today().isoformat())
+
+
+@app.route('/admin/super/digest/recipients/add', methods=['POST'])
+@super_admin_required
+def super_digest_recipient_add():
+    try:
+        email_service.add_digest_recipient(
+            request.form.get('email', ''), request.form.get('name', ''))
+    except ValueError as e:
+        return redirect(url_for('super_digest_page', error=str(e)))
+    return redirect(url_for('super_digest_page'))
+
+
+@app.route('/admin/super/digest/recipients/<int:rid>/toggle', methods=['POST'])
+@super_admin_required
+def super_digest_recipient_toggle(rid):
+    email_service.toggle_digest_recipient(rid)
+    return redirect(url_for('super_digest_page'))
+
+
+@app.route('/admin/super/digest/recipients/<int:rid>/delete', methods=['POST'])
+@super_admin_required
+def super_digest_recipient_delete(rid):
+    email_service.delete_digest_recipient(rid)
+    return redirect(url_for('super_digest_page'))
+
+
+@app.route('/admin/super/digest/regenerate-token', methods=['POST'])
+@super_admin_required
+def super_digest_regenerate_token():
+    return jsonify({'ok': True, 'token': email_service.regenerate_superdigest_token()})
+
+
+@app.route('/admin/super/digest/send-now', methods=['POST'])
+@super_admin_required
+def super_digest_send_now():
+    target_date = request.form.get('date', date.today().isoformat())
+    ok, msg = email_service.send_superadmin_digest(
+        target_date, CHECKLISTS, TEMPERATURES, ISSUE_CATEGORIES)
+    return jsonify({'ok': ok, 'message': msg})
+
+
+@app.route('/cron/superadmin-digest')
+def cron_superadmin_digest():
+    """Public endpoint for the external 8 PM scheduler. One combined email to the
+    super-admin digest recipients with every active store's opening + closing PDFs."""
+    expected = email_service.get_or_create_superdigest_token()
+    given = request.args.get('token', '')
+    if not given or given != expected:
+        return jsonify({'error': 'forbidden'}), 403
+    target_date = request.args.get('date', date.today().isoformat())
+    ok, msg = email_service.send_superadmin_digest(
+        target_date, CHECKLISTS, TEMPERATURES, ISSUE_CATEGORIES)
+    return jsonify({'ok': ok, 'date': target_date, 'message': msg})
+
+
 # ─── Email Notifications (admin) ───────────────────────────────────────────────
 
 @app.route('/admin/email-settings', methods=['GET'])
