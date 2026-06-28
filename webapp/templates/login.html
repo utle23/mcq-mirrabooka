@@ -31,10 +31,13 @@
     <!-- Mode selector -->
     <div class="login-modes mb-4">
       <button type="button" class="mode-btn active" id="btn-user" onclick="setMode('user')">
-        <i class="fas fa-user me-1"></i>Staff Login
+        <i class="fas fa-user me-1"></i>Staff
       </button>
       <button type="button" class="mode-btn" id="btn-admin" onclick="setMode('admin')">
-        <i class="fas fa-user-shield me-1"></i>Admin Login
+        <i class="fas fa-user-shield me-1"></i>Admin
+      </button>
+      <button type="button" class="mode-btn" id="btn-super_admin" onclick="setMode('super_admin')">
+        <i class="fas fa-crown me-1"></i>Super Admin
       </button>
     </div>
 
@@ -47,14 +50,18 @@
       <i class="fas fa-shield-alt me-1"></i>
       Admin: Full access — verify, export, view photos & analytics
     </div>
+    <div id="mode-info-super_admin" class="mode-info" style="display:none">
+      <i class="fas fa-crown me-1"></i>
+      Super Admin (Owner): view & manage <strong>all stores</strong> — no branch needed.
+    </div>
 
     <form method="POST" action="/login" id="login-form">
       <input type="hidden" name="mode" id="login-mode" value="user">
-      <div class="mb-3">
+      <div class="mb-3" id="branch-wrap">
         <label class="form-label fw-semibold small">
           <i class="fas fa-store text-success me-1"></i>Branch
         </label>
-        <select name="branch" class="form-select" required>
+        <select name="branch" id="branch-select" class="form-select" required>
           <option value="">— Select your branch —</option>
           {% for s in stores %}
           <option value="{{ s.code }}">{{ s.name }}</option>
@@ -116,11 +123,18 @@
 <script src="https://cdn.jsdelivr.net/npm/@simplewebauthn/browser@10.0.0/dist/bundle/index.umd.min.js"></script>
 <script>
 function setMode(mode){
-  document.getElementById('btn-user').classList.toggle('active', mode==='user');
-  document.getElementById('btn-admin').classList.toggle('active', mode==='admin');
-  document.getElementById('mode-info-user').style.display = mode==='user' ? '' : 'none';
-  document.getElementById('mode-info-admin').style.display = mode==='admin' ? '' : 'none';
+  ['user','admin','super_admin'].forEach(m => {
+    document.getElementById('btn-'+m).classList.toggle('active', mode===m);
+    const info = document.getElementById('mode-info-'+m);
+    if (info) info.style.display = (mode===m) ? '' : 'none';
+  });
   document.getElementById('login-mode').value = mode;
+  // Super Admin views all stores — no branch needed.
+  const isSuper = (mode==='super_admin');
+  const wrap = document.getElementById('branch-wrap');
+  const sel  = document.getElementById('branch-select');
+  if (wrap) wrap.style.display = isSuper ? 'none' : '';
+  if (sel)  sel.required = !isSuper;
 }
 function togglePw(){
   const pw = document.getElementById('pw-input');

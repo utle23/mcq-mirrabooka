@@ -74,6 +74,9 @@
         <span class="badge bg-{% if r.section=='opening' %}warning text-dark{% else %}info text-dark{% endif %}">
           {{ r.section|title }}
         </span>
+        {% if is_super_admin and view_store == 'all' %}
+        <span class="badge bg-dark" title="Store"><i class="fas fa-store me-1"></i>{{ store_names.get(r.store_id, r.store_id) }}</span>
+        {% endif %}
       </div>
       <div class="card-body py-2">
         <div class="small text-muted mb-1">

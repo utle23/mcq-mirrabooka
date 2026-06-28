@@ -369,7 +369,17 @@
       </button>
       <div class="topbar-center">{% block topbar_title %}{% endblock %}</div>
       <div class="topbar-right">
+        {% if is_super_admin %}
+        <select class="topbar-store-select" title="Viewing store"
+                onchange="location.href='/super/set-store?store='+this.value+'&next='+encodeURIComponent(location.pathname+location.search)">
+          <option value="all" {% if view_store=='all' %}selected{% endif %}>🏪 All Stores</option>
+          {% for s in all_stores %}
+          <option value="{{ s.id }}" {% if view_store == s.id|string %}selected{% endif %}>{{ s.name }}</option>
+          {% endfor %}
+        </select>
+        {% else %}
         <span class="topbar-badge"><i class="fas fa-store"></i> MCQ {{ branch or 'Mirrabooka' }}</span>
+        {% endif %}
         <span class="topbar-badge"><i class="fas fa-calendar-day"></i> {{ day_name }}, {{ today }}</span>
         {% if is_super_admin %}
         <span class="topbar-badge badge-admin" style="background:#6A1B9A"><i class="fas fa-crown"></i> Owner</span>

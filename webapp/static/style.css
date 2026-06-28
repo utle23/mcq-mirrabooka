@@ -465,6 +465,14 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
   65%      { transform: translateY(0) scale(.9); }
 }
 
+/* ── Super-admin store switcher in the topbar ── */
+.topbar-store-select {
+  font-size: 12.5px; font-weight: 700; color: #fff; cursor: pointer;
+  background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.4);
+  border-radius: 8px; padding: 4px 8px; max-width: 190px;
+}
+.topbar-store-select option { color: #1B3A2D; }
+
 /* ── Today's Tasks hub tiles (dashboard) ── */
 .task-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 .task-tile {

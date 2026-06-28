@@ -16,16 +16,33 @@ def is_super_admin():
 
 
 def current_store_id():
-    """The store the logged-in session operates within (writes target this)."""
+    """The store the logged-in session operates within (writes target this).
+
+    For a super_admin, the active store follows the global store switcher
+    (session['view_store']) when a specific store is chosen; 'all' falls back to
+    the login store so a stray write still lands somewhere sensible.
+    """
+    if session.get('role') == 'super_admin':
+        vs = session.get('view_store', 'all')
+        if vs not in (None, '', 'all'):
+            try:
+                return int(vs)
+            except (TypeError, ValueError):
+                pass
     return session.get('store_id', 1)
 
 
 def selected_store_scope():
     """Resolve the store scope for the CURRENT request (reads).
     Returns an int store_id, or None meaning 'all stores' (super_admin only).
-    Normal users are always pinned to their own session store."""
+    Normal users are always pinned to their own session store.
+    Super_admin: an explicit ?store= wins, otherwise the global switcher
+    (session['view_store'])."""
     if is_super_admin():
-        sel = (request.args.get('store', 'all') or 'all').strip()
+        sel = request.args.get('store')
+        if sel is None:
+            sel = session.get('view_store', 'all')
+        sel = (str(sel) if sel is not None else 'all').strip()
         if sel in ('', 'all'):
             return None
         try:

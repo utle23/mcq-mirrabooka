@@ -9,6 +9,7 @@
       <div class="col-auto"><label class="form-label small fw-semibold mb-1">From</label><input type="date" name="date_from" class="form-control form-control-sm" value="{{ date_from }}"></div>
       <div class="col-auto"><label class="form-label small fw-semibold mb-1">To</label><input type="date" name="date_to" class="form-control form-control-sm" value="{{ date_to }}"></div>
       <div class="col-auto"><button class="btn btn-sm btn-success"><i class="fas fa-filter me-1"></i>Apply</button></div>
+      <div class="col-auto"><a href="/super/set-store?store=all&next=/staff" class="btn btn-sm btn-outline-dark"><i class="fas fa-users me-1"></i>All staff</a></div>
       <div class="col-auto text-muted small">Revenue & checklist/temperature counts use this range · open issues/violations are live totals.</div>
     </form>
   </div>
@@ -53,8 +54,9 @@
           <td class="text-center">{% if r.issues_open %}<span class="badge bg-warning text-dark">{{ r.issues_open }}</span>{% else %}0{% endif %}</td>
           <td class="text-center">{% if r.violations_open %}<span class="badge bg-danger">{{ r.violations_open }}</span>{% else %}0{% endif %}</td>
           <td class="text-end fw-semibold">${{ '%.2f'|format(r.revenue) }}</td>
-          <td>
-            <a href="/manager?store={{ r.id }}" class="btn btn-sm btn-outline-primary" title="Open this store's manager panel">View</a>
+          <td class="text-nowrap">
+            <a href="/super/set-store?store={{ r.id }}&next=/manager" class="btn btn-sm btn-outline-primary" title="Switch to this store + open its manager panel to verify">Verify</a>
+            <a href="/super/set-store?store={{ r.id }}&next=/staff" class="btn btn-sm btn-outline-secondary" title="Switch to this store + view its staff">Staff</a>
           </td>
         </tr>
         {% endfor %}

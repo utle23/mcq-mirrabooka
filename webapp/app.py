@@ -1702,10 +1702,10 @@ def calculate_monthly_reward_scores(conn, month_value=None, store_id=None):
             s[f'{severity}_violations'] += 1
         s['violation_penalty'] += penalty_map.get(severity, 8)
 
-    adjustment_rows = conn.execute('''
+    adjustment_rows = conn.execute(f'''
         SELECT * FROM monthly_reward_adjustments
-        WHERE reward_month=?
-    ''', (month_value,)).fetchall()
+        WHERE reward_month=?{sc}
+    ''', [month_value] + sp).fetchall()
     for row in adjustment_rows:
         d = dict(row)
         name = staff_lookup.get((d.get('staff_name') or '').strip().lower())
@@ -1740,16 +1740,16 @@ def calculate_monthly_reward_scores(conn, month_value=None, store_id=None):
 
     employee_rank = sorted(scores.values(), key=lambda x: (x['employee_score'], x['checklist_score'], -x['violations_total']), reverse=True)
     checklist_rank = sorted(scores.values(), key=lambda x: (x['checklist_score'], x['checklist_sessions'], -x['violations_total']), reverse=True)
-    decisions = [dict(r) for r in conn.execute('''
+    decisions = [dict(r) for r in conn.execute(f'''
         SELECT * FROM monthly_reward_decisions
-        WHERE reward_month=?
+        WHERE reward_month=?{sc}
         ORDER BY award_type
-    ''', (month_value,)).fetchall()]
-    adjustments = [dict(r) for r in conn.execute('''
+    ''', [month_value] + sp).fetchall()]
+    adjustments = [dict(r) for r in conn.execute(f'''
         SELECT * FROM monthly_reward_adjustments
-        WHERE reward_month=?
+        WHERE reward_month=?{sc}
         ORDER BY created_at DESC, id DESC
-    ''', (month_value,)).fetchall()]
+    ''', [month_value] + sp).fetchall()]
     return {
         'month': month_value,
         'start_date': start_date,
@@ -1838,10 +1838,14 @@ def birthday_rows(conn, store_id=None):
         store_id = current_store_id()
     today_obj = date.today()
     current_year = today_obj.year
+    # INNER JOIN on active staff of THIS store: only show birthdays for people who
+    # actually belong to (and are active at) the store, so orphaned rows from before
+    # multi-store (ex-staff now at other branches) no longer leak into the list.
     rows = [dict(r) for r in conn.execute('''
         SELECT sb.*, sm.role, sm.active
         FROM staff_birthdays sb
-        LEFT JOIN staff_members sm ON sm.name=sb.staff_name AND sm.store_id=sb.store_id
+        JOIN staff_members sm
+          ON sm.name=sb.staff_name AND sm.store_id=sb.store_id AND sm.active=1
         WHERE sb.store_id=?
         ORDER BY sb.staff_name
     ''', (store_id,)).fetchall()]
@@ -1900,7 +1904,7 @@ def register_pdf_fonts():
 USER_PASSWORD        = '7777'
 ADMIN_PASSWORD       = '77771'
 KITCHEN_PASSWORD     = '8888'
-SUPER_ADMIN_PASSWORD = '999999'   # cross-store owner view (all branches)
+SUPER_ADMIN_PASSWORD = '9999'   # cross-store owner view (all branches)
 LOCATION         = 'mirrabooka'
 
 def is_admin():
@@ -2015,6 +2019,7 @@ def inject_globals():
         store_code=session.get('store_code', ''),
         all_stores=(get_stores() if session.get('role') == 'super_admin' else []),
         selected_store=(request.args.get('store', 'all') if session.get('role') == 'super_admin' else None),
+        view_store=(session.get('view_store', 'all') if session.get('role') == 'super_admin' else None),
         issue_categories=ISSUE_CATEGORIES,
         temp_kind_rules=TEMP_KIND_RULES,
         temp_is_unsafe=temp_is_unsafe,
@@ -2076,16 +2081,33 @@ def login_page():
         pw     = request.form.get('password', '')
         code   = request.form.get('branch', '').strip()   # store CODE
         mode   = request.form.get('mode', 'user').strip().lower()
+        now = datetime.now()
+
+        # Super admin (owner): global password, NO branch needed — views all stores.
+        if pw and pw == SUPER_ADMIN_PASSWORD:
+            default_store = stores[0] if stores else None
+            session.clear()
+            session.update({
+                'logged_in':     True,
+                'role':          'super_admin',
+                'branch':        'All Stores',
+                'store_id':      default_store['id'] if default_store else 1,
+                'store_code':    '',
+                'view_store':    'all',           # global store switcher default
+                'login_time':    now.strftime('%Y-%m-%d %H:%M'),
+                'login_ts':      now.isoformat(timespec='seconds'),
+                'last_activity': now.isoformat(timespec='seconds'),
+            })
+            session.permanent = True
+            return redirect(url_for('dashboard'))
+
         store  = next((s for s in stores if s['code'] == code), None)
         if not store:
             error = 'Please select a valid branch.'
         else:
-            # Per-store passwords (fall back to chain defaults if a store hasn't
-            # set its own). The owner/super_admin password is global.
+            # Per-store passwords (fall back to chain defaults if a store hasn't set its own).
             role = None
-            if pw and pw == SUPER_ADMIN_PASSWORD:
-                role = 'super_admin'
-            elif mode == 'admin' and pw and pw == (store.get('admin_password') or ADMIN_PASSWORD):
+            if mode == 'admin' and pw and pw == (store.get('admin_password') or ADMIN_PASSWORD):
                 role = 'admin'
             elif mode == 'user' and pw and pw == (store.get('user_password') or USER_PASSWORD):
                 role = 'user'
@@ -2098,7 +2120,6 @@ def login_page():
             if role is None:
                 error = 'Incorrect password. Please try again.'
             else:
-                now = datetime.now()
                 display = store['name'][4:] if store['name'].startswith('MCQ ') else store['name']
                 session.clear()
                 session.update({
@@ -2131,6 +2152,25 @@ def login_page():
 def logout():
     session.clear()
     return redirect(url_for('login_page'))
+
+
+@app.route('/super/set-store')
+@super_admin_required
+def super_set_store():
+    """Global store switcher for the owner: choose which store to view (or all).
+    Drives every store-filtered page via store_scope.selected_store_scope()."""
+    sel = (request.args.get('store', 'all') or 'all').strip()
+    if sel != 'all':
+        try:
+            int(sel)
+        except (TypeError, ValueError):
+            sel = 'all'
+    session['view_store'] = sel
+    nxt = request.args.get('next') or request.referrer or url_for('dashboard')
+    # Only allow internal redirects.
+    if not nxt.startswith('/'):
+        nxt = url_for('dashboard')
+    return redirect(nxt)
 
 # ─── Dashboard ─────────────────────────────────────────────────────────────────
 
@@ -2873,11 +2913,12 @@ def manager():
         recent_log = [dict(r) for r in conn.execute(
             "SELECT * FROM audit_log WHERE substr(timestamp,1,10)=? "
             "ORDER BY timestamp DESC LIMIT 50", (sel_date,)).fetchall()]
+    store_names = {s['id']: s['name'] for s in get_stores(active_only=False)}
     return render_template('manager.html',
         pending=pending, issues=issues,
         verified_today=verified_today, recent_log=recent_log, staff=get_active_staff(),
         sel_date=sel_date, today=today_str, is_today=(sel_date == today_str),
-        prev_date=prev_date, next_date=next_date,
+        prev_date=prev_date, next_date=next_date, store_names=store_names,
     )
 
 # ─── Analytics ─────────────────────────────────────────────────────────────────
@@ -3076,9 +3117,9 @@ def monthly_reward_decision():
     if award_type in ('employee_month', 'best_checklist') and staff_name:
         with get_db() as conn:
             conn.execute('''INSERT INTO monthly_reward_decisions
-                (reward_month,award_type,staff_name,reward_amount,status,notes,approved_by)
-                VALUES (?,?,?,?,?,?,?)
-                ON CONFLICT(reward_month, award_type) DO UPDATE SET
+                (reward_month,award_type,staff_name,reward_amount,status,notes,approved_by,store_id)
+                VALUES (?,?,?,?,?,?,?,?)
+                ON CONFLICT(reward_month, award_type, store_id) DO UPDATE SET
                     staff_name=excluded.staff_name,
                     reward_amount=excluded.reward_amount,
                     status=excluded.status,
@@ -3086,16 +3127,18 @@ def monthly_reward_decision():
                     approved_by=excluded.approved_by,
                     approved_at=datetime('now','localtime')''',
                 (reward_month, award_type, staff_name, reward_amount, 'approved',
-                 notes, request.form.get('approved_by', '').strip() or 'Admin'))
+                 notes, request.form.get('approved_by', '').strip() or 'Admin', current_store_id()))
     return redirect(url_for('monthly_rewards', month=reward_month))
 
 @app.route('/admin/monthly-rewards/decision/<int:decision_id>/delete', methods=['POST'])
 @admin_required
 def monthly_reward_decision_delete(decision_id):
+    guard, gp = store_guard_clause()
     with get_db() as conn:
-        row = conn.execute('SELECT reward_month FROM monthly_reward_decisions WHERE id=?', (decision_id,)).fetchone()
+        row = conn.execute(f'SELECT reward_month FROM monthly_reward_decisions WHERE id=? AND {guard}',
+                           [decision_id] + gp).fetchone()
         reward_month = row['reward_month'] if row else date.today().strftime('%Y-%m')
-        conn.execute('DELETE FROM monthly_reward_decisions WHERE id=?', (decision_id,))
+        conn.execute(f'DELETE FROM monthly_reward_decisions WHERE id=? AND {guard}', [decision_id] + gp)
     return redirect(url_for('monthly_rewards', month=reward_month))
 
 @app.route('/admin/monthly-rewards/adjustment', methods=['POST'])
@@ -3111,10 +3154,10 @@ def monthly_reward_adjustment():
     if staff_name and reason and points:
         with get_db() as conn:
             conn.execute('''INSERT INTO monthly_reward_adjustments
-                (reward_month,staff_name,points,reason,created_by)
-                VALUES (?,?,?,?,?)''',
+                (reward_month,staff_name,points,reason,created_by,store_id)
+                VALUES (?,?,?,?,?,?)''',
                 (reward_month, staff_name, points, reason,
-                 request.form.get('created_by', '').strip() or 'Admin'))
+                 request.form.get('created_by', '').strip() or 'Admin', current_store_id()))
     return redirect(url_for('monthly_rewards', month=reward_month))
 
 @app.route('/admin/monthly-rewards/adjustment/<int:adjustment_id>/update', methods=['POST'])
@@ -3125,29 +3168,32 @@ def monthly_reward_adjustment_update(adjustment_id):
         points = float(request.form.get('points', 0) or 0)
     except ValueError:
         points = 0
+    guard, gp = store_guard_clause()
     with get_db() as conn:
         current = conn.execute(
-            'SELECT reward_month FROM monthly_reward_adjustments WHERE id=?',
-            (adjustment_id,)).fetchone()
+            f'SELECT reward_month FROM monthly_reward_adjustments WHERE id=? AND {guard}',
+            [adjustment_id] + gp).fetchone()
         if current:
             reward_month = current['reward_month']
-            conn.execute('''UPDATE monthly_reward_adjustments
+            conn.execute(f'''UPDATE monthly_reward_adjustments
                 SET staff_name=?, points=?, reason=?, created_by=?
-                WHERE id=?''',
-                (request.form.get('staff_name', '').strip(),
+                WHERE id=? AND {guard}''',
+                [request.form.get('staff_name', '').strip(),
                  points,
                  request.form.get('reason', '').strip(),
                  request.form.get('created_by', '').strip(),
-                 adjustment_id))
+                 adjustment_id] + gp)
     return redirect(url_for('monthly_rewards', month=reward_month))
 
 @app.route('/admin/monthly-rewards/adjustment/<int:adjustment_id>/delete', methods=['POST'])
 @admin_required
 def monthly_reward_adjustment_delete(adjustment_id):
+    guard, gp = store_guard_clause()
     with get_db() as conn:
-        row = conn.execute('SELECT reward_month FROM monthly_reward_adjustments WHERE id=?', (adjustment_id,)).fetchone()
+        row = conn.execute(f'SELECT reward_month FROM monthly_reward_adjustments WHERE id=? AND {guard}',
+                           [adjustment_id] + gp).fetchone()
         reward_month = row['reward_month'] if row else date.today().strftime('%Y-%m')
-        conn.execute('DELETE FROM monthly_reward_adjustments WHERE id=?', (adjustment_id,))
+        conn.execute(f'DELETE FROM monthly_reward_adjustments WHERE id=? AND {guard}', [adjustment_id] + gp)
     return redirect(url_for('monthly_rewards', month=reward_month))
 
 @app.route('/admin/raise-reviews', methods=['GET', 'POST'])
@@ -4110,12 +4156,14 @@ def staff_page():
     clause, params = store_filter_clause()
     with get_db() as conn:
         staff = [dict(r) for r in conn.execute(
-            f'SELECT * FROM staff_members WHERE {clause} ORDER BY active DESC, name',
+            f'SELECT * FROM staff_members WHERE {clause} ORDER BY store_id, active DESC, name',
             params).fetchall()]
         birthdays = birthday_rows(conn)
     birthday_map = {b['staff_name']: b for b in birthdays}
+    stores = get_stores(active_only=False)
+    store_names = {s['id']: s['name'] for s in stores}
     return render_template('staff.html', staff=staff, birthdays=birthdays,
-                           birthday_map=birthday_map, stores=get_stores())
+                           birthday_map=birthday_map, stores=stores, store_names=store_names)
 
 @app.route('/staff/add', methods=['POST'])
 @login_required
