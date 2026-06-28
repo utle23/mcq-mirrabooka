@@ -16,11 +16,20 @@
         <input type="date" name="date_to" class="form-control form-control-sm" value="{{ date_to }}">
       </div>
       <div class="col-auto">
-        <label class="form-label small fw-semibold mb-1">Type</label>
+        <label class="form-label small fw-semibold mb-1">Record</label>
         <select name="type" class="form-select form-select-sm">
           <option value="all" {% if rec_type=='all' %}selected{% endif %}>All Records</option>
           <option value="checklist" {% if rec_type=='checklist' %}selected{% endif %}>Checklists Only</option>
           <option value="temperature" {% if rec_type=='temperature' %}selected{% endif %}>Temperature Only</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <label class="form-label small fw-semibold mb-1">Checklist type</label>
+        <select name="chk_type" class="form-select form-select-sm">
+          <option value="all" {% if chk_type=='all' %}selected{% endif %}>All checklists</option>
+          {% for key, c in checklists.items() %}
+          <option value="{{ key }}" {% if chk_type==key %}selected{% endif %}>{{ c.title }}</option>
+          {% endfor %}
         </select>
       </div>
       <div class="col-auto">
@@ -90,8 +99,10 @@
           <th>Section</th>
           <th>Responsible</th>
           <th>Submitted by</th>
+          <th>Submitted at</th>
           <th>Progress</th>
           <th>Status</th>
+          <th>Verified by</th>
           <th>Actions</th>
         </tr>
       </thead>
@@ -115,6 +126,7 @@
           </td>
           <td class="small">{{ r.responsible or '—' }}</td>
           <td class="small">{{ r.submitted_by or '—' }}</td>
+          <td class="small text-muted">{{ r.submitted_at[11:16] if r.submitted_at and r.submitted_at|length > 11 else (r.submitted_at or '—') }}</td>
           <td style="min-width:120px">
             <div class="d-flex align-items-center gap-1">
               <div class="progress flex-grow-1" style="height:6px">
@@ -134,6 +146,7 @@
             <span class="badge bg-warning text-dark">Pending</span>
             {% endif %}
           </td>
+          <td class="small text-muted">{{ r.verified_by or '—' }}</td>
           <td>
             <a href="/checklist/view/{{ r.id }}" class="btn btn-sm btn-outline-primary">View</a>
             {% if is_admin %}
@@ -153,7 +166,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="{% if is_admin %}10{% else %}9{% endif %}" class="text-center text-muted py-3">No checklist records found</td></tr>
+        <tr><td colspan="{% if is_admin %}12{% else %}11{% endif %}" class="text-center text-muted py-3">No checklist records found</td></tr>
         {% endfor %}
       </tbody>
     </table>

@@ -384,6 +384,143 @@ def defrost_check_edit(cid):
     return redirect(url_for('defrost.defrost_home'))
 
 
+def _defrost_export_rows():
+    """Flatten defrost records + their checks (store-scoped, optional date range)
+    into export rows. Returns (store_name, df, dt, rows)."""
+    sid = current_store_id()
+    df, dt = _date_range()
+    where, params = 'store_id=?', [sid]
+    if df:
+        where += ' AND started_on >= ?'; params.append(df)
+    if dt:
+        where += ' AND started_on <= ?'; params.append(dt)
+    rows = []
+    with _get_db() as conn:
+        sn = conn.execute('SELECT name FROM stores WHERE id=?', (sid,)).fetchone()
+        store_name = (sn['name'] if sn else '') or 'MCQ Cafe'
+        records = [dict(r) for r in conn.execute(
+            f'''SELECT * FROM defrost_records WHERE {where}
+               ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END,
+                        started_on DESC, id DESC''', params).fetchall()]
+        for r in records:
+            checks = [dict(c) for c in conn.execute(
+                '''SELECT * FROM defrost_checks WHERE record_id=?
+                   ORDER BY checked_on, checked_time, id''', (r['id'],)).fetchall()]
+            if not checks:
+                rows.append({**r, 'checked_on': '', 'checked_time': '', 'core_temp': None,
+                             'physical_condition': '', 'checked_by': '', 'unsafe': False})
+            for c in checks:
+                rows.append({**r, 'checked_on': c['checked_on'], 'checked_time': c['checked_time'],
+                             'core_temp': c['core_temp'], 'physical_condition': c['physical_condition'],
+                             'checked_by': c['checked_by'], 'unsafe': _defrost_temp_unsafe(c['core_temp'])})
+    return store_name, df, dt, rows
+
+
+@defrost_bp.route('/export/excel')
+@_login_required
+def defrost_export_excel():
+    from io import BytesIO
+    from flask import send_file
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    store_name, df, dt, rows = _defrost_export_rows()
+    wb = Workbook(); ws = wb.active; ws.title = 'Defrosting'
+    head_fill = PatternFill('solid', fgColor='00838F')
+    bad_fill  = PatternFill('solid', fgColor='FDE7E9')
+    thin = Side(style='thin', color='D9DDE3')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    ws.append([f'{store_name} — Defrosting Temperature (safe {DEFROST_LO:g}–{DEFROST_HI:g}°C)'])
+    ws.append([f'Range: {df or "—"} to {dt or "—"}'])
+    ws.append([])
+    headers = ['Product', 'Supplier', 'Started', 'Status', 'Check date', 'Time',
+               'Core °C', 'Condition', 'Checked by', 'Alert']
+    ws.append(headers)
+    hrow = ws.max_row
+    for col, h in enumerate(headers, 1):
+        c = ws.cell(hrow, col); c.font = Font(bold=True, color='FFFFFF')
+        c.fill = head_fill; c.alignment = Alignment(horizontal='center'); c.border = border
+    for r in rows:
+        ws.append([r['product_name'], r['supplier_name'], r['started_on'], r['status'],
+                   r['checked_on'], r['checked_time'],
+                   ('' if r['core_temp'] is None else r['core_temp']),
+                   r['physical_condition'], r['checked_by'],
+                   'OUT OF RANGE' if r['unsafe'] else ''])
+        if r['unsafe']:
+            for col in range(1, len(headers) + 1):
+                ws.cell(ws.max_row, col).fill = bad_fill
+    widths = [22, 16, 12, 11, 12, 8, 9, 20, 16, 14]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[chr(64 + i)].width = w
+    buf = BytesIO(); wb.save(buf); buf.seek(0)
+    fname = f'MCQ_Defrosting_{date.today().isoformat()}.xlsx'
+    return send_file(buf, as_attachment=True, download_name=fname,
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+@defrost_bp.route('/export/pdf')
+@_login_required
+def defrost_export_pdf():
+    from io import BytesIO
+    from html import escape
+    from flask import send_file
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    store_name, df, dt, rows = _defrost_export_rows()
+    base = getSampleStyleSheet()
+    cell = ParagraphStyle('cell', parent=base['Normal'], fontSize=8.5, leading=10.5)
+    th = ParagraphStyle('th', parent=base['Normal'], fontSize=9, leading=11,
+                        textColor=colors.white, fontName='Helvetica-Bold')
+    accent = colors.HexColor('#00838F')
+    story = [
+        Paragraph(f'<b>{escape(store_name)} — Defrosting Temperature</b>',
+                  ParagraphStyle('t', parent=base['Title'], fontSize=15, textColor=colors.HexColor('#0F5A61'))),
+        Paragraph(f'Safe core temp {DEFROST_LO:g}–{DEFROST_HI:g}°C &middot; Range {df or "—"} to {dt or "—"}', cell),
+        Spacer(1, 4 * mm),
+    ]
+    data = [[Paragraph(h, th) for h in
+             ['Product', 'Supplier', 'Started', 'Status', 'Check date', 'Time', 'Core °C', 'Condition', 'By']]]
+    for r in rows:
+        temp = '' if r['core_temp'] is None else f'{r["core_temp"]:g}°C'
+        tcol = '#C62828' if r['unsafe'] else '#1B7F3B' if r['core_temp'] is not None else '#999999'
+        data.append([
+            Paragraph(escape(r['product_name'] or ''), cell),
+            Paragraph(escape(r['supplier_name'] or ''), cell),
+            Paragraph(escape(r['started_on'] or ''), cell),
+            Paragraph(escape((r['status'] or '').title()), cell),
+            Paragraph(escape(r['checked_on'] or '—'), cell),
+            Paragraph(escape(r['checked_time'] or ''), cell),
+            Paragraph(f'<font color="{tcol}"><b>{temp or "—"}</b></font>', cell),
+            Paragraph(escape(r['physical_condition'] or ''), cell),
+            Paragraph(escape(r['checked_by'] or ''), cell),
+        ])
+    if not rows:
+        data.append([Paragraph('<i>No defrosting records for this range.</i>', cell)] + [''] * 8)
+    usable = landscape(A4)[0] - 24 * mm
+    cw = [usable * w for w in (0.20, 0.14, 0.10, 0.09, 0.11, 0.07, 0.09, 0.14, 0.06)]
+    tbl = Table(data, colWidths=cw, repeatRows=1)
+    tbl.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), accent),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('GRID', (0, 0), (-1, -1), 0.3, colors.HexColor('#E0E4E9')),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#FAFBFD')]),
+        ('TOPPADDING', (0, 0), (-1, -1), 5), ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 5), ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+    ]))
+    story.append(tbl)
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=landscape(A4), leftMargin=12 * mm, rightMargin=12 * mm,
+                            topMargin=12 * mm, bottomMargin=12 * mm)
+    doc.build(story)
+    buf.seek(0)
+    fname = f'MCQ_Defrosting_{date.today().isoformat()}.pdf'
+    return send_file(buf, mimetype='application/pdf', as_attachment=True, download_name=fname)
+
+
 # ── Delivery Inspection Record ───────────────────────────────────────────────
 
 def _delivery_form_values():

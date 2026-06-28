@@ -275,13 +275,24 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
 .topbar-badge.badge-admin { background: rgba(220,53,69,0.12); border-color: rgba(220,53,69,0.3); color: #dc3545; }
 
 /* ── Login Page Additions ── */
-.login-modes { display: flex; gap: 8px; }
+.login-modes { display: flex; gap: 10px; }
 .mode-btn {
-  flex: 1; padding: 9px; border-radius: 8px; border: 2px solid #e0e0e0;
-  background: #f8f9fa; font-size: 13px; font-weight: 600; cursor: pointer;
-  transition: all 0.2s;
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 14px 6px; border-radius: 14px; border: 2px solid #e6e8ec;
+  background: #fff; font-size: 12.5px; font-weight: 700; color: #6b7280;
+  cursor: pointer; transition: transform .15s, box-shadow .2s, border-color .2s, background .2s, color .2s;
 }
-.mode-btn.active { border-color: var(--brand-green); background: #f0fff4; color: var(--brand-green); }
+.mode-btn i { font-size: 22px; color: #9aa0a8; transition: color .2s, transform .2s; }
+.mode-btn span { letter-spacing: .2px; line-height: 1.1; text-align: center; }
+.mode-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 18px rgba(0,0,0,.08); }
+.mode-btn[data-role="user"]  { --role-c: #2E9E4B; --role-bg: #E9F7EE; }
+.mode-btn[data-role="admin"] { --role-c: #1565C0; --role-bg: #E7F0FB; }
+.mode-btn[data-role="super"] { --role-c: #D4AF37; --role-bg: #FBF4DC; }
+.mode-btn.active {
+  border-color: var(--role-c); background: var(--role-bg); color: var(--role-c);
+  box-shadow: 0 8px 20px -6px var(--role-c);
+}
+.mode-btn.active i { color: var(--role-c); transform: scale(1.08); }
 .mode-info {
   padding: 8px 12px; border-radius: 8px; font-size: 12px; margin-bottom: 16px;
 }

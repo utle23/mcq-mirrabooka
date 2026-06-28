@@ -34,6 +34,12 @@
     <button class="btn btn-sm btn-outline-secondary"><i class="fas fa-filter me-1"></i>Filter</button>
     {% if date_from or date_to %}<a href="/defrost/" class="btn btn-sm btn-link text-decoration-none">Clear</a>{% endif %}
   </div>
+  <div class="col-auto ms-auto d-flex align-items-end gap-1">
+    <a href="/defrost/export/pdf?from={{ date_from }}&to={{ date_to }}" class="btn btn-sm btn-outline-danger" title="Export PDF">
+      <i class="fas fa-file-pdf me-1"></i>PDF</a>
+    <a href="/defrost/export/excel?from={{ date_from }}&to={{ date_to }}" class="btn btn-sm btn-outline-success" title="Export Excel">
+      <i class="fas fa-file-excel me-1"></i>Excel</a>
+  </div>
 </form>
 
 {% if not active and not closed %}

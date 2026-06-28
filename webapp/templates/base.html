@@ -715,6 +715,72 @@ document.addEventListener('DOMContentLoaded', _updateInstallBtnVisibility);
   });
 })();
 </script>
+{% if session.get('logged_in') %}
+<!-- ── Idle auto-logout: 1h with a 2-min warning; typing counts as activity ── -->
+<script>
+(function () {
+  const IDLE_MS    = 60 * 60 * 1000;   // 1 hour
+  const WARN_MS    = 2  * 60 * 1000;   // warn 2 min before logout
+  const PING_MS    = 5  * 60 * 1000;   // keepalive cadence while active
+  let lastActivity = Date.now();
+  let lastPing     = Date.now();
+  let warnEl       = null;
+  let tick         = null;
+
+  function buildWarn() {
+    const d = document.createElement('div');
+    d.id = 'idle-warning';
+    d.style.cssText =
+      'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:20000;' +
+      'background:#fff;border:1px solid #ffd9b0;border-left:6px solid #E65100;' +
+      'box-shadow:0 10px 30px rgba(0,0,0,.18);border-radius:12px;padding:14px 18px;' +
+      'max-width:92vw;width:420px;display:none;font-size:14px;color:#1A1A2E';
+    d.innerHTML =
+      '<div style="font-weight:700;color:#E65100;margin-bottom:4px">' +
+      '<i class="fas fa-clock me-1"></i>Sắp tự đăng xuất</div>' +
+      '<div id="idle-warning-msg" style="margin-bottom:10px">Bạn sắp bị đăng xuất do không hoạt động. ' +
+      'Hãy bấm <b>Lưu</b> nếu đang làm dở.</div>' +
+      '<div class="d-flex gap-2 justify-content-end">' +
+      '<a href="/logout" class="btn btn-sm btn-outline-secondary">Đăng xuất ngay</a>' +
+      '<button type="button" id="idle-stay" class="btn btn-sm btn-success">Tôi còn ở đây</button></div>';
+    document.body.appendChild(d);
+    d.querySelector('#idle-stay').addEventListener('click', () => { bump(true); });
+    return d;
+  }
+
+  function bump(force) {
+    lastActivity = Date.now();
+    if (warnEl) warnEl.style.display = 'none';
+    // Keep the SERVER session alive while the user is actively working
+    // (typing/ticking sends no request on its own).
+    if (force || (Date.now() - lastPing > PING_MS)) {
+      lastPing = Date.now();
+      try { fetch('/ping', { cache: 'no-store' }); } catch (e) {}
+    }
+  }
+
+  function loop() {
+    const idle = Date.now() - lastActivity;
+    if (idle >= IDLE_MS) {
+      window.location = '/logout?timeout=idle';
+      return;
+    }
+    if (idle >= IDLE_MS - WARN_MS) {
+      if (!warnEl) warnEl = buildWarn();
+      const left = Math.max(1, Math.ceil((IDLE_MS - idle) / 1000 / 60));
+      const msg = document.getElementById('idle-warning-msg');
+      if (msg) msg.innerHTML = 'Tự đăng xuất sau ~<b>' + left + ' phút</b> nữa do không hoạt động. ' +
+        'Hãy bấm <b>Lưu</b> nếu đang làm dở.';
+      warnEl.style.display = 'block';
+    }
+  }
+
+  ['mousemove', 'mousedown', 'keydown', 'click', 'scroll', 'touchstart', 'input', 'change']
+    .forEach(ev => document.addEventListener(ev, () => bump(false), { passive: true }));
+  document.addEventListener('DOMContentLoaded', () => { bump(true); tick = setInterval(loop, 15000); });
+})();
+</script>
+{% endif %}
 {% block scripts %}{% endblock %}
 </body>
 </html>

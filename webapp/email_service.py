@@ -1338,13 +1338,30 @@ def _superdigest_store_text(name: str, d: dict) -> str:
     return '\n'.join(lines)
 
 
+def _superdigest_already_sent(target_date: str) -> bool:
+    """True if a super_digest was already sent for this date — guards against the
+    scheduler (or a retry) firing twice in one day."""
+    try:
+        with _conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM email_log WHERE event_type='super_digest' AND status='sent' "
+                "AND substr(sent_at,1,10)=? LIMIT 1", (target_date,)).fetchone()
+        return bool(row)
+    except Exception:
+        return False
+
+
 def send_superadmin_digest(target_date: str, checklists_meta: dict,
-                            temperatures_meta: dict, issue_categories: dict) -> tuple[bool, str]:
+                            temperatures_meta: dict, issue_categories: dict,
+                            force: bool = False) -> tuple[bool, str]:
     """ONE combined email to the global digest recipients: every active store's
     opening + closing WhatsApp PDF attached + a per-store summary that details any
     violations / issues / out-of-zone temps tied to the store name. Stores with no
-    activity on the date are skipped. Returns (ok, message)."""
+    activity on the date are skipped. Idempotent per day unless force=True.
+    Returns (ok, message)."""
     import base64
+    if not force and _superdigest_already_sent(target_date):
+        return True, 'Digest already sent for this date (skipped duplicate).'
     recips = [r['email'] for r in list_digest_recipients() if r.get('active')]
     if not recips:
         return False, 'No active digest recipients.'

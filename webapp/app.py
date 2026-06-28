@@ -9,9 +9,9 @@ app = Flask(__name__)
 app.secret_key = 'mcq-mirrabooka-2024-secure-key'
 
 # ── Session security ─────────────────────────────────────────────────────────
-# Defence against shared-device drift: 30-minute idle timeout AND a hard
+# Defence against shared-device drift: 60-minute idle timeout AND a hard
 # 8-hour absolute cap from login (covers one full shift, no longer).
-SESSION_IDLE_TIMEOUT     = timedelta(minutes=30)
+SESSION_IDLE_TIMEOUT     = timedelta(minutes=60)
 SESSION_ABSOLUTE_TIMEOUT = timedelta(hours=8)
 app.config['PERMANENT_SESSION_LIFETIME'] = SESSION_ABSOLUTE_TIMEOUT
 
@@ -932,6 +932,21 @@ def migrate_multistore(db_path):
         for tbl in ('checklist_task_templates', 'temp_food_templates'):
             try:
                 conn.execute(f'CREATE INDEX IF NOT EXISTS idx_{tbl}_store_id ON {tbl}(store_id)')
+            except Exception:
+                pass
+        # 5) Self-heal orphan child rows left behind when a parent was deleted
+        #    while foreign_keys was OFF (the cascade never fired). Idempotent —
+        #    these rows reference a parent that no longer exists, so nothing can
+        #    ever display them; remove so PRAGMA foreign_key_check stays clean.
+        for child, parent, fk in (
+            ('checklist_tasks',  'checklist_sessions', 'session_id'),
+            ('checklist_photos', 'checklist_sessions', 'session_id'),
+            ('temp_readings',    'temp_sessions',      'session_id'),
+            ('defrost_checks',   'defrost_records',    'record_id'),
+        ):
+            try:
+                conn.execute(
+                    f'DELETE FROM {child} WHERE {fk} NOT IN (SELECT id FROM {parent})')
             except Exception:
                 pass
     finally:
@@ -2073,6 +2088,15 @@ def _enforce_session_timeout():
     return None
 
 
+@app.route('/ping')
+def keepalive_ping():
+    """Lightweight keepalive hit by the client while the user is actively typing.
+    Not exempt from the timeout middleware, so reaching here bumps
+    session['last_activity'] — keeping the server session alive during long
+    form-filling so a later Submit never lands on an expired session."""
+    return ('', 204)
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def login_page():
     error = None
@@ -2846,6 +2870,7 @@ def history():
     date_from    = request.args.get('date_from', (date.today()-timedelta(days=30)).isoformat())
     date_to      = request.args.get('date_to',   date.today().isoformat())
     rec_type     = request.args.get('type', 'all')
+    chk_type     = request.args.get('chk_type', 'all')
     staff_filter = request.args.get('staff', '')
 
     chk_scope, chk_sp = store_filter_clause('cs')
@@ -2857,6 +2882,9 @@ def history():
                (SELECT COUNT(*) FROM checklist_tasks WHERE session_id=cs.id) as total_count
                FROM checklist_sessions cs WHERE cs.date BETWEEN ? AND ? AND {chk_scope}'''
         p = [date_from, date_to] + chk_sp
+        if chk_type and chk_type != 'all' and chk_type in CHECKLISTS:
+            q += ' AND cs.type=?'
+            p.append(chk_type)
         if staff_filter:
             q += ' AND (cs.submitted_by=? OR cs.responsible=?)'
             p += [staff_filter, staff_filter]
@@ -2875,7 +2903,8 @@ def history():
     return render_template('history.html',
         chk_records=chk_records, temp_records=temp_records,
         date_from=date_from, date_to=date_to,
-        rec_type=rec_type, staff_filter=staff_filter, staff=get_active_staff(),
+        rec_type=rec_type, chk_type=chk_type, checklists=CHECKLISTS,
+        staff_filter=staff_filter, staff=get_active_staff(),
     )
 
 # ─── Manager Panel ─────────────────────────────────────────────────────────────
@@ -3749,6 +3778,139 @@ def export_checklist_pdf(session_id):
     buf.seek(0)
     fname = f'MCQ_Checklist_{sess["type"]}_{sess["section"]}_{sess["date"]}.pdf'
     return send_file(buf, mimetype='application/pdf', as_attachment=True, download_name=fname)
+
+
+@app.route('/checklist/<chk_type>/print.pdf')
+@login_required
+def checklist_blank_pdf(chk_type):
+    """Elegant BLANK checklist sheet for staff to print and tick by hand daily.
+    ?section=opening|closing|both (default both)."""
+    from html import escape
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    chk = CHECKLISTS.get(chk_type)
+    if not chk:
+        return redirect(url_for('dashboard'))
+    section = (request.args.get('section') or 'both').lower()
+    if section not in ('opening', 'closing', 'both'):
+        section = 'both'
+    sections = ['opening', 'closing'] if section == 'both' else [section]
+
+    with get_db() as conn:
+        row = conn.execute('SELECT name FROM stores WHERE id=?', (current_store_id(),)).fetchone()
+    store_name = ((row['name'] if row else '') or 'MCQ Cafe').strip()
+
+    accent = colors.HexColor(chk.get('color') or '#2E7D32')
+    INK = colors.HexColor('#1A1A2E')
+    MUTED = colors.HexColor('#6E757E')
+    SOFT = colors.HexColor('#E8EBEF')
+    font_name, bold_font = register_pdf_fonts()
+    MARGIN = 12 * mm
+    USABLE = A4[0] - 2 * MARGIN
+
+    base = getSampleStyleSheet()
+    S = {
+        'task': ParagraphStyle('task', parent=base['BodyText'], fontName=font_name,
+                               fontSize=10, leading=12.5, textColor=INK),
+        'th': ParagraphStyle('th', parent=base['Normal'], fontName=bold_font, fontSize=9,
+                             leading=11, textColor=colors.white),
+        'small': ParagraphStyle('small', parent=base['Normal'], fontName=font_name,
+                                fontSize=8.5, leading=11, textColor=MUTED),
+        'wr': ParagraphStyle('wr', parent=base['Normal'], fontName=bold_font, fontSize=10,
+                             leading=14, textColor=INK),
+    }
+
+    def checkbox():
+        b = Table([['']], colWidths=[5.5 * mm], rowHeights=[5.5 * mm])
+        b.setStyle(TableStyle([('BOX', (0, 0), (-1, -1), 0.9, colors.HexColor('#9AA0A8')),
+                               ('ROUNDEDCORNERS', [1, 1, 1, 1])]))
+        return b
+
+    story = []
+    # Header band
+    hdr = Table([[Paragraph(
+        f'<font color="white" size="18"><b>{escape(chk.get("title", chk_type))} Checklist</b></font><br/>'
+        f'<font color="#FFFFFF" size="10">{escape(store_name)} &middot; Daily — tick each task as it is completed</font>',
+        ParagraphStyle('h', fontName=bold_font, leading=22))]], colWidths=[USABLE])
+    hdr.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), accent),
+        ('LEFTPADDING', (0, 0), (-1, -1), 16), ('RIGHTPADDING', (0, 0), (-1, -1), 16),
+        ('TOPPADDING', (0, 0), (-1, -1), 14), ('BOTTOMPADDING', (0, 0), (-1, -1), 14),
+    ]))
+    story.append(hdr)
+    story.append(Spacer(1, 5 * mm))
+
+    # Write-in fields
+    line = '<font color="#9AA0A8">______________________</font>'
+    wr = Table([[Paragraph(f'Date: {line}', S['wr']),
+                 Paragraph(f'Staff name: {line}', S['wr']),
+                 Paragraph(f'Branch: {line}', S['wr'])]],
+               colWidths=[USABLE * 0.30, USABLE * 0.40, USABLE * 0.30])
+    wr.setStyle(TableStyle([('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+                            ('TOPPADDING', (0, 0), (-1, -1), 2)]))
+    story.append(wr)
+    story.append(Spacer(1, 5 * mm))
+
+    col_widths = [10 * mm, 8 * mm, USABLE - (10 + 8 + 26 + 20 + 26) * mm, 26 * mm, 20 * mm, 26 * mm]
+    for sec in sections:
+        tasks = chk.get(sec) or []
+        if not tasks:
+            continue
+        bar = Table([[Paragraph(f'<font color="white"><b>{sec.upper()} TASKS</b>'
+                                f'<font size="9"> &middot; {len(tasks)} items</font></font>',
+                                ParagraphStyle('bar', fontName=bold_font, fontSize=12))]],
+                    colWidths=[USABLE])
+        bar.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), accent),
+            ('LEFTPADDING', (0, 0), (-1, -1), 12), ('TOPPADDING', (0, 0), (-1, -1), 7),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 7)]))
+        story.append(bar)
+
+        data = [[Paragraph('✓', S['th']), Paragraph('#', S['th']), Paragraph('Task', S['th']),
+                 Paragraph('Done by', S['th']), Paragraph('Time', S['th']), Paragraph('Note', S['th'])]]
+        for i, t in enumerate(tasks, 1):
+            data.append([checkbox(), Paragraph(str(i), S['small']),
+                         Paragraph(escape(t), S['task']), '', '', ''])
+        tbl = Table(data, colWidths=col_widths, repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), accent),
+            ('ALIGN', (0, 0), (1, -1), 'CENTER'), ('ALIGN', (4, 0), (4, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 0.4, SOFT),
+            ('TOPPADDING', (0, 1), (-1, -1), 7), ('BOTTOMPADDING', (0, 1), (-1, -1), 7),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6), ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#FAFBFD')]),
+        ]))
+        story.append(tbl)
+        story.append(Spacer(1, 6 * mm))
+
+    story.append(Spacer(1, 2 * mm))
+    sign = Table([[Paragraph('Staff signature: ' + line, S['wr']),
+                   Paragraph('Manager verify: ' + line, S['wr'])]],
+                 colWidths=[USABLE * 0.5, USABLE * 0.5])
+    story.append(sign)
+
+    def footer(canvas, doc_obj):
+        canvas.saveState()
+        canvas.setFont(font_name, 8)
+        canvas.setFillColor(MUTED)
+        canvas.drawString(MARGIN, 7 * mm, f'{store_name} — {chk.get("title", chk_type)} blank checklist')
+        canvas.drawRightString(A4[0] - MARGIN, 7 * mm, f'Page {doc_obj.page}')
+        canvas.restoreState()
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=MARGIN, rightMargin=MARGIN,
+                            topMargin=12 * mm, bottomMargin=12 * mm)
+    doc.build(story, onFirstPage=footer, onLaterPages=footer)
+    buf.seek(0)
+    fname = f'MCQ_BlankChecklist_{chk_type}_{section}.pdf'
+    return send_file(buf, mimetype='application/pdf', as_attachment=False, download_name=fname)
+
 
 @app.route('/export/temperature/<int:session_id>/excel')
 @admin_required
@@ -5438,7 +5600,7 @@ def super_digest_regenerate_token():
 def super_digest_send_now():
     target_date = request.form.get('date', date.today().isoformat())
     ok, msg = email_service.send_superadmin_digest(
-        target_date, CHECKLISTS, TEMPERATURES, ISSUE_CATEGORIES)
+        target_date, CHECKLISTS, TEMPERATURES, ISSUE_CATEGORIES, force=True)
     return jsonify({'ok': ok, 'message': msg})
 
 

@@ -30,14 +30,14 @@
 
     <!-- Mode selector -->
     <div class="login-modes mb-4">
-      <button type="button" class="mode-btn active" id="btn-user" onclick="setMode('user')">
-        <i class="fas fa-user me-1"></i>Staff
+      <button type="button" class="mode-btn active" id="btn-user" data-role="user" onclick="setMode('user')">
+        <i class="fas fa-user"></i><span>Staff</span>
       </button>
-      <button type="button" class="mode-btn" id="btn-admin" onclick="setMode('admin')">
-        <i class="fas fa-user-shield me-1"></i>Admin
+      <button type="button" class="mode-btn" id="btn-admin" data-role="admin" onclick="setMode('admin')">
+        <i class="fas fa-user-shield"></i><span>Admin</span>
       </button>
-      <button type="button" class="mode-btn" id="btn-super_admin" onclick="setMode('super_admin')">
-        <i class="fas fa-crown me-1"></i>Super Admin
+      <button type="button" class="mode-btn" id="btn-super_admin" data-role="super" onclick="setMode('super_admin')">
+        <i class="fas fa-crown"></i><span>Super Admin</span>
       </button>
     </div>
 

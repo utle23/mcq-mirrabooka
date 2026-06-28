@@ -36,6 +36,10 @@
         </span>
         <a href="/checklist/view/{{ existing.id }}" class="btn btn-sm btn-outline-secondary">View Record</a>
       {% endif %}
+      <a href="/checklist/{{ chk_type }}/print.pdf?section=both" target="_blank"
+         class="btn btn-sm btn-outline-dark ms-auto" title="Print a blank sheet to tick by hand">
+        <i class="fas fa-print me-1"></i>Print blank
+      </a>
     </div>
   </div>
 </div>
