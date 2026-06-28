@@ -1,21 +1,23 @@
 {# Shared quick-nav bar for the daily tasks. Built from injected globals
    (checklists, temperatures, week_start_nav). Included by base.html on the
-   operational pages so staff can hop between tasks without the sidebar. #}
+   operational pages so staff can hop between tasks without the sidebar.
+   NOTE: the Checklists dropdown sits OUTSIDE .daily-bar-scroll so its menu is
+   not clipped by the horizontal-scroll overflow. #}
 <div class="daily-bar">
   <span class="daily-bar-label"><i class="fas fa-bolt me-1"></i><span>Daily</span></span>
+  <div class="dropdown daily-dd">
+    <button class="daily-pill {% if current_ep in ('checklist_form','checklist_view') %}active{% endif %}"
+            type="button" data-bs-toggle="dropdown" data-bs-auto-close="true" aria-expanded="false">
+      <i class="fas fa-clipboard-check"></i><span>Checklists</span><i class="fas fa-caret-down"></i>
+    </button>
+    <ul class="dropdown-menu">
+      {% for key, chk in checklists.items() %}
+      <li><a class="dropdown-item" href="/checklist/{{ key }}">
+        <i class="fas fa-clipboard-check fa-fw me-1" style="color:{{ chk.color }}"></i>{{ chk.title }}</a></li>
+      {% endfor %}
+    </ul>
+  </div>
   <div class="daily-bar-scroll">
-    <div class="dropdown">
-      <button class="daily-pill {% if current_ep in ('checklist_form','checklist_view') %}active{% endif %}"
-              type="button" data-bs-toggle="dropdown" aria-expanded="false">
-        <i class="fas fa-clipboard-check"></i><span>Checklists</span><i class="fas fa-caret-down"></i>
-      </button>
-      <ul class="dropdown-menu">
-        {% for key, chk in checklists.items() %}
-        <li><a class="dropdown-item" href="/checklist/{{ key }}">
-          <i class="fas fa-clipboard-check fa-fw me-1" style="color:{{ chk.color }}"></i>{{ chk.title }}</a></li>
-        {% endfor %}
-      </ul>
-    </div>
     {% for key, t in temperatures.items() %}
     <a class="daily-pill {% if current_ep=='temperature_form' and request.view_args.get('temp_type')==key %}active{% endif %}"
        href="/temperature/{{ key }}">
