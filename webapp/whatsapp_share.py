@@ -680,7 +680,7 @@ def build_daily_png(date_str: str, period: str | None = None) -> bytes:
               f'Generated {datetime.now().strftime("%a %d %b %Y · %H:%M")}',
               fill=(255, 255, 255, 180), font=f_body)
     draw.text((PAD, fy + 56),
-              'MCQ Mirrabooka Cafe — Vietnamese Street Food',
+              f'{_store_name()} Cafe — Vietnamese Street Food',
               fill=(255, 200, 200), font=f_small)
 
     out = BytesIO()
@@ -1062,7 +1062,7 @@ def build_checklist_png(session_id: int) -> bytes:
               f'Generated {datetime.now().strftime("%a %d %b %Y · %H:%M")}',
               fill=(255, 255, 255, 180), font=f_body)
     draw.text((PAD, fy + 54),
-              'MCQ Mirrabooka Cafe — Vietnamese Street Food',
+              f'{_store_name()} Cafe — Vietnamese Street Food',
               fill=(255, 200, 200), font=f_small)
 
     out = BytesIO()
@@ -1250,7 +1250,7 @@ def build_temperature_png(session_id: int) -> bytes:
               f'Generated {datetime.now().strftime("%a %d %b %Y · %H:%M")}',
               fill=(255, 255, 255, 180), font=f_body)
     draw.text((PAD, fy + 54),
-              'MCQ Mirrabooka Cafe — Vietnamese Street Food',
+              f'{_store_name()} Cafe — Vietnamese Street Food',
               fill=(255, 200, 200), font=f_small)
 
     out = BytesIO()
@@ -1442,7 +1442,7 @@ def build_daily_pdf(date_str: str, period: str | None = None) -> bytes:
         canvas.setFont(bold_font, 9)
         canvas.setFillColor(colors.white)
         canvas.drawString(MARGIN, PAGE_H - 8 * mm,
-                          f'MCQ MIRRABOOKA · {period_meta["label"].upper()} REPORT')
+                          f'{_store_name().upper()} · {period_meta["label"].upper()} REPORT')
         try:
             d_str = datetime.strptime(date_str, '%Y-%m-%d').strftime('%a %d %b %Y')
         except Exception:
