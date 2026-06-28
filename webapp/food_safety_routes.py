@@ -20,7 +20,7 @@ import sqlite3
 from datetime import datetime, date
 from functools import wraps
 
-from store_scope import current_store_id, store_guard_clause
+from store_scope import current_store_id, store_guard_clause, perth_today, perth_now
 
 try:
     import email_service
@@ -262,7 +262,7 @@ def defrost_home():
     return render_template('defrost.html',
         active=active, closed=closed,
         notes=DEFROST_NOTES, staff=_get_staff(),
-        today=date.today().isoformat(), now_time=datetime.now().strftime('%H:%M'),
+        today=perth_today().isoformat(), now_time=perth_now().strftime('%H:%M'),
         date_from=df, date_to=dt,
         lo=DEFROST_LO, hi=DEFROST_HI, default_supplier=DEFAULT_SUPPLIER,
         is_admin=_is_admin())
@@ -275,7 +275,7 @@ def defrost_add():
     if not product:
         return redirect(url_for('defrost.defrost_home'))
     supplier   = request.form.get('supplier_name', '').strip() or DEFAULT_SUPPLIER
-    started_on = (request.form.get('started_on') or date.today().isoformat()).strip()
+    started_on = (request.form.get('started_on') or perth_today().isoformat()).strip()
     created_by = request.form.get('created_by', '').strip()
     notes      = request.form.get('notes', '').strip()
     with _get_db() as conn:
@@ -295,7 +295,7 @@ def defrost_check(rid):
             f'SELECT * FROM defrost_records WHERE id=? AND {guard}', [rid] + gp).fetchone()
         if not rec:
             return redirect(url_for('defrost.defrost_home'))
-        checked_on   = (request.form.get('checked_on') or date.today().isoformat()).strip()
+        checked_on   = (request.form.get('checked_on') or perth_today().isoformat()).strip()
         checked_time = request.form.get('checked_time', '').strip()
         core_temp    = _float_or_none(request.form.get('core_temp'))
         condition    = request.form.get('physical_condition', '').strip() or 'Ready to use'
@@ -363,7 +363,7 @@ def defrost_edit(rid):
             WHERE id=? AND {guard}''',
             [product,
              request.form.get('supplier_name', '').strip() or DEFAULT_SUPPLIER,
-             (request.form.get('started_on') or date.today().isoformat()).strip(),
+             (request.form.get('started_on') or perth_today().isoformat()).strip(),
              request.form.get('notes', '').strip(), rid] + gp)
     return redirect(url_for('defrost.defrost_home'))
 
@@ -376,7 +376,7 @@ def defrost_check_edit(cid):
         conn.execute(f'''UPDATE defrost_checks SET
             checked_on=?, checked_time=?, core_temp=?, physical_condition=?, checked_by=?
             WHERE id=? AND record_id IN (SELECT r.id FROM defrost_records r WHERE {guard})''',
-            [(request.form.get('checked_on') or date.today().isoformat()).strip(),
+            [(request.form.get('checked_on') or perth_today().isoformat()).strip(),
              request.form.get('checked_time', '').strip(),
              _float_or_none(request.form.get('core_temp')),
              request.form.get('physical_condition', '').strip() or 'Ready to use',
@@ -453,7 +453,7 @@ def defrost_export_excel():
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[chr(64 + i)].width = w
     buf = BytesIO(); wb.save(buf); buf.seek(0)
-    fname = f'MCQ_Defrosting_{date.today().isoformat()}.xlsx'
+    fname = f'MCQ_Defrosting_{perth_today().isoformat()}.xlsx'
     return send_file(buf, as_attachment=True, download_name=fname,
                      mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
@@ -517,7 +517,7 @@ def defrost_export_pdf():
                             topMargin=12 * mm, bottomMargin=12 * mm)
     doc.build(story)
     buf.seek(0)
-    fname = f'MCQ_Defrosting_{date.today().isoformat()}.pdf'
+    fname = f'MCQ_Defrosting_{perth_today().isoformat()}.pdf'
     return send_file(buf, mimetype='application/pdf', as_attachment=True, download_name=fname)
 
 
@@ -526,7 +526,7 @@ def defrost_export_pdf():
 def _delivery_form_values():
     return dict(
         supplier_name=request.form.get('supplier_name', '').strip() or DEFAULT_SUPPLIER,
-        receiving_date=(request.form.get('receiving_date') or date.today().isoformat()).strip(),
+        receiving_date=(request.form.get('receiving_date') or perth_today().isoformat()).strip(),
         receiving_time=request.form.get('receiving_time', '').strip(),
         product_name=request.form.get('product_name', '').strip(),
         quantity=request.form.get('quantity', '').strip(),
@@ -556,7 +556,7 @@ def delivery_home():
                ORDER BY receiving_date DESC, id DESC''', params).fetchall()]
     return render_template('delivery.html',
         rows=rows, staff=_get_staff(),
-        today=date.today().isoformat(), now_time=datetime.now().strftime('%H:%M'),
+        today=perth_today().isoformat(), now_time=perth_now().strftime('%H:%M'),
         date_from=df, date_to=dt,
         default_supplier=DEFAULT_SUPPLIER, hi=DEFROST_HI, is_admin=_is_admin())
 

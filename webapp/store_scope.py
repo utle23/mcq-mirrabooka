@@ -7,7 +7,22 @@ logic without circular imports. These only read flask.session / flask.request.
 Canonical key is stores.id, carried in session['store_id']. The legacy
 session['branch'] text is display/back-compat only.
 """
+from datetime import datetime, timezone, timedelta
+
 from flask import session, request
+
+# Perth is UTC+8 with no daylight saving. The server (PythonAnywhere) runs in
+# UTC, so date.today() would be a day behind during 00:00–08:00 Perth. Use these
+# for every user-facing "today" so the operational date is always the Perth date.
+PERTH_TZ = timezone(timedelta(hours=8))
+
+
+def perth_now():
+    return datetime.now(PERTH_TZ)
+
+
+def perth_today():
+    return perth_now().date()
 
 
 def is_super_admin():

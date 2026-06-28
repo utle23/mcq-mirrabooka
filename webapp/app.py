@@ -1,6 +1,17 @@
+# Run the whole process in Perth time so date.today() / datetime.now() /
+# SQLite datetime('now','localtime') all use the shop's local date — the host
+# (PythonAnywhere) is UTC, which is a day behind during 00:00–08:00 Perth.
+# Must run before anything reads the clock.
+import os, time
+os.environ['TZ'] = 'Australia/Perth'
+try:
+    time.tzset()
+except Exception:
+    pass
+
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_file, send_from_directory, flash, abort
 from functools import wraps
-import sqlite3, os, json, calendar, uuid
+import sqlite3, json, calendar, uuid
 from datetime import datetime, date, timedelta, timezone
 from io import BytesIO
 from werkzeug.utils import secure_filename
@@ -2002,6 +2013,13 @@ def perth_now():
     return datetime.now(PERTH_TZ)
 
 
+def perth_today():
+    """Today's date in Perth (UTC+8). Use this for every user-facing 'today'
+    default — the server (PythonAnywhere) runs in UTC, so date.today() would be a
+    day behind during 00:00–08:00 Perth."""
+    return perth_now().date()
+
+
 def opening_locked(for_date=None):
     """Opening locks only for TODAY's record after 3 PM Perth (for everyone).
 
@@ -2016,7 +2034,7 @@ def opening_locked(for_date=None):
 
 @app.context_processor
 def inject_globals():
-    _today = date.today()
+    _today = perth_today()
     _week_start = (_today - timedelta(days=_today.weekday())).isoformat()
     return dict(
         checklists=CHECKLISTS,
@@ -2201,8 +2219,8 @@ def super_set_store():
 @app.route('/')
 @login_required
 def dashboard():
-    today_str = date.today().isoformat()
-    week_ago  = (date.today() - timedelta(days=7)).isoformat()
+    today_str = perth_today().isoformat()
+    week_ago  = (perth_today() - timedelta(days=7)).isoformat()
 
     sid = current_store_id()
     with get_db() as conn:
@@ -2295,7 +2313,7 @@ def _template_tasks(conn, chk_type, section, store_id=None):
 def checklist_form(chk_type):
     if chk_type not in CHECKLISTS:
         return redirect(url_for('dashboard'))
-    chk_date = request.args.get('date', date.today().isoformat())
+    chk_date = request.args.get('date', perth_today().isoformat())
     # Only TODAY's Opening locks after 3 PM Perth; past dates stay open for review.
     locked = opening_locked(chk_date)
     section  = request.args.get('section') or ('closing' if locked else 'opening')
@@ -2416,7 +2434,7 @@ def delete_checklist_task():
 def checklist_save(chk_type):
     if chk_type not in CHECKLISTS:
         return redirect(url_for('dashboard'))
-    chk_date       = request.form.get('date', date.today().isoformat())
+    chk_date       = request.form.get('date', perth_today().isoformat())
     section        = request.form.get('section', 'opening')
     # Server-side lock: only TODAY's Opening is locked after 3 PM Perth; past dates
     # stay editable so earlier records can be corrected.
@@ -2642,7 +2660,7 @@ def checklist_verify(session_id):
 def temperature_form(temp_type):
     if temp_type not in TEMPERATURES:
         return redirect(url_for('dashboard'))
-    temp_date = request.args.get('date', date.today().isoformat())
+    temp_date = request.args.get('date', perth_today().isoformat())
     with get_db() as conn:
         temp_data = get_temp_data_for_form(conn, temp_type, store_id=current_store_id())
         existing = conn.execute(
@@ -2735,7 +2753,7 @@ def delete_temperature_food():
 def temperature_save(temp_type):
     if temp_type not in TEMPERATURES:
         return redirect(url_for('dashboard'))
-    temp_date    = request.form.get('date', date.today().isoformat())
+    temp_date    = request.form.get('date', perth_today().isoformat())
     recorded_by  = request.form.get('recorded_by', '')
     checked_by   = request.form.get('checked_by', '')
     notes        = request.form.get('notes', '')
@@ -2876,8 +2894,8 @@ def temperature_view(session_id):
 @app.route('/history')
 @login_required
 def history():
-    date_from    = request.args.get('date_from', (date.today()-timedelta(days=30)).isoformat())
-    date_to      = request.args.get('date_to',   date.today().isoformat())
+    date_from    = request.args.get('date_from', (perth_today()-timedelta(days=30)).isoformat())
+    date_to      = request.args.get('date_to',   perth_today().isoformat())
     rec_type     = request.args.get('type', 'all')
     chk_type     = request.args.get('chk_type', 'all')
     staff_filter = request.args.get('staff', '')
@@ -2921,14 +2939,14 @@ def history():
 @app.route('/manager')
 @admin_required
 def manager():
-    today_str = date.today().isoformat()
+    today_str = perth_today().isoformat()
     # Panel is scoped to a single day; defaults to today but can be sorted/
     # navigated by date via ?date=YYYY-MM-DD.
     sel_date = (request.args.get('date', '') or '').strip() or today_str
     try:
         d = datetime.strptime(sel_date, '%Y-%m-%d').date()
     except ValueError:
-        d = date.today()
+        d = perth_today()
         sel_date = today_str
     prev_date = (d - timedelta(days=1)).isoformat()
     next_date = (d + timedelta(days=1)).isoformat()
