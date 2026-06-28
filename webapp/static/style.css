@@ -233,13 +233,13 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
 
 /* ── Login Page ── */
 .login-body {
-  /* Navy + Gold "5-star" backdrop: deep navy → royal blue, with a warm gold
-     glow up top and a royal glow bottom-right for depth. */
+  /* Emerald "jewel" backdrop: vivid emerald gradient with mint + emerald glows
+     — bright and luminous (not dark). */
   background:
-    radial-gradient(720px 420px at 50% -8%,  rgba(233,199,90,0.42), transparent 58%),
-    radial-gradient(680px 460px at 112% 112%, rgba(59,130,246,0.40), transparent 56%),
-    radial-gradient(560px 420px at -6% 98%,  rgba(212,175,55,0.20), transparent 60%),
-    linear-gradient(140deg, #08182F 0%, #0F2A57 45%, #1D4ED8 100%);
+    radial-gradient(760px 440px at 50% -8%,  rgba(167,243,208,0.34), transparent 60%),
+    radial-gradient(700px 460px at 112% 112%, rgba(16,185,129,0.48), transparent 56%),
+    radial-gradient(560px 420px at -6% 98%,  rgba(5,150,105,0.42), transparent 60%),
+    linear-gradient(140deg, #065F46 0%, #059669 48%, #10B981 100%);
   min-height: 100vh;
   display: flex;
   align-items: center;
@@ -251,16 +251,16 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
   background: #FFFFFF;
   border-radius: 22px;
   padding: 40px 36px;
-  border: 1px solid rgba(212,175,55,0.55);   /* gold edge */
-  box-shadow: 0 30px 76px rgba(4,16,38,0.58),
+  border: 1px solid rgba(16,185,129,0.45);   /* emerald edge */
+  box-shadow: 0 30px 76px rgba(4,40,30,0.50),
               0 0 0 4px rgba(255,255,255,0.06),
               0 1px 0 rgba(255,255,255,0.7) inset;
 }
-/* thin gold accent bar across the top of the card */
+/* thin emerald accent bar across the top of the card */
 .login-card::before {
   content: ''; display: block; height: 4px; margin: -40px -36px 26px;
   border-radius: 22px 22px 0 0;
-  background: linear-gradient(90deg, #C99A12, #F5D77A, #C99A12);
+  background: linear-gradient(90deg, #059669, #34D399, #059669);
 }
 .login-header { text-align: center; margin-bottom: 28px; }
 .login-logo { width: 132px; height: 132px; object-fit: contain; margin-bottom: 14px;
