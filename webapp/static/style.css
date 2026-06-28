@@ -233,13 +233,14 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
 
 /* ── Login Page ── */
 .login-body {
-  /* Emerald "jewel" backdrop: vivid emerald gradient with mint + emerald glows
-     — bright and luminous (not dark). */
+  /* Warm marble: soft cream / peach / champagne-gold / sage radial blooms
+     blended over an ivory base — warm, harmonious, "cẩm thạch ấm áp". */
   background:
-    radial-gradient(760px 440px at 50% -8%,  rgba(167,243,208,0.34), transparent 60%),
-    radial-gradient(700px 460px at 112% 112%, rgba(16,185,129,0.48), transparent 56%),
-    radial-gradient(560px 420px at -6% 98%,  rgba(5,150,105,0.42), transparent 60%),
-    linear-gradient(140deg, #065F46 0%, #059669 48%, #10B981 100%);
+    radial-gradient(680px 520px at 12% 16%, rgba(245,224,203,0.95), transparent 60%),
+    radial-gradient(620px 480px at 88% 20%, rgba(235,217,180,0.90), transparent 60%),
+    radial-gradient(720px 560px at 80% 90%, rgba(216,228,216,0.85), transparent 62%),
+    radial-gradient(640px 520px at 18% 92%, rgba(244,225,214,0.90), transparent 60%),
+    linear-gradient(135deg, #FBF7F1 0%, #F4EADC 50%, #EFE5D4 100%);
   min-height: 100vh;
   display: flex;
   align-items: center;
@@ -248,19 +249,22 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
 }
 .login-wrapper { width: 100%; max-width: 430px; }
 .login-card {
-  background: #FFFFFF;
-  border-radius: 22px;
+  /* Crystal-glass card (frosted) floating over the marble */
+  background: rgba(255,255,255,0.55);
+  border-radius: 24px;
   padding: 40px 36px;
-  border: 1px solid rgba(16,185,129,0.45);   /* emerald edge */
-  box-shadow: 0 30px 76px rgba(4,40,30,0.50),
-              0 0 0 4px rgba(255,255,255,0.06),
-              0 1px 0 rgba(255,255,255,0.7) inset;
+  border: 1px solid rgba(255,255,255,0.7);
+  box-shadow: 0 26px 64px rgba(120,95,55,0.28),
+              0 0 0 1px rgba(214,179,130,0.18),
+              0 1px 0 rgba(255,255,255,0.85) inset;
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  backdrop-filter: blur(18px) saturate(140%);
 }
-/* thin emerald accent bar across the top of the card */
+/* soft champagne accent bar across the top of the glass card */
 .login-card::before {
   content: ''; display: block; height: 4px; margin: -40px -36px 26px;
-  border-radius: 22px 22px 0 0;
-  background: linear-gradient(90deg, #059669, #34D399, #059669);
+  border-radius: 24px 24px 0 0;
+  background: linear-gradient(90deg, #D9B382, #F3E0BD, #D9B382);
 }
 .login-header { text-align: center; margin-bottom: 28px; }
 .login-logo { width: 132px; height: 132px; object-fit: contain; margin-bottom: 14px;
