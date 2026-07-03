@@ -845,7 +845,10 @@ def packaging_compose():
     if not chosen:
         return jsonify({'error': 'No items selected. Set a quantity > 0 on at least one row.'}), 400
 
-    subject, body = _compose_order(supplier, chosen, delivery_date, extra_note)
+    try:
+        subject, body = _compose_order(supplier, chosen, delivery_date, extra_note)
+    except Exception as e:
+        return jsonify({'error': f'Could not compose the order: {type(e).__name__}: {e}'}), 500
     cc = supplier.get('cc_emails', '')
     to = supplier['email']
 
@@ -938,9 +941,15 @@ def packaging_send():
     if not chosen:
         return jsonify({'error': 'No items selected.'}), 400
 
-    subject, body = _compose_order(supplier, chosen, delivery_date, extra_note)
-    docx_bytes = _build_order_docx(supplier, chosen, delivery_date, extra_note, composed_by)
-    filename = _order_filename(supplier, delivery_date)
+    # Build the email + Word document. Any failure here must return JSON — an
+    # unhandled 500 renders an HTML page, which iOS Safari's resp.json() reports
+    # as the cryptic "The string did not match the expected pattern."
+    try:
+        subject, body = _compose_order(supplier, chosen, delivery_date, extra_note)
+        docx_bytes = _build_order_docx(supplier, chosen, delivery_date, extra_note, composed_by)
+        filename = _order_filename(supplier, delivery_date)
+    except Exception as e:
+        return jsonify({'error': f'Could not build the order document: {type(e).__name__}: {e}'}), 500
 
     # Send via Brevo
     try:
