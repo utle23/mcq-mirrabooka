@@ -948,6 +948,11 @@ def packaging_send():
         subject, body = _compose_order(supplier, chosen, delivery_date, extra_note)
         docx_bytes = _build_order_docx(supplier, chosen, delivery_date, extra_note, composed_by)
         filename = _order_filename(supplier, delivery_date)
+    except ModuleNotFoundError as e:
+        return jsonify({'error':
+            'The server is missing the Word library (python-docx). On PythonAnywhere '
+            'open a Bash console and run:  pip3 install --user python-docx  then Reload '
+            f'the web app. [{e}]'}), 500
     except Exception as e:
         return jsonify({'error': f'Could not build the order document: {type(e).__name__}: {e}'}), 500
 
