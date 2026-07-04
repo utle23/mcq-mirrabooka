@@ -1,0 +1,9 @@
+# Third-party libraries the app needs on every machine that RUNS it (incl. the
+# PythonAnywhere server). `git pull` only copies the code — these must be
+# installed separately:  pip3 install --user -r requirements.txt
+Flask
+python-docx      # Word order documents (packaging)
+reportlab        # PDF exports (checklists, defrost, WhatsApp report)
+openpyxl         # Excel exports
+Pillow           # image handling (photos, logo)
+certifi          # SSL certificate bundle (Brevo email over HTTPS)
