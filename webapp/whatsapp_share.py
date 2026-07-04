@@ -186,18 +186,17 @@ def _collect_today(date_str: str, period: str | None = None, store_id=None) -> d
             r['meta']   = meta
             out['checklists'].append(r)
 
-        # Temperature
-        temp_rows = []
-        if period_meta['includes_food_temps']:
-            placeholders = ','.join('?' for _ in OPENING_TEMPERATURE_TYPES)
-            temp_rows = conn.execute(f'''
-                SELECT ts.*,
-                       (SELECT COUNT(*) FROM temp_readings WHERE session_id=ts.id) AS reading_count,
-                       (SELECT COUNT(*) FROM temp_readings WHERE session_id=ts.id AND discarded='Y') AS discarded
-                FROM temp_sessions ts
-                WHERE ts.date=? AND ts.store_id=? AND ts.type IN ({placeholders})
-                ORDER BY ts.type
-            ''', (date_str, sid, *sorted(OPENING_TEMPERATURE_TYPES))).fetchall()
+        # Food temperature (chef / banh_mi / pastry) — recorded once per day, so
+        # include it in BOTH the opening AND closing reports.
+        placeholders = ','.join('?' for _ in OPENING_TEMPERATURE_TYPES)
+        temp_rows = conn.execute(f'''
+            SELECT ts.*,
+                   (SELECT COUNT(*) FROM temp_readings WHERE session_id=ts.id) AS reading_count,
+                   (SELECT COUNT(*) FROM temp_readings WHERE session_id=ts.id AND discarded='Y') AS discarded
+            FROM temp_sessions ts
+            WHERE ts.date=? AND ts.store_id=? AND ts.type IN ({placeholders})
+            ORDER BY ts.type
+        ''', (date_str, sid, *sorted(OPENING_TEMPERATURE_TYPES))).fetchall()
         for r in temp_rows:
             r = dict(r)
             meta = TEMPERATURES_META.get(r['type'], {})
@@ -1899,142 +1898,6 @@ def build_daily_pdf(date_str: str, period: str | None = None, store_id=None) -> 
                                ]))
             story.append(photo_grid)
 
-    # ── Per-temperature pages ──────────────────────────────────────────────
-    if data['temperatures']:
-        story.append(PageBreak())
-        story.append(Paragraph('OPENING TEMPERATURE RECORDS', S['section']))
-        story.append(Paragraph(
-            f"{len(data['temperatures'])} food temperature record(s) included in this opening report. "
-            "Each station's readings follow on its own page.", S['body']))
-
-    for t in data['temperatures']:
-        full = _temperature_detail(t['id']) or t
-        col_hex = (full['meta'].get('color') or '#888888')
-        col = colors.HexColor(col_hex)
-
-        story.append(PageBreak())
-        title = (full['meta'].get('title') or full['type']).upper()
-        hdr_tbl = Table([[
-            Paragraph(f'<font color="white" size="20"><b>{_esc(title)}</b></font><br/>'
-                      f'<font color="#EADCC0" size="11">TEMPERATURE RECORD · '
-                      f'{full["date"]}</font>',
-                      ParagraphStyle('th1', fontName=bold_font, leading=24))
-        ]], colWidths=[USABLE_W])
-        hdr_tbl.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, -1), col),
-            ('LEFTPADDING', (0, 0), (-1, -1), 16),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 16),
-            ('TOPPADDING', (0, 0), (-1, -1), 14),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 14),
-        ]))
-        story.append(hdr_tbl)
-        story.append(Spacer(1, 4 * mm))
-
-        unsafe_count = sum(
-            1 for r in full['readings']
-            for cc in ('c1_temp','c2_temp','c3_temp','c4_temp','c5_temp')
-            if _temp_unsafe(r['food_kind'], r[cc])
-        )
-        discarded = sum(1 for r in full['readings'] if (r.get('discarded') or 'N').upper() == 'Y')
-
-        # Pills
-        pills = [
-            (f'{len(full["readings"])} FOODS', OK),
-            (f'{unsafe_count} OUT OF ZONE', BAD if unsafe_count else OK),
-        ]
-        if discarded:
-            pills.append((f'{discarded} DISCARDED', BAD))
-        pill_cells = []
-        for txt, c_ in pills:
-            cell = Table([[Paragraph(f'<font color="white"><b>{_esc(txt)}</b></font>',
-                                     ParagraphStyle('pt', fontName=bold_font, fontSize=9, alignment=TA_CENTER))]],
-                         rowHeights=[7 * mm])
-            cell.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, -1), c_),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ('LEFTPADDING', (0, 0), (-1, -1), 12),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 12),
-            ]))
-            pill_cells.append(cell)
-        pill_row = Table([pill_cells], colWidths=[USABLE_W / max(len(pills),1)] * len(pills))
-        pill_row.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                                      ('LEFTPADDING', (0, 0), (-1, -1), 2),
-                                      ('RIGHTPADDING', (0, 0), (-1, -1), 2)]))
-        story.append(pill_row)
-        story.append(Spacer(1, 5 * mm))
-
-        # Meta
-        meta = Table([
-            ['Recorded by', full.get('recorded_by') or '—',
-             'Checked by',  full.get('checked_by')  or '—'],
-        ], colWidths=[USABLE_W * 0.16, USABLE_W * 0.34,
-                       USABLE_W * 0.16, USABLE_W * 0.34])
-        meta.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, -1), colors.white),
-            ('FONTNAME', (0, 0), (-1, -1), font_name),
-            ('FONTNAME', (0, 0), (0, -1), bold_font),
-            ('FONTNAME', (2, 0), (2, -1), bold_font),
-            ('TEXTCOLOR', (0, 0), (0, -1), MUTED),
-            ('TEXTCOLOR', (2, 0), (2, -1), MUTED),
-            ('FONTSIZE', (0, 0), (-1, -1), 9.5),
-            ('TOPPADDING', (0, 0), (-1, -1), 7),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
-            ('LEFTPADDING', (0, 0), (-1, -1), 10),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ]))
-        story.append(meta)
-        story.append(Spacer(1, 6 * mm))
-
-        # Readings table
-        story.append(Paragraph('READINGS', S['section']))
-        head = ['Kind', 'Food item', 'C1', 'C2', 'C3', 'C4', 'C5', 'Note']
-        rows_data = [head]
-        for r in full['readings']:
-            kind = r['food_kind'] or 'cold'
-            kind_label = {'hot': 'HOT', 'room': 'ROOM'}.get(kind, 'COLD')
-            kind_color = colors.HexColor({'hot': '#FFE0B2', 'room': '#E0F2F1'}.get(kind, '#E1F5FE'))
-            kind_text  = colors.HexColor({'hot': '#C0392B', 'room': '#00897B'}.get(kind, '#1565C0'))
-
-            cells = [
-                Paragraph(f'<font color="{kind_text.hexval()}"><b>{kind_label}</b></font>',
-                          ParagraphStyle('kc', fontName=bold_font, fontSize=8, alignment=TA_CENTER)),
-                Paragraph(_esc(r['food_name']), S['food']),
-            ]
-            for cc in ('c1_temp','c2_temp','c3_temp','c4_temp','c5_temp'):
-                v = r[cc]
-                if v is None:
-                    cells.append(Paragraph('<font color="#999">—</font>',
-                                           ParagraphStyle('v', fontName=font_name, alignment=TA_CENTER, fontSize=10)))
-                else:
-                    unsafe = _temp_unsafe(kind, v)
-                    color_hex = '#C62828' if unsafe else '#2E7D32'
-                    cells.append(Paragraph(
-                        f'<font color="{color_hex}"><b>{v:g}°</b></font>',
-                        ParagraphStyle('v', fontName=bold_font, alignment=TA_CENTER, fontSize=10)))
-            note = r.get('notes') or ''
-            cells.append(Paragraph(f'<i>{_esc(note)}</i>', S['small']))
-            rows_data.append(cells)
-
-        col_widths = [USABLE_W * 0.08, USABLE_W * 0.32] + [USABLE_W * 0.07] * 5 + [USABLE_W * 0.25]
-        rt = Table(rows_data, colWidths=col_widths, repeatRows=1)
-        rt.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), NAVY),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('FONTNAME', (0, 0), (-1, 0), bold_font),
-            ('FONTSIZE', (0, 0), (-1, 0), 9),
-            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('GRID', (0, 0), (-1, -1), 0.3, SOFT),
-            ('TOPPADDING', (0, 0), (-1, -1), 6),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-            ('LEFTPADDING', (0, 0), (-1, -1), 6),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-            # Tint the kind cell to match
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#FAFBFD')]),
-        ]))
-        story.append(rt)
-
     # ── Equipment temperature page ─────────────────────────────────────────
     equip = data.get('equipment')
     if equip and equip.get('total'):
@@ -2164,6 +2027,142 @@ def build_daily_pdf(date_str: str, period: str | None = None, store_id=None) -> 
             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#FAFBFD')]),
         ]))
         story.append(et)
+
+    # ── Per-temperature pages (chef / banh mi / pastry — both reports) ──────
+    if data['temperatures']:
+        story.append(PageBreak())
+        story.append(Paragraph('FOOD TEMPERATURE RECORDS', S['section']))
+        story.append(Paragraph(
+            f"{len(data['temperatures'])} food temperature record(s) — Chef, Banh Mi and Pastry stations. "
+            "Each station's readings follow on its own page.", S['body']))
+
+    for t in data['temperatures']:
+        full = _temperature_detail(t['id']) or t
+        col_hex = (full['meta'].get('color') or '#888888')
+        col = colors.HexColor(col_hex)
+
+        story.append(PageBreak())
+        title = (full['meta'].get('title') or full['type']).upper()
+        hdr_tbl = Table([[
+            Paragraph(f'<font color="white" size="20"><b>{_esc(title)}</b></font><br/>'
+                      f'<font color="#EADCC0" size="11">TEMPERATURE RECORD · '
+                      f'{full["date"]}</font>',
+                      ParagraphStyle('th1', fontName=bold_font, leading=24))
+        ]], colWidths=[USABLE_W])
+        hdr_tbl.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), col),
+            ('LEFTPADDING', (0, 0), (-1, -1), 16),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 16),
+            ('TOPPADDING', (0, 0), (-1, -1), 14),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 14),
+        ]))
+        story.append(hdr_tbl)
+        story.append(Spacer(1, 4 * mm))
+
+        unsafe_count = sum(
+            1 for r in full['readings']
+            for cc in ('c1_temp','c2_temp','c3_temp','c4_temp','c5_temp')
+            if _temp_unsafe(r['food_kind'], r[cc])
+        )
+        discarded = sum(1 for r in full['readings'] if (r.get('discarded') or 'N').upper() == 'Y')
+
+        # Pills
+        pills = [
+            (f'{len(full["readings"])} FOODS', OK),
+            (f'{unsafe_count} OUT OF ZONE', BAD if unsafe_count else OK),
+        ]
+        if discarded:
+            pills.append((f'{discarded} DISCARDED', BAD))
+        pill_cells = []
+        for txt, c_ in pills:
+            cell = Table([[Paragraph(f'<font color="white"><b>{_esc(txt)}</b></font>',
+                                     ParagraphStyle('pt', fontName=bold_font, fontSize=9, alignment=TA_CENTER))]],
+                         rowHeights=[7 * mm])
+            cell.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), c_),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 12),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 12),
+            ]))
+            pill_cells.append(cell)
+        pill_row = Table([pill_cells], colWidths=[USABLE_W / max(len(pills),1)] * len(pills))
+        pill_row.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                                      ('LEFTPADDING', (0, 0), (-1, -1), 2),
+                                      ('RIGHTPADDING', (0, 0), (-1, -1), 2)]))
+        story.append(pill_row)
+        story.append(Spacer(1, 5 * mm))
+
+        # Meta
+        meta = Table([
+            ['Recorded by', full.get('recorded_by') or '—',
+             'Checked by',  full.get('checked_by')  or '—'],
+        ], colWidths=[USABLE_W * 0.16, USABLE_W * 0.34,
+                       USABLE_W * 0.16, USABLE_W * 0.34])
+        meta.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.white),
+            ('FONTNAME', (0, 0), (-1, -1), font_name),
+            ('FONTNAME', (0, 0), (0, -1), bold_font),
+            ('FONTNAME', (2, 0), (2, -1), bold_font),
+            ('TEXTCOLOR', (0, 0), (0, -1), MUTED),
+            ('TEXTCOLOR', (2, 0), (2, -1), MUTED),
+            ('FONTSIZE', (0, 0), (-1, -1), 9.5),
+            ('TOPPADDING', (0, 0), (-1, -1), 7),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
+            ('LEFTPADDING', (0, 0), (-1, -1), 10),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        story.append(meta)
+        story.append(Spacer(1, 6 * mm))
+
+        # Readings table
+        story.append(Paragraph('READINGS', S['section']))
+        head = ['Kind', 'Food item', 'C1', 'C2', 'C3', 'C4', 'C5', 'Note']
+        rows_data = [head]
+        for r in full['readings']:
+            kind = r['food_kind'] or 'cold'
+            kind_label = {'hot': 'HOT', 'room': 'ROOM'}.get(kind, 'COLD')
+            kind_color = colors.HexColor({'hot': '#FFE0B2', 'room': '#E0F2F1'}.get(kind, '#E1F5FE'))
+            kind_text  = colors.HexColor({'hot': '#C0392B', 'room': '#00897B'}.get(kind, '#1565C0'))
+
+            cells = [
+                Paragraph(f'<font color="{kind_text.hexval()}"><b>{kind_label}</b></font>',
+                          ParagraphStyle('kc', fontName=bold_font, fontSize=8, alignment=TA_CENTER)),
+                Paragraph(_esc(r['food_name']), S['food']),
+            ]
+            for cc in ('c1_temp','c2_temp','c3_temp','c4_temp','c5_temp'):
+                v = r[cc]
+                if v is None:
+                    cells.append(Paragraph('<font color="#999">—</font>',
+                                           ParagraphStyle('v', fontName=font_name, alignment=TA_CENTER, fontSize=10)))
+                else:
+                    unsafe = _temp_unsafe(kind, v)
+                    color_hex = '#C62828' if unsafe else '#2E7D32'
+                    cells.append(Paragraph(
+                        f'<font color="{color_hex}"><b>{v:g}°</b></font>',
+                        ParagraphStyle('v', fontName=bold_font, alignment=TA_CENTER, fontSize=10)))
+            note = r.get('notes') or ''
+            cells.append(Paragraph(f'<i>{_esc(note)}</i>', S['small']))
+            rows_data.append(cells)
+
+        col_widths = [USABLE_W * 0.08, USABLE_W * 0.32] + [USABLE_W * 0.07] * 5 + [USABLE_W * 0.25]
+        rt = Table(rows_data, colWidths=col_widths, repeatRows=1)
+        rt.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), NAVY),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), bold_font),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 0.3, SOFT),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+            # Tint the kind cell to match
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#FAFBFD')]),
+        ]))
+        story.append(rt)
 
     # ── Delivery Inspection + Defrosting Temperature (both reports) ─────────
     def _band(title, subtitle, bg_hex, sub_hex='#FFFFFF'):
@@ -2518,16 +2517,16 @@ def _pdf_signature(date_str: str, period: str, store_id=None) -> str:
                 "SELECT COUNT(*), COALESCE(MAX(p.id),0) "
                 "FROM checklist_photos p JOIN checklist_sessions s ON s.id=p.session_id "
                 "WHERE s.date=? AND s.section=? AND s.store_id=?", (date_str, period, sid)).fetchone()))
-            if meta.get('includes_food_temps'):
-                parts.append(tuple(conn.execute(
-                    "SELECT COUNT(*), COALESCE(MAX(submitted_at),'') "
-                    "FROM temp_sessions WHERE date=? AND store_id=?", (date_str, sid)).fetchone()))
-                parts.append(tuple(conn.execute(
-                    "SELECT COUNT(*), COALESCE(MAX(r.id),0), "
-                    "COALESCE(SUM(COALESCE(r.c1_temp,0)+COALESCE(r.c2_temp,0)+COALESCE(r.c3_temp,0)"
-                    "+COALESCE(r.c4_temp,0)+COALESCE(r.c5_temp,0)),0) "
-                    "FROM temp_readings r JOIN temp_sessions ts ON ts.id=r.session_id "
-                    "WHERE ts.date=? AND ts.store_id=?", (date_str, sid)).fetchone()))
+            # Food temps now render on BOTH opening + closing reports.
+            parts.append(tuple(conn.execute(
+                "SELECT COUNT(*), COALESCE(MAX(submitted_at),'') "
+                "FROM temp_sessions WHERE date=? AND store_id=?", (date_str, sid)).fetchone()))
+            parts.append(tuple(conn.execute(
+                "SELECT COUNT(*), COALESCE(MAX(r.id),0), "
+                "COALESCE(SUM(COALESCE(r.c1_temp,0)+COALESCE(r.c2_temp,0)+COALESCE(r.c3_temp,0)"
+                "+COALESCE(r.c4_temp,0)+COALESCE(r.c5_temp,0)),0) "
+                "FROM temp_readings r JOIN temp_sessions ts ON ts.id=r.session_id "
+                "WHERE ts.date=? AND ts.store_id=?", (date_str, sid)).fetchone()))
             parts.append(tuple(conn.execute(
                 "SELECT COUNT(*), COALESCE(MAX(morning_recorded_at),''), "
                 "COALESCE(MAX(closing_recorded_at),''), "
