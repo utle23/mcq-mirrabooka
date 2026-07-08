@@ -1,15 +1,23 @@
-from flask import Blueprint, render_template, request, redirect, url_for, session, flash
+from flask import Blueprint, render_template, request, redirect, url_for, session, flash, Response
 from functools import wraps
+import io
 import math
 import re
 import sqlite3
+
+try:
+    from store_scope import perth_today
+except Exception:  # pragma: no cover - fallback if run outside the app package
+    from datetime import date as _date
+    def perth_today():
+        return _date.today()
 
 food_pricing = Blueprint('food_pricing', __name__, url_prefix='/admin/food-pricing')
 DB_PATH = None
 
 DEFAULT_MARGIN_PCT = 50.0
 DEFAULT_OVERHEAD_PCT = 50.0
-FOOD_PRICING_SEED_VERSION = 6
+FOOD_PRICING_SEED_VERSION = 7
 
 # Ingredient → inventory item mappings where Item List has a usable unit cost.
 # Values are inventory_items.id. Ambiguous or missing products are left blank so
@@ -846,6 +854,117 @@ FOOD_PRICING_SEED = [
     },
 ]
 
+
+# ── Recipe Book batch/prep recipes (from MCQ_Restaurant_Recipe_Book.docx) ──
+# These are ADD-ON costing items appended below without altering any of the
+# à-la-carte menu seed above. Each ingredient keeps the exact gram/ml amount
+# documented in the recipe book; non-weighable amounts (bag, can, bottle, cup,
+# tbsp, pcs) keep qty blank and record the original wording in Notes.
+RECIPE_BOOK_CATEGORY = 'Recipe Book (Batch Prep)'
+RECIPE_BOOK_SEED = [
+    {
+        'category': RECIPE_BOOK_CATEGORY,
+        'name': 'Chicken Marinade (15kg Chicken)',
+        'aliases': [],
+        'ingredients': [
+            ('Soy Sauce', 370, 'g', ''),
+            ('Fish Sauce', 350, 'g', ''),
+            ('Sugar', 550, 'g', ''),
+            ('ABC Sauce', 400, 'g', ''),
+            ('Oyster Sauce', 200, 'g', ''),
+            ('Cooking Wine', 75, 'g', ''),
+            ('Minced Lemongrass', None, 'bag', '1 bag'),
+            ('Minced Garlic', 300, 'g', ''),
+            ('Cooking Oil', 500, 'g', ''),
+            ('Five Spice Powder', 35, 'g', ''),
+        ],
+    },
+    {
+        'category': RECIPE_BOOK_CATEGORY,
+        'name': 'Stir Fried Sauce',
+        'aliases': [],
+        'ingredients': [
+            ('Minced Garlic', 300, 'g', ''),
+            ('Cooking Wine', 500, 'g', ''),
+            ('Hoisin Sauce', 1000, 'g', ''),
+            ('Soy Sauce', 2000, 'g', ''),
+            ('Oyster Sauce', 750, 'g', ''),
+            ('ABC Sauce', 750, 'g', ''),
+            ('Sugar', 1000, 'g', ''),
+            ('Potato Starch', None, 'bag', '1/4 bag (add after boiling)'),
+        ],
+    },
+    {
+        'category': RECIPE_BOOK_CATEGORY,
+        'name': 'Roast Pork Seasoning',
+        'aliases': [],
+        'ingredients': [
+            ('Garlic Powder', 1000, 'g', '1kg'),
+            ('Onion Powder', 1000, 'g', '1kg'),
+            ('MSG', 2000, 'g', '2kg'),
+            ('Five Spice Powder', 1000, 'g', '1kg'),
+            ('Salt', 8000, 'g', '8kg'),
+        ],
+    },
+    {
+        'category': RECIPE_BOOK_CATEGORY,
+        'name': 'Broth Seasoning (Large Pot)',
+        'aliases': [],
+        'ingredients': [
+            ('Cinnamon', 140, 'g', ''),
+            ('Star Anise', 100, 'g', ''),
+            ('Black Cardamom', 40, 'g', ''),
+            ('Coriander Seed', 600, 'g', ''),
+            ('Fennel Seed', 60, 'g', ''),
+            ('Licorice', 10, 'g', ''),
+            ('Cloves', None, 'pcs', '20 pcs'),
+            ('Sugar', 2000, 'g', '2kg'),
+            ('Salt', 1000, 'g', '1kg'),
+            ('MSG', 600, 'g', ''),
+            ('Fish Sauce', None, 'cup', '1/2 cup'),
+        ],
+    },
+    {
+        'category': RECIPE_BOOK_CATEGORY,
+        'name': 'Broth Seasoning (Small Pot)',
+        'aliases': [],
+        'ingredients': [
+            ('Cinnamon', 70, 'g', ''),
+            ('Star Anise', 50, 'g', ''),
+            ('Black Cardamom', 20, 'g', ''),
+            ('Coriander Seed', 300, 'g', ''),
+            ('Fennel Seed', 30, 'g', ''),
+            ('Licorice', 5, 'g', ''),
+            ('Cloves', None, 'pcs', '10 pcs'),
+            ('Sugar', 1000, 'g', '1kg'),
+            ('Salt', 500, 'g', ''),
+            ('MSG', 300, 'g', ''),
+            ('Fish Sauce', None, 'cup', '1/4 cup'),
+        ],
+    },
+    {
+        'category': RECIPE_BOOK_CATEGORY,
+        'name': 'Com Tam Pork Marinade Sauce',
+        'aliases': [],
+        'ingredients': [
+            ('Minced Lemongrass', None, 'bag', '1 bag'),
+            ('Minced Garlic', None, 'bag', '1 bag'),
+            ('Minced Spring Onion', None, 'bag', '1 bag'),
+            ('Fish Sauce', 1400, 'ml', '1.4L'),
+            ('ABC Sauce', 700, 'g', ''),
+            ('Soy Sauce', None, 'bottle', '1 bottle'),
+            ('Condensed Milk', None, 'can', '1 can'),
+            ('Yellow Food Colour', None, 'bottle', '1/2 bottle'),
+            ('MSG', None, 'tbsp', '3 tbsp'),
+            ('Five Spice Powder', None, 'tbsp', '3 tbsp'),
+            ('Cooking Oil', 1500, 'ml', '1.5L'),
+        ],
+    },
+]
+
+# Append (never mutate) so existing menu costing is untouched.
+FOOD_PRICING_SEED = FOOD_PRICING_SEED + RECIPE_BOOK_SEED
+
 FULL_MENU_ORDER = [
     'Raw Beef Pho',
     'Raw Beef and Beef Balls Pho',
@@ -1434,3 +1553,324 @@ def autofill_costs():
         filled, skipped, preserved = autofill_food_pricing_costs(conn)
     flash(f'Auto-filled {filled} ingredient cost line(s) from Item List. Preserved {preserved} manual cost line(s). {len(skipped)} unmatched ingredient type(s) left for manual cost.', 'success')
     return redirect(url_for('food_pricing.food_pricing_home'))
+
+
+# ── Excel export ──────────────────────────────────────────────────────────
+# Builds a live, formula-linked workbook (not a static snapshot):
+#   • "Cost Sheets" tab — one costing block per menu item. The per-1g/1ml unit
+#     cost drives the portion cost, cost+ (labour), the totals and the sell
+#     price, so editing any yellow input recalculates the whole sheet in Excel.
+#   • "Menu Summary" tab — one row per item whose figures are =links back to the
+#     matching Cost Sheets cells, so the summary updates the moment a detail cell
+#     changes.
+# Colour palette + banding follow the Item List export for a consistent look.
+GREEN_DARK = '1B4332'
+GREEN_MID = '2D6A4F'
+GREEN_BAND = '1B3A2D'
+GREEN_LIGHT = 'E8F5E9'
+INPUT_FILL = 'FFF8E1'     # soft amber = editable input cell
+CALC_FILL = 'F2F8F5'      # soft green = formula / calculated cell
+HEADER_TXT = 'FFFFFF'
+MONEY_FMT = '$#,##0.00'
+UNIT_FMT = '$#,##0.0000'
+WEIGHT_FMT = '#,##0.###'
+PCT_FMT = '0.0'
+
+
+@food_pricing.route('/export')
+@_admin_required
+def export_excel():
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    category = request.args.get('category', 'All')
+    search = request.args.get('q', '').strip()
+    with _get_db() as conn:
+        items = _fetch_items(conn, category, search)
+
+    thin = Side(style='thin', color='D5E2DB')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    header_fill = PatternFill('solid', fgColor=GREEN_MID)
+    band_fill = PatternFill('solid', fgColor=GREEN_BAND)
+    input_fill = PatternFill('solid', fgColor=INPUT_FILL)
+    calc_fill = PatternFill('solid', fgColor=CALC_FILL)
+    title_fill = PatternFill('solid', fgColor=GREEN_DARK)
+    center = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    right = Alignment(horizontal='right', vertical='center')
+    left_mid = Alignment(horizontal='left', vertical='center', wrap_text=True)
+
+    wb = Workbook()
+    summary = wb.active
+    summary.title = 'Menu Summary'
+    sheet = wb.create_sheet('Cost Sheets')
+    SHEET = "'Cost Sheets'"
+    today_str = perth_today().strftime('%d %b %Y')
+
+    # ═══ Cost Sheets tab ═══
+    # A No | B Ingredient | C Weight | D Unit | E Cost/1g·1ml | F Portion Cost
+    # G Labour% | H Cost+ | I Notes
+    cs_headers = ['No', 'Ingredient', 'Weight', 'Unit', 'Cost / 1g·1ml ($)',
+                  'Portion Cost ($)', 'Labour & Exp %', 'Cost + ($)', 'Notes']
+    cs_widths = [5, 30, 10, 8, 16, 15, 13, 14, 34]
+    for i, w in enumerate(cs_widths, 1):
+        sheet.column_dimensions[get_column_letter(i)].width = w
+
+    sheet.merge_cells('A1:I1')
+    t = sheet['A1']
+    t.value = f'MCQ Mirrabooka — Food Costing Sheets   (exported {today_str})'
+    t.font = Font(bold=True, size=13, color=HEADER_TXT)
+    t.fill = title_fill
+    t.alignment = center
+    sheet.row_dimensions[1].height = 26
+    sheet.merge_cells('A2:I2')
+    hint = sheet['A2']
+    hint.value = ('Amber cells are inputs (weight, cost per 1g/1ml, labour %, margin %). '
+                  'Green cells are live formulas — edit an input and Excel recalculates portion cost, cost+, totals and the sell price.')
+    hint.font = Font(italic=True, size=9, color='5A6B62')
+    hint.alignment = left_mid
+    sheet.row_dimensions[2].height = 26
+
+    refs = []           # per-item cell references for the summary tab
+    cur_cat = None
+    row = 4
+    for item in items:
+        if item['category'] != cur_cat:
+            cur_cat = item['category']
+            sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=9)
+            c = sheet.cell(row=row, column=1, value=f'  {cur_cat}')
+            c.font = Font(bold=True, color=HEADER_TXT, size=11)
+            c.fill = band_fill
+            c.alignment = Alignment(vertical='center')
+            sheet.row_dimensions[row].height = 20
+            row += 1
+
+        # Item title
+        sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=9)
+        c = sheet.cell(row=row, column=1, value=f'  {item["name"]}')
+        c.font = Font(bold=True, color=GREEN_DARK, size=11)
+        c.fill = PatternFill('solid', fgColor=GREEN_LIGHT)
+        c.alignment = Alignment(vertical='center')
+        sheet.row_dimensions[row].height = 18
+        row += 1
+
+        # Column headers for this block
+        for col, h in enumerate(cs_headers, 1):
+            hc = sheet.cell(row=row, column=col, value=h)
+            hc.font = Font(bold=True, color=HEADER_TXT, size=9)
+            hc.fill = header_fill
+            hc.alignment = center
+            hc.border = border
+        sheet.row_dimensions[row].height = 24
+        row += 1
+
+        first_ing = row
+        ingredients = item['ingredients']
+        if not ingredients:
+            sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=9)
+            c = sheet.cell(row=row, column=1, value='  (no ingredient lines yet)')
+            c.font = Font(italic=True, color='9AA79F', size=9)
+            c.alignment = Alignment(vertical='center')
+            c.border = border
+            last_ing = row
+            row += 1
+        else:
+            for idx, ing in enumerate(ingredients, 1):
+                r = row
+                qty = ing.get('weight_qty')
+                cost = ing.get('cost_per_serve')
+                has_weight = qty not in (None, '') and float(qty) > 0
+                unit_cost = (float(cost) / float(qty)) if (has_weight and cost not in (None, '')) else None
+
+                sheet.cell(row=r, column=1, value=idx).alignment = center
+                bcell = sheet.cell(row=r, column=2, value=ing.get('ingredient_name') or '')
+                bcell.font = Font(bold=True, color='1B3A2D', size=9)
+                bcell.alignment = left_mid
+                # C weight (input)
+                wc = sheet.cell(row=r, column=3, value=(float(qty) if has_weight else None))
+                wc.number_format = WEIGHT_FMT
+                wc.alignment = right
+                if has_weight:
+                    wc.fill = input_fill
+                sheet.cell(row=r, column=4, value=ing.get('weight_unit') or '').alignment = center
+                # E cost per 1g/1ml (input driver)
+                ec = sheet.cell(row=r, column=5, value=unit_cost)
+                ec.number_format = UNIT_FMT
+                ec.alignment = right
+                if has_weight:
+                    ec.fill = input_fill
+                # F portion cost — formula when weighted, else literal cost
+                fc = sheet.cell(row=r, column=6)
+                if has_weight:
+                    fc.value = f'=IF(OR($C{r}="",$E{r}=""),"",$C{r}*$E{r})'
+                    fc.fill = calc_fill
+                else:
+                    fc.value = (float(cost) if cost not in (None, '') else None)
+                    if cost not in (None, ''):
+                        fc.fill = input_fill
+                fc.number_format = MONEY_FMT
+                fc.alignment = right
+                # G labour % (input)
+                gc = sheet.cell(row=r, column=7, value=float(ing.get('overhead_pct') or 0))
+                gc.number_format = PCT_FMT
+                gc.alignment = right
+                gc.fill = input_fill
+                # H cost+ (formula)
+                hc = sheet.cell(row=r, column=8, value=f'=IF($F{r}="","",$F{r}*(1+$G{r}/100))')
+                hc.number_format = MONEY_FMT
+                hc.alignment = right
+                hc.fill = calc_fill
+                # I notes
+                nc = sheet.cell(row=r, column=9, value=ing.get('notes') or '')
+                nc.font = Font(color='6A756F', size=9)
+                nc.alignment = left_mid
+                if ing.get('cost_source'):
+                    nc.value = (nc.value + ('  ·  ' if nc.value else '') + ing['cost_source'])
+                for col in range(1, 10):
+                    sheet.cell(row=r, column=col).border = border
+                sheet.row_dimensions[r].height = 16
+                row += 1
+            last_ing = row - 1
+
+        # Subtotal row
+        sr = row
+        sheet.merge_cells(start_row=sr, start_column=1, end_row=sr, end_column=5)
+        lab = sheet.cell(row=sr, column=1, value='TOTAL')
+        lab.font = Font(bold=True, color=GREEN_DARK, size=9)
+        lab.alignment = right
+        fsum = sheet.cell(row=sr, column=6, value=f'=SUM(F{first_ing}:F{last_ing})')
+        fsum.number_format = MONEY_FMT
+        fsum.font = Font(bold=True, color='1565C0', size=9)
+        fsum.alignment = right
+        sheet.cell(row=sr, column=7, value='').alignment = right
+        hsum = sheet.cell(row=sr, column=8, value=f'=SUM(H{first_ing}:H{last_ing})')
+        hsum.number_format = MONEY_FMT
+        hsum.font = Font(bold=True, color='00796B', size=9)
+        hsum.alignment = right
+        for col in range(1, 10):
+            cc = sheet.cell(row=sr, column=col)
+            cc.fill = PatternFill('solid', fgColor='F1F8F4')
+            cc.border = border
+        row += 1
+
+        # Pricing block (Margin % → Exact → Rounded sell price)
+        def _price_row(label, value, fmt, bold=False, is_input=False):
+            nonlocal row
+            rr = row
+            sheet.merge_cells(start_row=rr, start_column=1, end_row=rr, end_column=7)
+            lc = sheet.cell(row=rr, column=1, value=label)
+            lc.font = Font(bold=bold, color=GREEN_DARK, size=9)
+            lc.alignment = right
+            vc = sheet.cell(row=rr, column=8, value=value)
+            vc.number_format = fmt
+            vc.alignment = right
+            vc.font = Font(bold=bold, size=10, color=('C62828' if bold else '213029'))
+            vc.fill = input_fill if is_input else calc_fill
+            for col in range(1, 10):
+                sheet.cell(row=rr, column=col).border = border
+            row += 1
+            return rr
+
+        margin_r = _price_row('Margin Target %', float(item.get('margin_pct') or DEFAULT_MARGIN_PCT), PCT_FMT, is_input=True)
+        exact_r = _price_row('Exact Sell Price',
+                             f'=IF($H{sr}=0,"",IF($H{margin_r}>=100,"",$H{sr}/(1-$H{margin_r}/100)))',
+                             MONEY_FMT)
+        sell_r = _price_row('Sell Price (rounded to $0.50)',
+                            f'=IF($H{exact_r}="","",CEILING($H{exact_r},0.5))',
+                            MONEY_FMT, bold=True)
+
+        refs.append({
+            'category': item['category'],
+            'name': item['name'],
+            'count': item['ingredient_count'],
+            'base': f'{SHEET}!F{sr}',
+            'plus': f'{SHEET}!H{sr}',
+            'margin': f'{SHEET}!H{margin_r}',
+            'exact': f'{SHEET}!H{exact_r}',
+            'sell': f'{SHEET}!H{sell_r}',
+        })
+        row += 1  # spacer between items
+
+    sheet.freeze_panes = 'A4'
+
+    # ═══ Menu Summary tab ═══
+    # A # | B Menu Item | C Ingredients | D Base Cost | E Cost+ | F Margin%
+    # G Exact | H Sell Price  (D–H are =links into Cost Sheets)
+    sm_headers = ['#', 'Menu Item', 'Ingredients', 'Base Cost',
+                  'Cost + (Labour)', 'Margin %', 'Exact Price', 'Sell Price']
+    sm_widths = [5, 34, 12, 15, 16, 11, 14, 14]
+    for i, w in enumerate(sm_widths, 1):
+        summary.column_dimensions[get_column_letter(i)].width = w
+
+    summary.merge_cells('A1:H1')
+    t = summary['A1']
+    t.value = f'MCQ Mirrabooka — Menu Pricing Summary   (exported {today_str})'
+    t.font = Font(bold=True, size=13, color=HEADER_TXT)
+    t.fill = title_fill
+    t.alignment = center
+    summary.row_dimensions[1].height = 26
+
+    for col, h in enumerate(sm_headers, 1):
+        c = summary.cell(row=2, column=col, value=h)
+        c.font = Font(bold=True, color=HEADER_TXT, size=10)
+        c.fill = header_fill
+        c.alignment = center
+        c.border = border
+    summary.row_dimensions[2].height = 22
+
+    cur_cat = None
+    r = 3
+    seq = 0
+    for ref in refs:
+        if ref['category'] != cur_cat:
+            cur_cat = ref['category']
+            summary.merge_cells(start_row=r, start_column=1, end_row=r, end_column=8)
+            c = summary.cell(row=r, column=1, value=f'  {cur_cat}')
+            c.font = Font(bold=True, color=HEADER_TXT, size=10)
+            c.fill = band_fill
+            c.alignment = Alignment(vertical='center')
+            summary.row_dimensions[r].height = 18
+            r += 1
+            seq = 0
+        seq += 1
+        rowfill = PatternFill('solid', fgColor='FFFFFF') if seq % 2 == 0 else PatternFill('solid', fgColor='F7FCF9')
+        summary.cell(row=r, column=1, value=seq).alignment = center
+        nc = summary.cell(row=r, column=2, value=ref['name'])
+        nc.font = Font(bold=True, color='1B3A2D', size=9)
+        nc.alignment = left_mid
+        summary.cell(row=r, column=3, value=ref['count']).alignment = center
+        pairs = [
+            (4, f'={ref["base"]}', MONEY_FMT, '1565C0'),
+            (5, f'={ref["plus"]}', MONEY_FMT, '00796B'),
+            (6, f'={ref["margin"]}', PCT_FMT, '5A6B62'),
+            (7, f'={ref["exact"]}', MONEY_FMT, '5A6B62'),
+            (8, f'={ref["sell"]}', MONEY_FMT, 'C62828'),
+        ]
+        for col, formula, fmt, color in pairs:
+            c = summary.cell(row=r, column=col, value=formula)
+            c.number_format = fmt
+            c.alignment = right
+            c.font = Font(bold=(col == 8), color=color, size=9)
+        for col in range(1, 9):
+            cc = summary.cell(row=r, column=col)
+            cc.fill = rowfill
+            cc.border = border
+        summary.row_dimensions[r].height = 16
+        r += 1
+
+    summary.merge_cells(start_row=r, start_column=1, end_row=r, end_column=8)
+    foot = summary.cell(row=r, column=1, value=f'  Total: {len(refs)} menu / recipe item(s) · figures link live to the Cost Sheets tab')
+    foot.font = Font(bold=True, size=9, color=GREEN_DARK)
+    foot.fill = PatternFill('solid', fgColor=GREEN_LIGHT)
+    foot.alignment = Alignment(vertical='center')
+    summary.freeze_panes = 'A3'
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    fname = f'MCQ_FoodPricing_{perth_today().isoformat()}.xlsx'
+    return Response(
+        buf.read(),
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': f'attachment; filename="{fname}"'}
+    )
