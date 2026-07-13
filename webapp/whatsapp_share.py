@@ -2607,6 +2607,7 @@ def whatsapp_today():
         date=today_str, data=data, period=period,
         period_meta=SHARE_PERIODS[period], share_periods=SHARE_PERIODS,
         cutoff_hour=SHARE_CUTOFF_HOUR,
+        store_name=_store_name(),
         checklists_meta=CHECKLISTS_META,
         temperatures_meta=TEMPERATURES_META)
 

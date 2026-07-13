@@ -252,7 +252,7 @@ let preparePdfPromise = null;
 let preparePdfController = null;
 
 function pdfText() {
-  return 'MCQ Mirrabooka Cafe - {{ period_meta.label|lower }} operations report ({{ date }})';
+  return '{{ store_name }} Cafe - {{ period_meta.label|lower }} operations report ({{ date }})';
 }
 
 function downloadPdf(blob) {
@@ -350,7 +350,7 @@ async function sharePdf() {
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       await navigator.share({
         files: [file],
-        title: 'MCQ {{ period_meta.label }} Report — {{ date }}',
+        title: '{{ store_name }} {{ period_meta.label }} Report — {{ date }}',
         text:  pdfText(),
       });
       status.innerHTML = '<i class="fas fa-check-circle"></i> Pick a WhatsApp group from the share sheet.';

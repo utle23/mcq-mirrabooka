@@ -157,13 +157,20 @@
               <td class="text-center text-muted">{{ i+1 }}</td>
               <td class="task-name" id="taskname-cell-{{ i }}">
                 {% if is_admin %}
-                <span class="task-label" id="taskname-label-{{ i }}"
-                      title="Click to edit task name"
-                      onclick="startEditTask({{ i }})"
-                      style="cursor:pointer">
-                  <span id="taskname-text-{{ i }}">{{ task }}</span>
-                  <i class="fas fa-pen ms-1 edit-icon" style="font-size:0.65rem;color:#bbb;opacity:0;transition:opacity .2s"></i>
-                </span>
+                <div class="d-flex align-items-center gap-1 taskname-view" id="taskname-view-{{ i }}">
+                  <span class="task-label" id="taskname-label-{{ i }}"
+                        title="Double-click to edit — applies to the whole week and future weeks"
+                        ondblclick="tryEditTask({{ i }})">
+                    <span id="taskname-text-{{ i }}">{{ task }}</span>
+                  </span>
+                  <span class="done-badge" id="done-badge-{{ i }}"><i class="fas fa-lock me-1"></i>Done</span>
+                  <button type="button" class="btn btn-sm btn-outline-secondary edit-task-btn ms-auto"
+                          id="edit-btn-{{ i }}"
+                          title="Edit task — applies to the whole week and future weeks"
+                          onclick="startEditTask({{ i }})">
+                    <i class="fas fa-pen me-1"></i>Edit
+                  </button>
+                </div>
                 <div class="d-none" id="taskname-edit-{{ i }}">
                   <div class="input-group input-group-sm">
                     <input type="text" class="form-control form-control-sm"
@@ -178,9 +185,13 @@
                       <i class="fas fa-times"></i>
                     </button>
                   </div>
+                  <div class="form-text small text-success mt-1">
+                    <i class="fas fa-circle-info me-1"></i>Saved to the template — applies to the rest of the week and future weeks.
+                  </div>
                 </div>
                 {% else %}
-                {{ task }}
+                <span id="taskname-text-{{ i }}">{{ task }}</span>
+                <span class="done-badge" id="done-badge-{{ i }}"><i class="fas fa-lock me-1"></i>Done</span>
                 {% endif %}
               </td>
               <td class="text-center">
@@ -306,8 +317,22 @@
 
 {% block head %}
 <style>
-.task-label:hover .edit-icon, .task-label:hover i.fa-pen { opacity: 1 !important; }
+.task-label { cursor: default; }
 .task-label:hover { color: #1565C0; }
+/* "Done" lock badge — hidden until the task row is marked done */
+.done-badge {
+  display: none;
+  align-items: center;
+  font-size: .68rem; font-weight: 700; letter-spacing: .03em;
+  color: #1B5E20; background: #E8F5E9; border: 1px solid #A5D6A7;
+  border-radius: 999px; padding: 1px 9px; white-space: nowrap;
+}
+.task-row.is-locked .done-badge { display: inline-flex; }
+/* When done, the name is locked: no double-click edit, muted look. The Edit
+   button stays active as the deliberate way to change it. */
+.task-row.is-locked .task-label { pointer-events: none; opacity: .85; }
+.task-row.is-locked .edit-task-btn { opacity: .9; }
+.edit-task-btn { flex: 0 0 auto; white-space: nowrap; }
 .admin-add-task {
   border:1px dashed #95D5B2;
   background:#f8fff8;
@@ -508,10 +533,21 @@ document.getElementById('chk-form').addEventListener('submit', async function(e)
 function updateRow(i) {
   const cb  = document.getElementById('check-' + i);
   const row = document.getElementById('row-' + i);
-  if (cb.checked) row.classList.add('done-row');
-  else row.classList.remove('done-row');
+  if (cb.checked) {
+    row.classList.add('done-row');
+    // Done → lock the task name so it can't be changed by accident. It shows a
+    // "Done" badge; the Edit button stays as the deliberate way to change it.
+    row.classList.add('is-locked');
+  } else {
+    row.classList.remove('done-row');
+    row.classList.remove('is-locked');
+  }
   updateProgress();
 }
+// Set the initial locked/"Done" state for tasks already ticked on load.
+document.addEventListener('DOMContentLoaded', function () {
+  document.querySelectorAll('.task-check').forEach((cb, i) => updateRow(i));
+});
 function tickAll(val) {
   document.querySelectorAll('.task-check').forEach((cb, i) => { cb.checked = val; updateRow(i); });
 }
@@ -536,9 +572,34 @@ function escapeHtml(value) {
   }[ch]));
 }
 
+// Double-click gate: when a task is done (locked) you must press Edit; a plain
+// double-click just nudges the user toward the Edit button.
+function tryEditTask(i) {
+  const row = document.getElementById('row-' + i);
+  if (row && row.classList.contains('is-locked')) {
+    flashTaskHint(i, 'Task is done — press Edit to change it.');
+    return;
+  }
+  startEditTask(i);
+}
+
+function flashTaskHint(i, msg) {
+  const btn = document.getElementById('edit-btn-' + i);
+  if (btn) {
+    btn.classList.add('btn-warning');
+    btn.classList.remove('btn-outline-secondary');
+    setTimeout(() => {
+      btn.classList.remove('btn-warning');
+      btn.classList.add('btn-outline-secondary');
+    }, 1100);
+  }
+  showTaskToast(msg);
+}
+
 function startEditTask(i) {
-  const label = document.getElementById('taskname-label-' + i);
-  label.classList.add('d-none');
+  // Editing is the deliberate action — it works even when the task is locked.
+  const view = document.getElementById('taskname-view-' + i);
+  if (view) view.classList.add('d-none');
   const editDiv = document.getElementById('taskname-edit-' + i);
   editDiv.classList.remove('d-none');
   const inp = document.getElementById('taskname-input-' + i);
@@ -552,8 +613,26 @@ function startEditTask(i) {
 
 function cancelEditTask(i) {
   document.getElementById('taskname-edit-' + i).classList.add('d-none');
-  const label = document.getElementById('taskname-label-' + i);
-  label.classList.remove('d-none');
+  const view = document.getElementById('taskname-view-' + i);
+  if (view) view.classList.remove('d-none');
+}
+
+// Lightweight toast so staff see the "applies to the whole week" confirmation.
+function showTaskToast(msg) {
+  let el = document.getElementById('task-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'task-toast';
+    el.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);' +
+      'background:#1B5E20;color:#fff;padding:10px 18px;border-radius:999px;' +
+      'font-size:.85rem;font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.25);' +
+      'z-index:1080;opacity:0;transition:opacity .2s;max-width:90vw;text-align:center;';
+    document.body.appendChild(el);
+  }
+  el.innerHTML = '<i class="fas fa-circle-check me-2"></i>' + msg;
+  requestAnimationFrame(() => { el.style.opacity = '1'; });
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.opacity = '0'; }, 2600);
 }
 
 function handleTaskNameKey(e, i) {
@@ -582,14 +661,15 @@ async function saveTaskName(i) {
     });
     const data = await res.json();
     if (data.ok) {
+      const view = document.getElementById('taskname-view-' + i);
       const label = document.getElementById('taskname-label-' + i);
       const textEl = document.getElementById('taskname-text-' + i);
       if (textEl) textEl.textContent = data.name;
       document.getElementById('taskname-edit-' + i).classList.add('d-none');
-      label.classList.remove('d-none');
-      // Brief success flash
-      label.style.color = '#2E7D32';
-      setTimeout(() => label.style.color = '', 1200);
+      if (view) view.classList.remove('d-none');
+      // Brief success flash + confirm the change scope to the user
+      if (label) { label.style.color = '#2E7D32'; setTimeout(() => label.style.color = '', 1200); }
+      showTaskToast('Task updated for the rest of the week &amp; future weeks.');
     } else {
       alert('Failed to save: ' + (data.error || 'unknown error'));
     }
@@ -668,13 +748,20 @@ function appendChecklistTaskRow(i, name) {
   row.innerHTML = `
     <td class="text-center text-muted">${i + 1}</td>
     <td class="task-name" id="taskname-cell-${i}">
-      <span class="task-label" id="taskname-label-${i}"
-            title="Click to edit task name"
-            onclick="startEditTask(${i})"
-            style="cursor:pointer">
-        <span id="taskname-text-${i}">${escapeHtml(name)}</span>
-        <i class="fas fa-pen ms-1 edit-icon" style="font-size:0.65rem;color:#bbb;opacity:0;transition:opacity .2s"></i>
-      </span>
+      <div class="d-flex align-items-center gap-1 taskname-view" id="taskname-view-${i}">
+        <span class="task-label" id="taskname-label-${i}"
+              title="Double-click to edit — applies to the whole week and future weeks"
+              ondblclick="tryEditTask(${i})">
+          <span id="taskname-text-${i}">${escapeHtml(name)}</span>
+        </span>
+        <span class="done-badge" id="done-badge-${i}"><i class="fas fa-lock me-1"></i>Done</span>
+        <button type="button" class="btn btn-sm btn-outline-secondary edit-task-btn ms-auto"
+                id="edit-btn-${i}"
+                title="Edit task — applies to the whole week and future weeks"
+                onclick="startEditTask(${i})">
+          <i class="fas fa-pen me-1"></i>Edit
+        </button>
+      </div>
       <div class="d-none" id="taskname-edit-${i}">
         <div class="input-group input-group-sm">
           <input type="text" class="form-control form-control-sm"
@@ -688,6 +775,9 @@ function appendChecklistTaskRow(i, name) {
           <button type="button" class="btn btn-outline-secondary btn-sm" onclick="cancelEditTask(${i})">
             <i class="fas fa-times"></i>
           </button>
+        </div>
+        <div class="form-text small text-success mt-1">
+          <i class="fas fa-circle-info me-1"></i>Saved to the template — applies to the rest of the week and future weeks.
         </div>
       </div>
     </td>
