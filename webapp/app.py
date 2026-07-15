@@ -40,7 +40,7 @@ from structure_routes import structure  as structure_bp, init_structure_tables
 from webauthn_routes  import webauthn_bp,                 init_webauthn
 from food_pricing_routes import food_pricing as food_pricing_bp, init_food_pricing_tables
 from food_safety_routes import defrost_bp, delivery_bp, init_food_safety_tables
-from branch_seed import seed_subiaco_branch
+from branch_seed import seed_subiaco_branch, seed_morley_branch
 import email_service
 app.register_blueprint(prep_bp)
 app.register_blueprint(pastry_bp)
@@ -5819,6 +5819,7 @@ _safe_init(migrate_multistore, DB_PATH)
 _safe_init(ensure_save_upsert_constraints, DB_PATH)
 _safe_init(seed_subiaco_branch, DB_PATH,
            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates', 'branch.xlsx'))
+_safe_init(seed_morley_branch, DB_PATH)
 
 if __name__ == '__main__':
     print('\n' + '='*50)

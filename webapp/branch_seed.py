@@ -21,6 +21,45 @@ MARKER = 'subiaco_branch_seed_v1'
 PRICE_MARKER = 'subiaco_packaging_prices_from_pdf_v1'
 CONTACT_FIX_MARKER = 'subiaco_contact_fix_v1'
 
+# ── Morley (store_id=2) Cashier checklist ─────────────────────────────────────
+# Morley has no branch workbook; its Cashier (take_order) Opening + Closing
+# tasks are hardcoded from the store's handwritten operations notes. Seeded once
+# (guarded by an audit_log marker) so later admin edits in the web UI survive
+# restarts. Bump the marker version if these lists change and must re-seed.
+MORLEY_STORE_ID = 2
+MORLEY_CHECKLIST_MARKER = 'morley_cashier_checklist_v1'
+
+MORLEY_CASHIER_OPENING = [
+    'Enter door code (3 or 4); log in to POS as Cashier; turn on the coffee machine & hot-water machine',
+    'Uniform check; wear gloves when handling/filling food',
+    'Set up the Noodle bar — fill items from the freezer & fridge (odourless items & small trays first, then medium, then mixed sizes)',
+    'Peel & prep vegetables for all trays',
+    'Organise the pastry display & set out latte/name labels; if an item is out of stock, buy it, scan the barcode & photograph the receipt',
+    'Make tropical fruit juice (apple + orange, orange peeled) — 1 jug weekdays / 2 jugs weekend; if it runs out early, make to order',
+    'Prepare fruit & peel pomelo for the afternoon service',
+    'Make sugarcane juice — 1 jug (bring sugarcane from storage each morning); if it runs out early, make to order',
+    'Make milk coffee (750 ml black coffee + 1 can condensed milk, then 650 ml fresh milk) — 4–5 jugs weekdays / 6–7 jugs weekend',
+    'Prepare 2 jugs of black coffee for iced-black-coffee orders',
+    'Brew hot tea (¼ cup steeped tea leaves into the thermos, topped with hot water) ready to serve',
+    'Arrange the customer order line-up; counter clean & ready for service',
+]
+
+MORLEY_CASHIER_CLOSING = [
+    'Take orders, serve customers & resolve service issues during the shift (review menu & promos: banh mi + coffee $10, big meal combo $17)',
+    'Collect & clear the fried-food counter; turn off one machine',
+    'Clean & turn off all machines — outdoor coffee machine, juicer, tea urn, sugarcane machine, and all juice/coffee/cane jugs',
+    'Clean the juice-counter trays & wrap food',
+    'Clean the noodle counter & cooking area — wrap all trays; sort meat/fish cake/cheese → freezer, vegetables → cold fridge',
+    'Close the curtains & clean/tidy the surrounding area',
+    'Dining area, fried-food counter & cashier — sweep & put chairs up; refill spoons, chopsticks, straws & paper if low; wipe the front of the fried-food counter & cashier',
+    'Refill drinking water in the fridge in front of the counter',
+    'Check coffee is ready for tomorrow (2 shifts / 2 black coffee)',
+    'Refill cup lids & cups',
+    'Check stock — if low, buy at the supermarket (scan the barcode) or record it for the restaurant',
+    'Turn off & check all equipment — gas, cabinets/shelves & machines',
+    'Take photos & send the closing report to the restaurant + cf group: dining area, coffee counter, outdoor drinks fridge, fried food, banh mi, both kitchen sides, bins',
+]
+
 # Subiaco's Jaccus packaging contact (from branch.xlsx). A historic global
 # UPDATE in init_packaging clobbered this with Mirrabooka's "Khoi: 0449819235"
 # on every startup; _fix_subiaco_contact restores it once.
@@ -435,6 +474,40 @@ def seed_subiaco_branch(db_path: str, workbook_path: str | None = None) -> None:
         conn.execute('''INSERT INTO audit_log(action, record_type, user_name, details)
             VALUES (?, 'migration', 'system', ?)''',
             (MARKER, f'Seeded Subiaco branch data from {os.path.basename(workbook_path)}.'))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def seed_morley_branch(db_path: str) -> None:
+    """Seed Morley's own Cashier (take_order) Opening + Closing checklist once.
+
+    Morley (store_id=2) has no branch workbook, so the tasks are hardcoded above.
+    Only store 2's take_order templates are touched — no passwords, no other data.
+    Guarded by an audit_log marker so app restarts never overwrite later admin
+    edits made through the web UI.
+    """
+    conn = sqlite3.connect(db_path, timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA foreign_keys = ON')
+    try:
+        if conn.execute('SELECT 1 FROM audit_log WHERE action=? LIMIT 1',
+                        (MORLEY_CHECKLIST_MARKER,)).fetchone():
+            return
+        conn.execute('''DELETE FROM checklist_task_templates
+            WHERE store_id=? AND chk_type=?''', (MORLEY_STORE_ID, 'take_order'))
+        for section, tasks in (('opening', MORLEY_CASHIER_OPENING),
+                               ('closing', MORLEY_CASHIER_CLOSING)):
+            for idx, task in enumerate(tasks):
+                conn.execute('''INSERT INTO checklist_task_templates
+                    (chk_type, section, task_order, task_name, store_id)
+                    VALUES ('take_order', ?, ?, ?, ?)''',
+                    (section, idx, task, MORLEY_STORE_ID))
+        conn.execute('''INSERT INTO audit_log(action, record_type, user_name, details)
+            VALUES (?, 'migration', 'system', ?)''',
+            (MORLEY_CHECKLIST_MARKER,
+             f'Seeded Morley Cashier checklist: {len(MORLEY_CASHIER_OPENING)} opening / '
+             f'{len(MORLEY_CASHIER_CLOSING)} closing task(s).'))
         conn.commit()
     finally:
         conn.close()
