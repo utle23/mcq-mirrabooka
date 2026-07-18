@@ -1503,6 +1503,11 @@ def collect_daily_digest(target_date: str, checklists_meta: dict | None = None,
     if store_id is None:
         from store_scope import current_store_id
         store_id = current_store_id()
+    # Drop checklist types this store doesn't run (entries carry a 'stores'
+    # tuple, e.g. Noodle Bar = Morley & Subiaco only) so the digest matrix and
+    # the expected-section count stay accurate per store.
+    checklists_meta = {k: v for k, v in checklists_meta.items()
+                      if not v.get('stores') or store_id in v['stores']}
 
     with _conn() as conn:
         # ── Checklists: per (type, section) ──

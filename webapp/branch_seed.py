@@ -60,6 +60,32 @@ MORLEY_CASHIER_CLOSING = [
     'Take photos & send the closing report to the restaurant + cf group: dining area, coffee counter, outdoor drinks fridge, fried food, banh mi, both kitchen sides, bins',
 ]
 
+# ── Noodle Bar checklist (Morley + Subiaco) ──────────────────────────────────
+# From the Noodle Bar staff timetable: everything before 3 PM is the Opening
+# section, the 3:00 PM onward stock/pack-down routine is the Closing section.
+NOODLE_BAR_MARKER = 'noodle_bar_checklist_v1'
+NOODLE_BAR_STORE_IDS = (MORLEY_STORE_ID, SUBIACO_STORE_ID)
+
+NOODLE_BAR_OPENING = [
+    '10:00 AM — Arrive on time',
+    '10:00 AM — Check & clean the display / topping fridge area if needed',
+    '10:05 AM — Check all toppings and sauces',
+    '10:05 AM — Inform the kitchen if anything needs to be prepared or refilled',
+    '10:10 AM — Dry the bowls and make sure they are ready for service',
+    '10:30 AM–2:00 PM — Serve customers & refill toppings when needed',
+    '10:30 AM–2:00 PM — Clean tables & chairs; clear used bowls, plates and cutlery',
+    '2:30–3:00 PM — Break time',
+]
+
+NOODLE_BAR_CLOSING = [
+    '3:00–4:00 PM — Check stock levels',
+    '3:00–4:00 PM — Fill in the stock/prep list for items running low that need preparing for tomorrow',
+    '3:00–4:00 PM — Prepare stock for the required items',
+    '3:00–4:00 PM — Refill noodles',
+    '4:00–4:15 PM — Put toppings away properly',
+    '4:00–4:15 PM — Clean the topping fridge / display area thoroughly',
+]
+
 # Subiaco's Jaccus packaging contact (from branch.xlsx). A historic global
 # UPDATE in init_packaging clobbered this with Mirrabooka's "Khoi: 0449819235"
 # on every startup; _fix_subiaco_contact restores it once.
@@ -76,7 +102,7 @@ DAYS = {
     'sun': 'sun', 'sunday': 'sun',
 }
 
-VALID_CHECKLISTS = {'take_order', 'banh_mi', 'chef', 'grill_beef', 'serve_order'}
+VALID_CHECKLISTS = {'take_order', 'banh_mi', 'chef', 'grill_beef', 'serve_order', 'noodle_bar'}
 VALID_TEMP_TYPES = {'banh_mi', 'chef', 'pastry'}
 VALID_KINDS = {'cold', 'room', 'hot', 'freezer'}
 
@@ -508,6 +534,40 @@ def seed_morley_branch(db_path: str) -> None:
             (MORLEY_CHECKLIST_MARKER,
              f'Seeded Morley Cashier checklist: {len(MORLEY_CASHIER_OPENING)} opening / '
              f'{len(MORLEY_CASHIER_CLOSING)} closing task(s).'))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def seed_noodle_bar_checklists(db_path: str) -> None:
+    """Seed the Noodle Bar checklist templates for Morley + Subiaco once.
+
+    Only the noodle_bar rows of stores 2 and 3 are touched. Guarded by an
+    audit_log marker so restarts never overwrite later admin edits; bump the
+    marker version if the lists change and must re-seed.
+    """
+    conn = sqlite3.connect(db_path, timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA foreign_keys = ON')
+    try:
+        if conn.execute('SELECT 1 FROM audit_log WHERE action=? LIMIT 1',
+                        (NOODLE_BAR_MARKER,)).fetchone():
+            return
+        for store_id in NOODLE_BAR_STORE_IDS:
+            conn.execute('''DELETE FROM checklist_task_templates
+                WHERE store_id=? AND chk_type=?''', (store_id, 'noodle_bar'))
+            for section, tasks in (('opening', NOODLE_BAR_OPENING),
+                                   ('closing', NOODLE_BAR_CLOSING)):
+                for idx, task in enumerate(tasks):
+                    conn.execute('''INSERT INTO checklist_task_templates
+                        (chk_type, section, task_order, task_name, store_id)
+                        VALUES ('noodle_bar', ?, ?, ?, ?)''',
+                        (section, idx, task, store_id))
+        conn.execute('''INSERT INTO audit_log(action, record_type, user_name, details)
+            VALUES (?, 'migration', 'system', ?)''',
+            (NOODLE_BAR_MARKER,
+             f'Seeded Noodle Bar checklist for stores {NOODLE_BAR_STORE_IDS}: '
+             f'{len(NOODLE_BAR_OPENING)} opening / {len(NOODLE_BAR_CLOSING)} closing task(s).'))
         conn.commit()
     finally:
         conn.close()

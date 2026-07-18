@@ -40,7 +40,7 @@ from structure_routes import structure  as structure_bp, init_structure_tables
 from webauthn_routes  import webauthn_bp,                 init_webauthn
 from food_pricing_routes import food_pricing as food_pricing_bp, init_food_pricing_tables
 from food_safety_routes import defrost_bp, delivery_bp, init_food_safety_tables
-from branch_seed import seed_subiaco_branch, seed_morley_branch
+from branch_seed import seed_subiaco_branch, seed_morley_branch, seed_noodle_bar_checklists
 import email_service
 app.register_blueprint(prep_bp)
 app.register_blueprint(pastry_bp)
@@ -230,6 +230,33 @@ CHECKLISTS = {
             'Clean Cold Unit 5 Coffee Fridge',
             'Clean front floor',
             'Work area tidy, lights off',
+        ],
+    },
+    # Noodle Bar runs only at Morley (2) and Subiaco (3) — the 'stores' key
+    # hides this checklist everywhere else (dashboard, digests, history filters).
+    'noodle_bar': {
+        'title': 'Noodle Bar',
+        'short': 'Noodle Bar',
+        'color': '#795548',
+        'badge': 'dark',
+        'stores': (2, 3),
+        'opening': [
+            '10:00 AM — Arrive on time',
+            '10:00 AM — Check & clean the display / topping fridge area if needed',
+            '10:05 AM — Check all toppings and sauces',
+            '10:05 AM — Inform the kitchen if anything needs to be prepared or refilled',
+            '10:10 AM — Dry the bowls and make sure they are ready for service',
+            '10:30 AM–2:00 PM — Serve customers & refill toppings when needed',
+            '10:30 AM–2:00 PM — Clean tables & chairs; clear used bowls, plates and cutlery',
+            '2:30–3:00 PM — Break time',
+        ],
+        'closing': [
+            '3:00–4:00 PM — Check stock levels',
+            '3:00–4:00 PM — Fill in the stock/prep list for items running low that need preparing for tomorrow',
+            '3:00–4:00 PM — Prepare stock for the required items',
+            '3:00–4:00 PM — Refill noodles',
+            '4:00–4:15 PM — Put toppings away properly',
+            '4:00–4:15 PM — Clean the topping fridge / display area thoroughly',
         ],
     },
 }
@@ -1242,6 +1269,8 @@ def init_db():
         # Seed from CHECKLISTS if empty
         if conn.execute('SELECT COUNT(*) as c FROM checklist_task_templates').fetchone()['c'] == 0:
             for chk_type, chk_data in CHECKLISTS.items():
+                if chk_data.get('stores') and 1 not in chk_data['stores']:
+                    continue   # store-restricted type that Mirrabooka doesn't run
                 for section in ('opening', 'closing'):
                     for i, name in enumerate(chk_data.get(section, [])):
                         conn.execute('''INSERT OR IGNORE INTO checklist_task_templates
@@ -2037,7 +2066,7 @@ def inject_globals():
     _today = perth_today()
     _week_start = (_today - timedelta(days=_today.weekday())).isoformat()
     return dict(
-        checklists=CHECKLISTS,
+        checklists=visible_checklists(),
         temperatures=TEMPERATURES,
         today=_today.isoformat(),
         week_start_nav=_week_start,
@@ -2223,9 +2252,10 @@ def dashboard():
     week_ago  = (perth_today() - timedelta(days=7)).isoformat()
 
     sid = current_store_id()
+    vis_checklists = visible_checklists(sid)
     with get_db() as conn:
         chk_status = {}
-        for t in CHECKLISTS:
+        for t in vis_checklists:
             op = conn.execute(
                 'SELECT id,verified,(SELECT COUNT(*) FROM checklist_tasks WHERE session_id=checklist_sessions.id AND done=1) as done_count,(SELECT COUNT(*) FROM checklist_tasks WHERE session_id=checklist_sessions.id) as total FROM checklist_sessions WHERE type=? AND section="opening" AND date=? AND store_id=?',
                 (t, today_str, sid)).fetchone()
@@ -2270,15 +2300,15 @@ def dashboard():
 
         # Alerts: missing today's records
         alerts = []
-        total_expected = len(CHECKLISTS) * 2 + len(TEMPERATURES)
+        total_expected = len(vis_checklists) * 2 + len(TEMPERATURES)
         submitted_today = conn.execute(
             'SELECT COUNT(*) as c FROM checklist_sessions WHERE date=? AND store_id=?',
             (today_str, sid)).fetchone()['c']
         temp_today = conn.execute(
             'SELECT COUNT(*) as c FROM temp_sessions WHERE date=? AND store_id=?',
             (today_str, sid)).fetchone()['c']
-        if submitted_today < len(CHECKLISTS) * 2:
-            alerts.append({'type': 'warning', 'msg': f'{len(CHECKLISTS)*2 - submitted_today} checklist section(s) not yet submitted today'})
+        if submitted_today < len(vis_checklists) * 2:
+            alerts.append({'type': 'warning', 'msg': f'{len(vis_checklists)*2 - submitted_today} checklist section(s) not yet submitted today'})
         if temp_today < len(TEMPERATURES):
             alerts.append({'type': 'warning', 'msg': f'{len(TEMPERATURES) - temp_today} temperature record(s) not yet submitted today'})
         if pending_count > 0:
@@ -2292,6 +2322,26 @@ def dashboard():
     )
 
 # ─── Checklists ────────────────────────────────────────────────────────────────
+
+def visible_checklists(store_id=None):
+    """CHECKLISTS filtered to the types this store runs.
+
+    An entry with a 'stores' tuple only appears for those store ids (e.g. the
+    Noodle Bar exists at Morley & Subiaco only). Entries without the key show
+    everywhere. When called without store_id, the super_admin all-stores view
+    (selected_store_scope() → None) sees every type; everyone else is scoped to
+    their own store.
+    """
+    if store_id is None:
+        try:
+            store_id = selected_store_scope()
+        except Exception:
+            store_id = None
+    if store_id is None:
+        return CHECKLISTS
+    return {k: v for k, v in CHECKLISTS.items()
+            if not v.get('stores') or store_id in v['stores']}
+
 
 def _template_tasks(conn, chk_type, section, store_id=None):
     """Live task list for a checklist type+section: per-store editable templates,
@@ -2311,7 +2361,7 @@ def _template_tasks(conn, chk_type, section, store_id=None):
 @app.route('/checklist/<chk_type>')
 @login_required
 def checklist_form(chk_type):
-    if chk_type not in CHECKLISTS:
+    if chk_type not in visible_checklists(current_store_id()):
         return redirect(url_for('dashboard'))
     chk_date = request.args.get('date', perth_today().isoformat())
     # Only TODAY's Opening locks after 3 PM Perth; past dates stay open for review.
@@ -2432,7 +2482,7 @@ def delete_checklist_task():
 @login_required
 @database_save_guard('checklist')
 def checklist_save(chk_type):
-    if chk_type not in CHECKLISTS:
+    if chk_type not in visible_checklists(current_store_id()):
         return redirect(url_for('dashboard'))
     chk_date       = request.form.get('date', perth_today().isoformat())
     section        = request.form.get('section', 'opening')
@@ -2930,7 +2980,7 @@ def history():
     return render_template('history.html',
         chk_records=chk_records, temp_records=temp_records,
         date_from=date_from, date_to=date_to,
-        rec_type=rec_type, chk_type=chk_type, checklists=CHECKLISTS,
+        rec_type=rec_type, chk_type=chk_type, checklists=visible_checklists(),
         staff_filter=staff_filter, staff=get_active_staff(),
     )
 
@@ -4729,7 +4779,7 @@ def compliance_report():
         per_type=[dict(r) for r in per_type],
         photo_stats=[dict(r) for r in photo_stats],
         days=days, start=start, end=end,
-        checklists=CHECKLISTS,
+        checklists=visible_checklists(),
     )
 
 # ─── Violation Rules ───────────────────────────────────────────────────────────
@@ -5820,6 +5870,7 @@ _safe_init(ensure_save_upsert_constraints, DB_PATH)
 _safe_init(seed_subiaco_branch, DB_PATH,
            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates', 'branch.xlsx'))
 _safe_init(seed_morley_branch, DB_PATH)
+_safe_init(seed_noodle_bar_checklists, DB_PATH)
 
 if __name__ == '__main__':
     print('\n' + '='*50)
