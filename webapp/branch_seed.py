@@ -203,9 +203,17 @@ def _prep_station_id(conn: sqlite3.Connection, station_name: str) -> int:
 
 
 def _seed_store(conn: sqlite3.Connection) -> None:
+    # Passwords are only set when the store has none yet. This runs on EVERY app
+    # restart, so unconditionally writing them (as before) reset the Subiaco
+    # password back to the default every time — silently breaking login for a
+    # team that had changed it in Manage Stores. Same clobber-on-startup class of
+    # bug as _fix_subiaco_contact below. Identity fields (name/address/phone/
+    # active) still sync; the secrets are preserved once set.
     conn.execute('''UPDATE stores
         SET name=?, address=?, phone=?, active=1,
-            user_password=?, admin_password=?, kitchen_password=?
+            user_password=CASE WHEN COALESCE(user_password,'')='' THEN ? ELSE user_password END,
+            admin_password=CASE WHEN COALESCE(admin_password,'')='' THEN ? ELSE admin_password END,
+            kitchen_password=CASE WHEN COALESCE(kitchen_password,'')='' THEN ? ELSE kitchen_password END
         WHERE id=?''',
         ('Subiaco',
          '4A Seddon St, Subiaco WA 6008',
