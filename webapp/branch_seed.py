@@ -102,7 +102,8 @@ DAYS = {
     'sun': 'sun', 'sunday': 'sun',
 }
 
-VALID_CHECKLISTS = {'take_order', 'banh_mi', 'chef', 'grill_beef', 'serve_order', 'noodle_bar'}
+VALID_CHECKLISTS = {'take_order', 'banh_mi', 'chef', 'grill_beef', 'serve_order', 'noodle_bar',
+                    'cashier_drink', 'kitchenhand_chef'}
 VALID_TEMP_TYPES = {'banh_mi', 'chef', 'pastry'}
 VALID_KINDS = {'cold', 'room', 'hot', 'freezer'}
 
@@ -576,6 +577,73 @@ def seed_noodle_bar_checklists(db_path: str) -> None:
             (NOODLE_BAR_MARKER,
              f'Seeded Noodle Bar checklist for stores {NOODLE_BAR_STORE_IDS}: '
              f'{len(NOODLE_BAR_OPENING)} opening / {len(NOODLE_BAR_CLOSING)} closing task(s).'))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# Subiaco runs combined stations: one Cashier - Drink checklist (take_order +
+# serve_order) and one Kitchen Hand - Chef checklist (grill_beef + chef).
+SUBIACO_MERGED_MARKER = 'subiaco_merged_checklists_v1'
+SUBIACO_MERGED_SOURCES = {
+    'cashier_drink':    ('take_order', 'serve_order'),
+    'kitchenhand_chef': ('grill_beef', 'chef'),
+}
+
+
+def seed_subiaco_merged_checklists(db_path: str, checklists_defaults: dict) -> None:
+    """Build Subiaco's combined checklists from its LIVE per-station tasks once.
+
+    For each source station we take Subiaco's own template rows when they exist
+    (preserving every admin edit made to date), else that station's built-in
+    default list (`checklists_defaults` = CHECKLISTS from app.py — passed in to
+    avoid a circular import). Duplicate tasks are dropped case-insensitively so
+    the combined lists never repeat a task. Only store 3's cashier_drink /
+    kitchenhand_chef rows are written; the old per-station rows stay untouched
+    (they're hidden at Subiaco by the CHECKLISTS 'stores' visibility). Guarded
+    by an audit_log marker so restarts never overwrite later admin edits.
+    """
+    conn = sqlite3.connect(db_path, timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA foreign_keys = ON')
+    try:
+        if conn.execute('SELECT 1 FROM audit_log WHERE action=? LIMIT 1',
+                        (SUBIACO_MERGED_MARKER,)).fetchone():
+            return
+
+        def effective_tasks(chk_type: str, section: str) -> list[str]:
+            rows = conn.execute(
+                '''SELECT task_name FROM checklist_task_templates
+                   WHERE store_id=? AND chk_type=? AND section=?
+                   ORDER BY task_order''',
+                (SUBIACO_STORE_ID, chk_type, section)).fetchall()
+            if rows:
+                return [r['task_name'] for r in rows]
+            return list(checklists_defaults.get(chk_type, {}).get(section, []))
+
+        counts = []
+        for merged_type, sources in SUBIACO_MERGED_SOURCES.items():
+            conn.execute('''DELETE FROM checklist_task_templates
+                WHERE store_id=? AND chk_type=?''', (SUBIACO_STORE_ID, merged_type))
+            for section in ('opening', 'closing'):
+                merged, seen = [], set()
+                for source in sources:
+                    for task in effective_tasks(source, section):
+                        key = ' '.join(task.split()).lower()
+                        if key not in seen:
+                            seen.add(key)
+                            merged.append(task)
+                for idx, task in enumerate(merged):
+                    conn.execute('''INSERT INTO checklist_task_templates
+                        (chk_type, section, task_order, task_name, store_id)
+                        VALUES (?,?,?,?,?)''',
+                        (merged_type, section, idx, task, SUBIACO_STORE_ID))
+                counts.append(f'{merged_type} {section}: {len(merged)}')
+
+        conn.execute('''INSERT INTO audit_log(action, record_type, user_name, details)
+            VALUES (?, 'migration', 'system', ?)''',
+            (SUBIACO_MERGED_MARKER,
+             'Seeded Subiaco combined checklists — ' + '; '.join(counts) + '.'))
         conn.commit()
     finally:
         conn.close()

@@ -40,7 +40,8 @@ from structure_routes import structure  as structure_bp, init_structure_tables
 from webauthn_routes  import webauthn_bp,                 init_webauthn
 from food_pricing_routes import food_pricing as food_pricing_bp, init_food_pricing_tables
 from food_safety_routes import defrost_bp, delivery_bp, init_food_safety_tables
-from branch_seed import seed_subiaco_branch, seed_morley_branch, seed_noodle_bar_checklists
+from branch_seed import (seed_subiaco_branch, seed_morley_branch,
+                         seed_noodle_bar_checklists, seed_subiaco_merged_checklists)
 import email_service
 app.register_blueprint(prep_bp)
 app.register_blueprint(pastry_bp)
@@ -66,11 +67,15 @@ PHOTOS_REQUIRED = 4
 # ─── Data Definitions ──────────────────────────────────────────────────────────
 
 CHECKLISTS = {
+    # Subiaco (3) runs combined stations instead: Cashier - Drink and
+    # Kitchen Hand - Chef below. The four single-station checklists are
+    # therefore Mirrabooka (1) + Morley (2) only.
     'take_order': {
         'title': 'Cashier',
         'short': 'Cashier',
         'color': '#2196F3',
         'badge': 'primary',
+        'stores': (1, 2),
         'opening': [
             'Open till & check cash balance ($350)',
             'Uniform check (hat, shirt, apron)',
@@ -134,6 +139,7 @@ CHECKLISTS = {
         'short': 'Chef',
         'color': '#F44336',
         'badge': 'danger',
+        'stores': (1, 2),
         'opening': [
             'Turn on lights and ventilation/exhaust fan',
             'Turn on gas & all kitchen equipment',
@@ -179,6 +185,7 @@ CHECKLISTS = {
         'short': 'K.Hand',
         'color': '#4CAF50',
         'badge': 'success',
+        'stores': (1, 2),
         'opening': [
             'Roast pork (10-15/day, 15-20 weekends)',
             'Grill chicken (2 trays/day, 3-4 weekends)',
@@ -203,6 +210,7 @@ CHECKLISTS = {
         'short': 'Drinks',
         'color': '#00BCD4',
         'badge': 'info',
+        'stores': (1, 2),
         'opening': [
             'Prepare black iced coffee base (at least 2 jars)',
             'Prepare watermelon / tropical / sugarcane juice',
@@ -232,6 +240,28 @@ CHECKLISTS = {
             'Work area tidy, lights off',
         ],
     },
+    # Subiaco-only combined stations. Their opening/closing defaults are filled
+    # programmatically right after this dict (source lists merged, no dupes) so
+    # the task text lives in one place; the store-3 template rows themselves are
+    # seeded from Subiaco's live per-store tasks by seed_subiaco_merged_checklists.
+    'cashier_drink': {
+        'title': 'Cashier - Drink',
+        'short': 'Cashier-Drink',
+        'color': '#0288D1',
+        'badge': 'primary',
+        'stores': (3,),
+        'opening': [],
+        'closing': [],
+    },
+    'kitchenhand_chef': {
+        'title': 'Kitchen Hand - Chef',
+        'short': 'KH-Chef',
+        'color': '#D84315',
+        'badge': 'danger',
+        'stores': (3,),
+        'opening': [],
+        'closing': [],
+    },
     # Noodle Bar runs only at Morley (2) and Subiaco (3) — the 'stores' key
     # hides this checklist everywhere else (dashboard, digests, history filters).
     'noodle_bar': {
@@ -260,6 +290,31 @@ CHECKLISTS = {
         ],
     },
 }
+
+
+def merge_checklist_tasks(*task_lists):
+    """Concatenate task lists in order, dropping duplicates
+    (case/whitespace-insensitive) so combined checklists never repeat a task."""
+    merged, seen = [], set()
+    for tasks in task_lists:
+        for task in tasks:
+            key = ' '.join(task.split()).lower()
+            if key not in seen:
+                seen.add(key)
+                merged.append(task)
+    return merged
+
+
+# Fill the Subiaco combined checklists' default task lists from their source
+# stations (merge order follows the checklist name).
+CHECKLIST_MERGED_SOURCES = {
+    'cashier_drink':    ('take_order', 'serve_order'),
+    'kitchenhand_chef': ('grill_beef', 'chef'),
+}
+for _merged_key, _source_keys in CHECKLIST_MERGED_SOURCES.items():
+    for _section in ('opening', 'closing'):
+        CHECKLISTS[_merged_key][_section] = merge_checklist_tasks(
+            *[CHECKLISTS[k][_section] for k in _source_keys])
 
 TEMPERATURES = {
     'banh_mi': {
@@ -5871,6 +5926,7 @@ _safe_init(seed_subiaco_branch, DB_PATH,
            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates', 'branch.xlsx'))
 _safe_init(seed_morley_branch, DB_PATH)
 _safe_init(seed_noodle_bar_checklists, DB_PATH)
+_safe_init(seed_subiaco_merged_checklists, DB_PATH, CHECKLISTS)
 
 if __name__ == '__main__':
     print('\n' + '='*50)
