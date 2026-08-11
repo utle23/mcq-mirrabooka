@@ -82,7 +82,7 @@
             {% endfor %}
           </select>
         </div>
-        {% if chk_type == 'banh_mi' %}
+        {% if allow_second_responsible %}
         <div class="col-md-6">
           <label class="form-label fw-semibold">Responsible Person 2 <span class="text-muted small fw-normal">(optional)</span></label>
           <select name="responsible2" class="form-select">
@@ -332,18 +332,13 @@
             </div>
             {% endfor %}
 
-            <!-- Extra slot (optional) -->
-            <div class="photo-slot photo-slot-extra" id="slot-extra"
-                 onclick="document.getElementById('photo-input-extra').click()">
-              <input type="file" name="photo_{{ photos_required }}" id="photo-input-extra"
-                     accept="image/*" capture="environment"
-                     class="photo-file-input"
-                     onchange="previewExtra(this)">
-              <div id="empty-extra">
+            <!-- Extra photos: unlimited. Each "+" adds another slot. -->
+            <div class="photo-slot photo-slot-extra" id="slot-add-extra"
+                 onclick="addExtraPhotoSlot()" title="Add another photo">
+              <div>
                 <i class="fas fa-plus fa-lg text-muted"></i>
-                <div class="tiny text-muted mt-1">Extra</div>
+                <div class="tiny text-muted mt-1">Add photo</div>
               </div>
-              <img id="preview-extra" class="photo-preview-img" src="" alt="" style="display:none">
             </div>
           </div>
 
@@ -476,14 +471,14 @@ function showPhotoPreview(input, n, isExtra=false) {
   const slot = document.getElementById(isExtra ? 'slot-extra' : 'slot-' + n);
   const url = URL.createObjectURL(file);
 
+  if (!preview || !slot) return;   // dynamically added extra slots have no tick
   preview.onload = () => URL.revokeObjectURL(url);
   preview.src = url;
   preview.style.display = 'block';
-  empty.style.display = 'none';
+  if (empty) empty.style.display = 'none';
   slot.classList.add('has-photo');
-  if (!isExtra) {
-    document.getElementById('check-ph-' + n).style.display = 'flex';
-  }
+  const tick = document.getElementById('check-ph-' + n);
+  if (!isExtra && tick) tick.style.display = 'flex';
 }
 
 function previewPhoto(input, n) {
@@ -491,9 +486,32 @@ function previewPhoto(input, n) {
   updatePhotoCount();
 }
 
-function previewExtra(input) {
-  showPhotoPreview(input, 'extra', true);
-  updatePhotoCount();
+// ── Extra photos: unlimited ────────────────────────────────────────────────
+// Each click inserts a fresh slot named photo_<n> just before the "+" tile;
+// the server accepts every photo_<n> field it receives.
+let extraPhotoSeq = PHOTOS_REQ;
+
+function addExtraPhotoSlot() {
+  const grid = document.getElementById('photo-grid');
+  const addTile = document.getElementById('slot-add-extra');
+  if (!grid || !addTile) return;
+  const n = extraPhotoSeq++;
+  const slot = document.createElement('div');
+  slot.className = 'photo-slot photo-slot-extra';
+  slot.id = 'slot-' + n;
+  slot.innerHTML =
+    '<input type="file" name="photo_' + n + '" id="photo-input-' + n + '" ' +
+      'accept="image/*" capture="environment" class="photo-file-input">' +
+    '<div id="empty-' + n + '">' +
+      '<i class="fas fa-camera fa-lg text-muted"></i>' +
+      '<div class="tiny text-muted mt-1">Extra</div>' +
+    '</div>' +
+    '<img id="preview-' + n + '" class="photo-preview-img" src="" alt="" style="display:none">';
+  const input = slot.querySelector('input');
+  input.addEventListener('change', () => showPhotoPreview(input, n, false));
+  slot.addEventListener('click', e => { if (e.target !== input) input.click(); });
+  grid.insertBefore(slot, addTile);
+  input.click();
 }
 
 function updatePhotoCount() {

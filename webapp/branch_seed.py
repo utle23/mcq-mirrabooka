@@ -591,6 +591,180 @@ SUBIACO_MERGED_SOURCES = {
 }
 
 
+# ── Morley checklists, redesigned per the owner's walk-through ───────────────
+# Morley runs its own station split: the cashier also makes the drinks (so there
+# is no separate Drinks checklist), and the noodle bar is its own station with a
+# morning and an afternoon list. Tasks are ordered by how the shift actually
+# runs, and near-duplicate steps are merged into one line.
+MORLEY_CHECKLIST_V2_MARKER = 'morley_checklists_v2'
+
+MORLEY_V2 = {
+    # Cashier + Drink — the cashier station absorbs every drink task.
+    'take_order': {
+        'opening': [
+            'Turn on all lights & equipment — noodle bar, banh mi, pastry and fruit counters, coffee machine & hot-water machine',
+            'Uniform check; wear gloves when handling or filling food',
+            'Check the POS system — tills and EFTPOS all working',
+            'Counter area ready for service; clean the surrounding counter area',
+            'Organise the pastry display & set out latte/name labels',
+            'Prepare black iced coffee base (at least 2 jars)',
+            'Make milk coffee (750 ml black coffee + 1 can condensed milk, then 650 ml fresh milk) — 4–5 jugs weekdays / 6–7 jugs weekend',
+            'Wash sugarcane, then make sugarcane juice — 1 jug; if it runs out early, make to order',
+            'Make tropical fruit juice (apple + orange, orange peeled) — 1 jug weekdays / 2 jugs weekend; if it runs out early, make to order',
+            'Prepare fruit & peel pomelo for the afternoon service',
+            'Brew hot tea (¼ cup steeped tea leaves into the thermos, topped with hot water) ready to serve',
+            'Label every drink — black coffee, milk coffee, sugarcane juice and fruit juices — with the item name and date',
+            'Check coffee, condensed milk & fruit stock',
+            'Complete checklists (Food Temperature Records)',
+        ],
+        'closing': [
+            'Collect & clear the fried-food counter; clean the air fryer',
+            'Clean & turn off all drink machines — coffee machine, fruit juicer, sugarcane juicer and tea urn',
+            'Wash all drink containers & jugs (juice, coffee, sugarcane)',
+            'Clean the juice-counter trays, wrap food & refill fruit containers with lids clean and covered',
+            'Peel & prepare fruit for tomorrow’s juice: orange, apple, watermelon, etc.',
+            'Change the fruit display (Mon, Wed, Fri, Sun)',
+            'Set up & check the quality of the fruit juice in the fridge',
+            'Check coffee & condensed milk are ready for tomorrow (2 shifts / 2 black coffee)',
+            'Clean the counter area & display glass cabinets',
+            'Clean the microwave & pastry tray; bag returned pastry and bring it to the counter',
+            'Clean Cold Unit 1 (fruit juice), Cold Unit 2 (soft drink), Cold Unit 3 (pastry) & Cold Unit 5 (coffee)',
+            'Refill cups, lids, straws, food containers, noodle bar containers, carry bags & cup holders',
+            'Refill drinking water & the receipt roll',
+            'Final dish check at 4:30 PM (optional)',
+            'Buy the items needed that were paid for at the counter',
+            'Check the packaging stock to order — every Tuesday afternoon',
+            'Check stock — if low, buy at the supermarket (scan the barcode) or record it for the restaurant',
+            'Check income & till balance before closing',
+            'Dining area & cashier — sweep, put the chairs up and wipe the front of the counters',
+            'Close the curtains & tidy the surrounding area',
+            'Work area tidy — turn off all lights, gas & equipment',
+            'Take photos & send the closing report to the restaurant + cf group: dining area, coffee counter, outdoor drinks fridge, fried food, banh mi, both kitchen sides, bins',
+        ],
+    },
+    # Noodle Bar — its own station, morning and afternoon.
+    'noodle_bar': {
+        'opening': [
+            'Arrive on time; check & clean the display / topping fridge area if needed',
+            'Set up the noodle bar — fill items from the freezer & fridge (odourless items and small trays first, then medium, then mixed sizes)',
+            'Line every tray with fresh greens & arrange the toppings attractively (photo required)',
+            'Check all toppings & sauces — buy more if anything is short',
+            'Check every item has its label',
+            'Inform the kitchen if anything needs preparing or refilling (boiled egg or beef)',
+            'Dry the bowls and make sure they are ready for service',
+            'Serve customers & refill toppings when needed',
+        ],
+        'closing': [
+            'Clean the noodle counter & cooking area — wrap all trays; sort meat/fish cake/cheese → freezer, vegetables → cold fridge',
+            'Set up the noodle bar for tomorrow — refill items from the freezer & fridge (odourless items and small trays first, then medium, then mixed sizes)',
+            'Organise the pastry display & set out latte/name labels; if an item is out of stock, buy it, scan the barcode & photograph the receipt',
+            'Check stock levels & fill in the prep list for anything running low',
+            'Refill noodles',
+            'Put the toppings away properly & clean the topping fridge / display area thoroughly',
+        ],
+    },
+    # Banh Mi — Mirrabooka's list plus the front floor; the dish check moved to
+    # the Cashier + Drink closing.
+    'banh_mi': {
+        'opening': None,      # unchanged from the built-in list
+        'closing': 'BANH_MI_CLOSING',
+    },
+    'chef':       {'opening': None, 'closing': 'CHEF_CLOSING'},
+    'grill_beef': {'opening': 'KH_OPENING', 'closing': 'KH_CLOSING'},
+}
+
+MORLEY_CHEF_CLOSING = [
+    'Marinate chicken & pork for next day following the food preparation timetable',
+    'Prepare fish sauce and soy sauce for tomorrow',
+    'Prep & store next-day food properly',
+    'Clean the grill, oven, stove, gas burners & deep fryer',
+    'Clean Cold Unit 6 (soup & rice), Cold Unit 7 (noodle & soup bar), the cold food fridge & the display fridge bar',
+    'Clean kitchen areas & equipment',
+    'Spray & wash the kitchen floor, including the back floor',
+    'All kitchen equipment turned OFF',
+]
+
+MORLEY_KH_OPENING = [
+    'Roast pork (10-15/day, 15-20 weekends)',
+    'Grill chicken (2 trays/day, 3-4 weekends)',
+    'Stir-fry beef / pork / tofu',
+    'Slice beef ~5 kg for pho & banh mi',
+    'Slice pork & char siu meat',
+    'Beef soup Tue/Thu/Sat — Char siu Mon/Wed/Fri',
+    'Make sure spoons, chopsticks, forks, sauces & napkin boxes are fully stocked',
+]
+
+MORLEY_KH_CLOSING = [
+    'Check & refill seasonings',
+    'Prepare food for next day when time allows',
+    'Clean the preparation area',
+    'Empty the rubbish bins',
+    'Wash the dishes',
+    'Sweep the food court area & make sure every dish has been washed',
+    'Scrub & clean the kitchen floor area',
+]
+
+
+def _morley_banh_mi_closing(default_closing):
+    """Morley's Banh Mi closing: keep the standard list, drop the dish check
+    (now done by Cashier + Drink) and add the front floor."""
+    out = [t for t in default_closing
+           if 'wash dishes' not in t.lower() and 'final dish check' not in t.lower()]
+    if not any('front floor' in t.lower() for t in out):
+        out.append('Clean front floor')
+    return out
+
+
+def seed_morley_checklists_v2(db_path: str, checklists_defaults: dict) -> None:
+    """Apply Morley's redesigned checklists. Store 2 only, one-time."""
+    conn = sqlite3.connect(db_path, timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA foreign_keys = ON')
+    try:
+        if conn.execute('SELECT 1 FROM audit_log WHERE action=? LIMIT 1',
+                        (MORLEY_CHECKLIST_V2_MARKER,)).fetchone():
+            return
+
+        named = {
+            'CHEF_CLOSING': MORLEY_CHEF_CLOSING,
+            'KH_OPENING': MORLEY_KH_OPENING,
+            'KH_CLOSING': MORLEY_KH_CLOSING,
+            'BANH_MI_CLOSING': _morley_banh_mi_closing(
+                checklists_defaults.get('banh_mi', {}).get('closing', [])),
+        }
+
+        written = []
+        for chk_type, sections in MORLEY_V2.items():
+            for section, tasks in sections.items():
+                if isinstance(tasks, str):
+                    tasks = named[tasks]
+                elif tasks is None:
+                    # Keep the built-in list, but store it so Morley owns a full
+                    # independent copy that admins can edit per branch.
+                    tasks = checklists_defaults.get(chk_type, {}).get(section, [])
+                conn.execute('''DELETE FROM checklist_task_templates
+                    WHERE store_id=? AND chk_type=? AND section=?''',
+                    (MORLEY_STORE_ID, chk_type, section))
+                for idx, task in enumerate(tasks):
+                    conn.execute('''INSERT INTO checklist_task_templates
+                        (chk_type, section, task_order, task_name, store_id)
+                        VALUES (?,?,?,?,?)''',
+                        (chk_type, section, idx, task, MORLEY_STORE_ID))
+                written.append(f'{chk_type}/{section}={len(tasks)}')
+
+        # Drinks is folded into Cashier + Drink at Morley — drop its templates.
+        conn.execute('''DELETE FROM checklist_task_templates
+            WHERE store_id=? AND chk_type=?''', (MORLEY_STORE_ID, 'serve_order'))
+
+        conn.execute('''INSERT INTO audit_log(action, record_type, user_name, details)
+            VALUES (?, 'migration', 'system', ?)''',
+            (MORLEY_CHECKLIST_V2_MARKER,
+             'Morley checklists v2 — ' + ', '.join(written) + '; serve_order removed.'))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # ── Morley staff + branch passwords ──────────────────────────────────────────
 # Morley had no staff rows, so every staff dropdown (including the not-in-uniform
 # picker) fell back to the built-in list, showing Mirrabooka's names. It also

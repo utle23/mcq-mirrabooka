@@ -257,9 +257,13 @@ def _build_topics(role):
 
 
 def _get_staff_list():
+    """Active staff for the CURRENT store only, so one branch never sees
+    another branch's names in a picker."""
+    from store_scope import current_store_id
     with _get_db() as conn:
         return [r['name'] for r in conn.execute(
-            'SELECT name FROM staff_members WHERE active=1 ORDER BY name').fetchall()]
+            'SELECT name FROM staff_members WHERE active=1 AND store_id=? ORDER BY name',
+            (current_store_id(),)).fetchall()]
 
 
 def _save_items(conn, session_id, form):

@@ -11,7 +11,7 @@ except Exception:
 
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_file, send_from_directory, flash, abort
 from functools import wraps
-import sqlite3, json, calendar, uuid
+import sqlite3, json, calendar, uuid, re
 from datetime import datetime, date, timedelta, timezone
 from io import BytesIO
 from werkzeug.utils import secure_filename
@@ -43,7 +43,7 @@ from food_safety_routes import defrost_bp, delivery_bp, init_food_safety_tables
 from branch_seed import (seed_subiaco_branch, seed_morley_branch,
                          seed_noodle_bar_checklists, seed_subiaco_merged_checklists,
                          seed_cool_room_equipment, seed_morley_packaging,
-                         seed_morley_staff)
+                         seed_morley_staff, seed_morley_checklists_v2)
 import email_service
 app.register_blueprint(prep_bp)
 app.register_blueprint(pastry_bp)
@@ -78,6 +78,10 @@ CHECKLISTS = {
         'color': '#2196F3',
         'badge': 'primary',
         'stores': (1, 2),
+        # Morley runs one combined station: the cashier also makes the drinks,
+        # so it has no separate Drinks checklist.
+        'store_titles': {2: 'Cashier + Drink'},
+        'store_shorts': {2: 'Cashier+Drink'},
         'opening': [
             'Open till & check cash balance ($350)',
             'Uniform check (hat, shirt, apron)',
@@ -113,6 +117,8 @@ CHECKLISTS = {
         'short': 'Banh Mi',
         'color': '#FF9800',
         'badge': 'warning',
+        # Two people can share the Banh Mi station; Morley staffs it with one.
+        'single_responsible_stores': (2,),
         'opening': [
             'Set up & display banh mi fridge bar (including banh mi, red pork meat, cha lua, cha gan, ngò, pickles, sliced chilli, cucumber)',
             'Check & test quality of each item (report to Manager if food not good to sell)',
@@ -212,7 +218,9 @@ CHECKLISTS = {
         'short': 'Drinks',
         'color': '#00BCD4',
         'badge': 'info',
-        'stores': (1, 2),
+        # Mirrabooka only — Morley folds drinks into its Cashier + Drink
+        # checklist, Subiaco into Cashier - Drink.
+        'stores': (1,),
         'opening': [
             'Prepare black iced coffee base (at least 2 jars)',
             'Prepare watermelon / tropical / sugarcane juice',
@@ -2466,8 +2474,34 @@ def visible_checklists(store_id=None):
             store_id = None
     if store_id is None:
         return CHECKLISTS
-    return {k: v for k, v in CHECKLISTS.items()
+    return {k: store_checklist(v, store_id) for k, v in CHECKLISTS.items()
             if not v.get('stores') or store_id in v['stores']}
+
+
+def store_checklist(chk, store_id):
+    """A checklist entry as this store sees it, applying any per-store name
+    override (e.g. Morley's Cashier is titled 'Cashier + Drink')."""
+    title = (chk.get('store_titles') or {}).get(store_id)
+    short = (chk.get('store_shorts') or {}).get(store_id)
+    if not title and not short:
+        return chk
+    out = dict(chk)
+    if title:
+        out['title'] = title
+    if short:
+        out['short'] = short
+    return out
+
+
+def checklist_meta(chk_type, store_id=None):
+    """Per-store metadata for one checklist type (title/short/color)."""
+    chk = CHECKLISTS.get(chk_type, {})
+    if store_id is None:
+        try:
+            store_id = current_store_id()
+        except Exception:
+            return chk
+    return store_checklist(chk, store_id)
 
 
 def _template_tasks(conn, chk_type, section, store_id=None):
@@ -2491,7 +2525,7 @@ def checklist_form(chk_type):
     if chk_type not in visible_checklists(current_store_id()):
         return redirect(url_for('dashboard'))
     chk_date = request.args.get('date', perth_today().isoformat())
-    chk_data = CHECKLISTS[chk_type]
+    chk_data = checklist_meta(chk_type, current_store_id())
     sections = checklist_sections(chk_data)
     # A daily checklist (e.g. Cool Room) has no morning/evening split, so the
     # 3 PM Opening lock must not apply to it.
@@ -2549,6 +2583,11 @@ def checklist_form(chk_type):
         # Per-checklist override of the global 4-photo rule (Cool Room collects
         # its evidence per task instead).
         photos_required=chk_data.get('photos_required', PHOTOS_REQUIRED),
+        # Banh Mi can be shared by two people, except at stores that staff it
+        # with one (Morley).
+        allow_second_responsible=(
+            chk_type == 'banh_mi'
+            and current_store_id() not in (chk_data.get('single_responsible_stores') or ())),
         opening_locked=locked,   # date-aware: overrides the global (today) lock
     )
 
@@ -2650,6 +2689,8 @@ def checklist_save(chk_type):
     responsible    = request.form.get('responsible', '')
     # Banh Mi station can have two people responsible — combine into one field.
     responsible2   = request.form.get('responsible2', '').strip()
+    if current_store_id() in (CHECKLISTS[chk_type].get('single_responsible_stores') or ()):
+        responsible2 = ''      # this store staffs the section with one person
     if responsible2 and responsible2 != responsible.strip():
         responsible = ' & '.join([p for p in (responsible.strip(), responsible2) if p])
     submitted_by   = request.form.get('submitted_by', '')
@@ -2762,11 +2803,17 @@ def checklist_save(chk_type):
             return (f and f.filename and f.filename.strip()
                     and os.path.splitext(f.filename)[1].lower().lstrip('.') in ALLOWED_EXT)
 
+        # Any number of extra photos: accept every photo_<n> field the form
+        # sent rather than a fixed range, so staff can add as many as they need.
         new_photos = []
-        for i in range(PHOTOS_REQUIRED + 6):
-            f = request.files.get(f'photo_{i}')
-            if _valid_upload(f):
-                new_photos.append((i, f))
+        for field in request.files:
+            m = re.fullmatch(r'photo_(\d+)', field)
+            if not m:
+                continue
+            for f in request.files.getlist(field):
+                if _valid_upload(f):
+                    new_photos.append((int(m.group(1)), f))
+        new_photos.sort(key=lambda pair: pair[0])
 
         if new_photos:
             # Replace only the GENERAL photos; per-task evidence is kept.
@@ -2817,15 +2864,15 @@ def checklist_save(chk_type):
         # ─────────────────────────────────────────────────────────────────────
 
         log_action_conn(conn, 'SAVE_CHECKLIST', 'checklist', sid, submitted_by,
-                        f'{CHECKLISTS[chk_type]["title"]} / {section} / {chk_date}')
+                        f'{checklist_meta(chk_type, store_id)["title"]} / {section} / {chk_date}')
 
     done_count = sum(1 for t in task_rows if t[2])
     completion_pct = round(done_count / len(task_rows) * 100) if task_rows else 0
     email_service.send_notification(
         'checklist',
-        subject=f'{CHECKLISTS[chk_type]["title"]} {section} checklist submitted ({chk_date})',
+        subject=f'{checklist_meta(chk_type, store_id)["title"]} {section} checklist submitted ({chk_date})',
         lines=[
-            f'Type: {CHECKLISTS[chk_type]["title"]}',
+            f'Type: {checklist_meta(chk_type, store_id)["title"]}',
             f'Section: {section.title()}',
             f'Date: {chk_date} ({day_name})',
             f'Completion: {done_count} / {len(task_rows)} tasks ({completion_pct}%)',
@@ -2872,7 +2919,7 @@ def checklist_view(session_id):
     return render_template('checklist_view.html',
         sess=dict(sess), tasks=tasks, photos=photos,
         uniform_flagged=uniform_flagged,
-        chk_data=CHECKLISTS.get(sess['type'], {}), staff=get_active_staff(),
+        chk_data=checklist_meta(sess['type'], sess['store_id']), staff=get_active_staff(),
     )
 
 @app.route('/checklist/verify/<int:session_id>', methods=['POST'])
@@ -6088,6 +6135,7 @@ _safe_init(seed_subiaco_merged_checklists, DB_PATH, CHECKLISTS)
 _safe_init(seed_cool_room_equipment, DB_PATH)
 _safe_init(seed_morley_packaging, DB_PATH)
 _safe_init(seed_morley_staff, DB_PATH)
+_safe_init(seed_morley_checklists_v2, DB_PATH, CHECKLISTS)
 
 if __name__ == '__main__':
     print('\n' + '='*50)

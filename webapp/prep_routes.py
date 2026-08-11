@@ -136,11 +136,13 @@ def _form_active_days():
 # ── DB Init ────────────────────────────────────────────────────────────────────
 
 def _get_staff():
-    """Always pull active staff from DB — stays in sync with Staff Management page."""
+    """Active staff for the CURRENT store — stays in sync with the Staff page,
+    so removing someone there drops them from every picker here too."""
     try:
         with _get_db() as conn:
             rows = conn.execute(
-                'SELECT name FROM staff_members WHERE active=1 ORDER BY name').fetchall()
+                'SELECT name FROM staff_members WHERE active=1 AND store_id=? ORDER BY name',
+                (current_store_id(),)).fetchall()
             return [r['name'] for r in rows]
     except Exception:
         return []

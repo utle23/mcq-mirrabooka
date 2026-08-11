@@ -102,10 +102,13 @@ def _admin_required(f):
     return d
 
 def _get_staff():
+    """Active staff for the CURRENT store only, so one branch never sees
+    another branch's names in a picker."""
     try:
         with _get_db() as conn:
             rows = conn.execute(
-                'SELECT name FROM staff_members WHERE active=1 ORDER BY name').fetchall()
+                'SELECT name FROM staff_members WHERE active=1 AND store_id=? ORDER BY name',
+                (current_store_id(),)).fetchall()
             return [r['name'] for r in rows]
     except Exception:
         return []
