@@ -118,7 +118,7 @@
 
 <!-- HERO with PDF share -->
 <div class="hero">
-  <div class="badge-date">📅 {{ date }} · {{ period_meta.label }} report</div>
+  <div class="badge-date">🏪 {{ store_name }} · 📅 {{ date_label }}</div>
   <h2><i class="fab fa-whatsapp me-2"></i>{{ period_meta.label }} Report — ready to share</h2>
   <p>
     {% if period == 'closing' %}
@@ -144,7 +144,7 @@
     </button>
     <a href="/whatsapp/pdf?date={{ date }}&period={{ period }}"
        class="btn-pdf-download"
-       download="MCQ_{{ period_meta.label }}_Report_{{ date }}.pdf">
+       download="{{ report_slug }}_Report.pdf">
       <i class="fas fa-file-pdf"></i> Download PDF
     </a>
     <a href="/whatsapp/pdf?date={{ date }}&period={{ period }}" target="_blank" class="btn-pdf-download">
@@ -259,13 +259,15 @@
 {% block scripts %}
 <script>
 const PDF_URL = '/whatsapp/pdf?date={{ date }}&period={{ period }}';
-const PDF_FNAME = 'MCQ_{{ period_meta.label }}_Report_{{ date }}.pdf';
+const PDF_FNAME = '{{ report_slug }}_Report.pdf';
 let preparedPdf = null;
 let preparePdfPromise = null;
 let preparePdfController = null;
 
 function pdfText() {
-  return '{{ store_name }} Cafe - {{ period_meta.label|lower }} operations report ({{ date }})';
+  // Names the branch, the shift and the date, e.g.
+  // "MCQ Morley — Closing report — Tue 11 Aug 2026"
+  return '{{ store_name }} — {{ period_meta.label }} report — {{ date_label }}';
 }
 
 function downloadPdf(blob) {
@@ -363,7 +365,7 @@ async function sharePdf() {
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       await navigator.share({
         files: [file],
-        title: '{{ store_name }} {{ period_meta.label }} Report — {{ date }}',
+        title: '{{ store_name }} — {{ period_meta.label }} report — {{ date_label }}',
         text:  pdfText(),
       });
       status.innerHTML = '<i class="fas fa-check-circle"></i> Pick a WhatsApp group from the share sheet.';

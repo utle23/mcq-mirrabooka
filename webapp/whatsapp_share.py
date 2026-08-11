@@ -5,6 +5,7 @@ shared straight to a WhatsApp group via the browser's native share sheet.
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
@@ -72,6 +73,43 @@ def _conn() -> sqlite3.Connection:
     c = sqlite3.connect(DB_PATH, timeout=30)
     c.row_factory = sqlite3.Row
     return c
+
+
+def _date_label(date_str: str) -> str:
+    """'2026-08-11' → 'Tue 11 Aug 2026' for report headings and share text."""
+    try:
+        return datetime.strptime(date_str, '%Y-%m-%d').strftime('%a %d %b %Y')
+    except Exception:
+        return date_str
+
+
+def _report_slug(store_name: str, period: str, date_str: str) -> str:
+    """Filename stem naming the branch, the shift and the date, e.g.
+    'MCQ_Morley_Closing_2026-08-11'."""
+    stem = re.sub(r'[^A-Za-z0-9]+', '_', store_name or 'MCQ').strip('_') or 'MCQ'
+    return f'{stem}_{period.title()}_{date_str}'
+
+
+def _chk_meta(chk_type: str, store_id=None) -> dict:
+    """Checklist metadata as THIS store sees it.
+
+    A type can be renamed per branch (Morley's Cashier is 'Cashier + Drink',
+    Subiaco combines stations), so every report surface must resolve the title
+    against the store instead of using the chain-wide default.
+    """
+    meta = CHECKLISTS_META.get(chk_type, {}) or {}
+    if store_id is None:
+        return meta
+    title = (meta.get('store_titles') or {}).get(store_id)
+    short = (meta.get('store_shorts') or {}).get(store_id)
+    if not title and not short:
+        return meta
+    meta = dict(meta)
+    if title:
+        meta['title'] = title
+    if short:
+        meta['short'] = short
+    return meta
 
 
 def _store_name(store_id=None) -> str:
@@ -177,7 +215,7 @@ def _collect_today(date_str: str, period: str | None = None, store_id=None) -> d
 
         for r in chk_rows:
             r = dict(r)
-            meta = CHECKLISTS_META.get(r['type'], {})
+            meta = _chk_meta(r['type'], sid)
             photos = [dict(p) for p in conn.execute(
                 'SELECT filename, photo_number FROM checklist_photos '
                 'WHERE session_id=? ORDER BY photo_number LIMIT 4',
@@ -792,7 +830,7 @@ def _checklist_detail(session_id: int) -> dict | None:
         sess['uniform_flagged'] = [r['staff_name'] for r in conn.execute(
             'SELECT staff_name FROM checklist_uniform_flags '
             'WHERE session_id=? ORDER BY id', (session_id,)).fetchall()]
-        sess['meta'] = CHECKLISTS_META.get(sess['type'], {})
+        sess['meta'] = _chk_meta(sess['type'], sess.get('store_id'))
     return sess
 
 
@@ -2699,11 +2737,14 @@ def whatsapp_today():
     today_str = date.today().isoformat()
     period = _resolve_share_period(request.args.get('period'))
     data = _collect_today(today_str, period)
+    store_name = _store_name()
     return render_template('whatsapp_share.html',
         date=today_str, data=data, period=period,
         period_meta=SHARE_PERIODS[period], share_periods=SHARE_PERIODS,
         cutoff_hour=SHARE_CUTOFF_HOUR,
-        store_name=_store_name(),
+        store_name=store_name,
+        date_label=_date_label(today_str),
+        report_slug=_report_slug(store_name, period, today_str),
         checklists_meta=CHECKLISTS_META,
         temperatures_meta=TEMPERATURES_META)
 
@@ -2722,7 +2763,7 @@ def whatsapp_pdf():
     buf = BytesIO(pdf_bytes); buf.seek(0)
     return send_file(buf, mimetype='application/pdf',
                      as_attachment=False,
-                     download_name=f'MCQ_{period.title()}_Report_{date_str}.pdf')
+                     download_name=f'{_report_slug(_store_name(), period, date_str)}_Report.pdf')
 
 
 @whatsapp_bp.route('/png')
