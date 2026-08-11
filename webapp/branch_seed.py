@@ -591,6 +591,54 @@ SUBIACO_MERGED_SOURCES = {
 }
 
 
+# ── Morley staff + branch passwords ──────────────────────────────────────────
+# Morley had no staff rows, so every staff dropdown (including the not-in-uniform
+# picker) fell back to the built-in list, showing Mirrabooka's names. It also
+# shared Mirrabooka's passwords, so either branch could sign into the other.
+MORLEY_STAFF_MARKER = 'morley_staff_and_passwords_v1'
+MORLEY_STAFF = ['Tốt', 'Hồng', 'Thuỷ', 'Hoàng', 'Sang', 'Huy']
+MORLEY_USER_PASSWORD = '5555'
+MORLEY_ADMIN_PASSWORD = '5551'
+
+
+def seed_morley_staff(db_path: str) -> None:
+    """Set Morley's staff list to exactly its six people and give the branch its
+    own passwords.
+
+    Any other Morley staff row is deactivated rather than deleted, so existing
+    checklists and temperature records that reference a name stay readable.
+    Runs once (audit_log marker) so later admin edits are never overwritten.
+    """
+    conn = sqlite3.connect(db_path, timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA foreign_keys = ON')
+    try:
+        if conn.execute('SELECT 1 FROM audit_log WHERE action=? LIMIT 1',
+                        (MORLEY_STAFF_MARKER,)).fetchone():
+            return
+        for name in MORLEY_STAFF:
+            conn.execute('''INSERT INTO staff_members (name, role, active, store_id)
+                VALUES (?, '', 1, ?)
+                ON CONFLICT(name, store_id) DO UPDATE SET active=1''',
+                (name, MORLEY_STORE_ID))
+        placeholders = ','.join('?' for _ in MORLEY_STAFF)
+        removed = conn.execute(
+            f'''UPDATE staff_members SET active=0
+                WHERE store_id=? AND active=1 AND name NOT IN ({placeholders})''',
+            [MORLEY_STORE_ID] + MORLEY_STAFF).rowcount or 0
+        conn.execute('''UPDATE stores SET user_password=?, admin_password=?
+                        WHERE id=?''',
+                     (MORLEY_USER_PASSWORD, MORLEY_ADMIN_PASSWORD, MORLEY_STORE_ID))
+        conn.execute('''INSERT INTO audit_log(action, record_type, user_name, details)
+            VALUES (?, 'migration', 'system', ?)''',
+            (MORLEY_STAFF_MARKER,
+             f'Set Morley staff to {len(MORLEY_STAFF)} member(s) '
+             f'({removed} other name(s) deactivated) and applied branch passwords.'))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # ── Morley packaging (Jaccus Trading) ────────────────────────────────────────
 # Morley's own order sheet. Codes match Jaccus product codes so JACCUS_PRICE_DATA
 # fills unit size + price; the two Morley-only lines at the end are not in that
