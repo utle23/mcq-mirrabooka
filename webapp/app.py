@@ -43,7 +43,8 @@ from food_safety_routes import defrost_bp, delivery_bp, init_food_safety_tables
 from branch_seed import (seed_subiaco_branch, seed_morley_branch,
                          seed_noodle_bar_checklists, seed_subiaco_merged_checklists,
                          seed_cool_room_equipment, seed_morley_packaging,
-                         seed_morley_staff, seed_morley_checklists_v2)
+                         seed_morley_staff, seed_morley_checklists_v2,
+                         seed_store_profiles)
 import email_service
 app.register_blueprint(prep_bp)
 app.register_blueprint(pastry_bp)
@@ -6136,6 +6137,7 @@ _safe_init(seed_cool_room_equipment, DB_PATH)
 _safe_init(seed_morley_packaging, DB_PATH)
 _safe_init(seed_morley_staff, DB_PATH)
 _safe_init(seed_morley_checklists_v2, DB_PATH, CHECKLISTS)
+_safe_init(seed_store_profiles, DB_PATH)
 
 if __name__ == '__main__':
     print('\n' + '='*50)

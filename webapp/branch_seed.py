@@ -591,6 +591,43 @@ SUBIACO_MERGED_SOURCES = {
 }
 
 
+# ── Store profiles (address / phone) ─────────────────────────────────────────
+# Reports and order documents print the branch address, but only Subiaco had one
+# on the stores row. Fill the blanks once, without touching anything an admin
+# has already entered.
+STORE_PROFILE_MARKER = 'store_profiles_v1'
+STORE_PROFILES = {
+    1: {'address': 'Shop MM4/43 Yirrigan Dr, Mirrabooka WA 6061', 'phone': '0449819235'},
+    2: {'address': 'Shop 42C/253 Walter Rd W, Morley WA 6062',    'phone': '0449819235'},
+    3: {'address': '4A Seddon St, Subiaco WA 6008',               'phone': '0406552462'},
+}
+
+
+def seed_store_profiles(db_path: str) -> None:
+    """Backfill each branch's address and phone where they are still blank."""
+    conn = sqlite3.connect(db_path, timeout=30)
+    conn.row_factory = sqlite3.Row
+    try:
+        if conn.execute('SELECT 1 FROM audit_log WHERE action=? LIMIT 1',
+                        (STORE_PROFILE_MARKER,)).fetchone():
+            return
+        filled = 0
+        for store_id, profile in STORE_PROFILES.items():
+            cur = conn.execute(
+                '''UPDATE stores
+                   SET address = CASE WHEN COALESCE(address,'')='' THEN ? ELSE address END,
+                       phone   = CASE WHEN COALESCE(phone,'')=''   THEN ? ELSE phone   END
+                   WHERE id=?''',
+                (profile['address'], profile['phone'], store_id))
+            filled += cur.rowcount or 0
+        conn.execute('''INSERT INTO audit_log(action, record_type, user_name, details)
+            VALUES (?, 'migration', 'system', ?)''',
+            (STORE_PROFILE_MARKER, f'Backfilled address/phone on {filled} store row(s).'))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # ── Morley checklists, redesigned per the owner's walk-through ───────────────
 # Morley runs its own station split: the cashier also makes the drinks (so there
 # is no separate Drinks checklist), and the noodle bar is its own station with a

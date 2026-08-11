@@ -75,6 +75,37 @@ def _conn() -> sqlite3.Connection:
     return c
 
 
+# ── Per-branch report identity ───────────────────────────────────────────────
+# Address and phone come from the stores table so an admin can edit them; the
+# accent colour and tagline are design choices and live here. A branch with no
+# entry falls back to the chain look, so adding a store never breaks the report.
+STORE_BRANDING = {
+    'mirrabooka': {'accent': '#C0392B', 'tagline': 'Vietnamese Street Food'},
+    'morley':     {'accent': '#00796B', 'tagline': 'Vietnamese Street Food'},
+    'subiaco':    {'accent': '#6A1B9A', 'tagline': 'Saigon Alley · Vietnamese Street Food'},
+}
+_DEFAULT_BRANDING = {'accent': '#C0392B', 'tagline': 'Vietnamese Street Food'}
+
+
+def _store_branding(store_id=None) -> dict:
+    """Name, tagline, address, phone and accent colour for one branch's report."""
+    out = dict(_DEFAULT_BRANDING)
+    out.update({'name': 'MCQ Vietnamese Street Food', 'address': '', 'phone': ''})
+    try:
+        sid = store_id if store_id is not None else current_store_id()
+        with _conn() as c:
+            row = c.execute('SELECT code, name, address, phone FROM stores WHERE id=?',
+                            (sid,)).fetchone()
+        if row:
+            out.update(STORE_BRANDING.get((row['code'] or '').lower(), {}))
+            out['name'] = (row['name'] or '').strip() or out['name']
+            out['address'] = (row['address'] or '').strip()
+            out['phone'] = (row['phone'] or '').strip()
+    except Exception:
+        pass
+    return out
+
+
 def _date_label(date_str: str) -> str:
     """'2026-08-11' → 'Tue 11 Aug 2026' for report headings and share text."""
     try:
@@ -1427,6 +1458,7 @@ def build_daily_pdf(date_str: str, period: str | None = None, store_id=None) -> 
     data = _collect_today(date_str, period, store_id)
     period_meta = data.get('period_meta') or SHARE_PERIODS['opening']
     brand_name = _store_name(store_id)
+    branding = _store_branding(store_id)
 
     # Try the app's font registration helper so we get a TTF that supports
     # Vietnamese diacritics; ReportLab Helvetica doesn't.
@@ -1438,7 +1470,7 @@ def build_daily_pdf(date_str: str, period: str | None = None, store_id=None) -> 
 
     NAVY      = colors.HexColor('#1A1A2E')
     NAVY_DK   = colors.HexColor('#0F0F1F')
-    BRAND     = colors.HexColor('#C0392B')
+    BRAND     = colors.HexColor(branding['accent'])   # per-branch accent
     GOLD      = colors.HexColor('#D4AF37')
     OK        = colors.HexColor('#2E7D32')
     BAD       = colors.HexColor('#C62828')
@@ -1548,7 +1580,10 @@ def build_daily_pdf(date_str: str, period: str | None = None, store_id=None) -> 
         canvas.drawCentredString(PAGE_W / 2, fb - 6.6 * mm, 'Freshly made · authentically Vietnamese')
         canvas.setFont(font_name, 7.5)
         canvas.setFillColor(colors.HexColor('#E9F3EC'))
-        canvas.drawCentredString(PAGE_W / 2, 3.4 * mm,
+        # This branch's own address / phone, then when the report was made.
+        contact = ' · '.join(p for p in (branding.get('address'),
+                                         branding.get('phone')) if p)
+        canvas.drawCentredString(PAGE_W / 2, 3.4 * mm, contact or
                           f'Generated {datetime.now().strftime("%a %d %b %Y · %H:%M")}')
         canvas.restoreState()
 
@@ -1589,7 +1624,7 @@ def build_daily_pdf(date_str: str, period: str | None = None, store_id=None) -> 
     # ── Cover content (positioned via Spacers because background is canvas) ──
     story.append(Spacer(1, 104 * mm))     # clear the gradient band + floating logo card
     story.append(Paragraph(_esc(brand_name), S['cover_brand']))
-    story.append(Paragraph('VIETNAMESE STREET FOOD', S['cover_sub']))
+    story.append(Paragraph(_esc(branding['tagline'].upper()), S['cover_sub']))
     _pill_para = Paragraph(period_meta.get('report_word', 'DAILY REPORT'),
         ParagraphStyle('pill_cover', fontName=bold_font, fontSize=12, leading=15,
                        textColor=colors.white, alignment=TA_CENTER))
