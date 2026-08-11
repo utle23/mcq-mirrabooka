@@ -381,7 +381,10 @@ def init_packaging(db_path: str):
         if 'unit_price' not in item_cols:
             c.execute("ALTER TABLE packaging_items ADD COLUMN unit_price REAL NOT NULL DEFAULT 0")
         # Backfill the MCQ Mirrabooka delivery address where it's still blank.
-        c.execute("UPDATE packaging_suppliers SET cafe_address=? WHERE COALESCE(cafe_address,'')=''",
+        # Scoped to store 1: other branches must never inherit Mirrabooka's
+        # address just because theirs has not been filled in yet.
+        c.execute("UPDATE packaging_suppliers SET cafe_address=? "
+                  "WHERE COALESCE(cafe_address,'')='' AND store_id=1",
                   (JACCUS_SUPPLIER_SEED['cafe_address'],))
         # Subiaco packaging deliveries are fixed to Tuesday/Thursday. Keep this
         # branch rule in the DB too so old rows do not render as "today".

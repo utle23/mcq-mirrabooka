@@ -591,6 +591,136 @@ SUBIACO_MERGED_SOURCES = {
 }
 
 
+# ── Morley packaging (Jaccus Trading) ────────────────────────────────────────
+# Morley's own order sheet. Codes match Jaccus product codes so JACCUS_PRICE_DATA
+# fills unit size + price; the two Morley-only lines at the end are not in that
+# price list yet and are seeded at $0 for an admin to price in the UI.
+MORLEY_PACKAGING_MARKER = 'morley_packaging_catalogue_v1'
+MORLEY_PACKAGING_DELIVERY_DAYS = 'WED,FRI'
+MORLEY_PACKAGING_SUPPLIER = {
+    'name': 'Jaccus Trading',
+    'email': 'Orders@jaccus.com.au',
+    'phone': '08-9248 9668',
+    'cc_emails': 'Morley@mcqinternational.com',
+    'cafe_name': 'MCQ Vietnamese Street Food — MORLEY',
+    'cafe_address': 'Shop 42C/253 Walter Rd W, Morley WA 6062',
+    'cafe_contacts': '0449819235',
+}
+
+# (product_code, name_en, name_vi, unit, default_qty)
+MORLEY_PACKAGING_ITEMS = [
+    ('1WFB', 'Tui banh ngot', 'Túi bánh ngọt', 'bag', 0),
+    ('KCB-M', 'Hop nho — catering box', 'Hộp nhỏ — catering box', 'carton', 0),
+    ('KCBWLid-M', 'Nap hop nho — catering box', 'Nắp hộp nhỏ — catering box', 'carton', 0),
+    ('KCB-L', 'Hop lon — catering box', 'Hộp lớn — catering box', 'carton', 0),
+    ('KCBWLid-L', 'Nap hop lon — catering box', 'Nắp hộp lớn — catering box', 'carton', 0),
+    ('KDTR-4-PLA', 'Hop goi cuon', 'Hộp gỏi cuốn', 'carton', 0),
+    ('KDTR-4Lid', 'Nap hop goi cuon', 'Nắp hộp gỏi cuốn', 'carton', 0),
+    ('P200', 'Hop nuoc mam', 'Hộp nước mắm', 'carton', 0),
+    ('P200Lid', 'Nap hop nuoc mam', 'Nắp hộp nước mắm', 'carton', 0),
+    ('Rec1000-PLA-K', 'Hop vuong take away', 'Hộp vuông take away', 'carton', 1),
+    ('RecPaper-PPLid', 'Nap hop vuong take away', 'Nắp hộp vuông take away', 'carton', 1),
+    ('Rd24-PLA-W', 'Hop soup trang', 'Hộp soup trắng', 'carton', 0),
+    ('RdPPLid-115-F', 'Nap hop soup trang', 'Nắp hộp soup trắng', 'carton', 0),
+    ('PaperBowl-Extra Large', 'Hop bun heo quay', 'Hộp bún heo quay', 'carton', 3),
+    ('BPB-PETLid184', 'Nap hop bun heo quay', 'Nắp hộp bún heo quay', 'carton', 3),
+    ('EC-DCC390', 'Ly cafe', 'Ly cà phê', 'carton', 1),
+    ('EC-DCC500', 'Ly juice', 'Ly juice', 'carton', 1),
+    ('BioBCL-90C-Pulp-F', 'Nap ly', 'Nắp ly', 'carton', 1),
+    ('DSPaperBlk', 'Ong hut', 'Ống hút', 'carton', 0),
+    ('ChopstickBam', 'Dua', 'Đũa', 'box', 0),
+    ('WoodenFrk', 'Nia', 'Nĩa', 'box', 0),
+    ('WoodenKnf', 'Dao', 'Dao', 'box', 0),
+    ('WoodenSpn', 'Muong', 'Muỗng', 'box', 0),
+    ('PulpCSpn', 'Muong soup', 'Muỗng soup', 'box', 0),
+    ('NitrileBluPF-Md', 'Glove M — bao tay', 'Găng tay M', 'carton', 0),
+    ('NitrileBluPF-Lg', 'Glove L — bao tay', 'Găng tay L', 'carton', 0),
+    ('BL82/35', 'Bao rac den', 'Bao rác đen', 'box', 1),
+    ('HTSlimline', 'Khan giay lau tay', 'Khăn giấy lau tay', 'carton', 0),
+    ('CUP-HOLDER', 'Cup holder', 'Khay đựng ly', 'carton', 0),
+    ('Surplus20', 'Nuoc rua chen 20L', 'Nước rửa chén 20L', 'can', 0),
+    ('Oven5', 'Nuoc rua lo nuong 5L', 'Nước rửa lò nướng 5L', 'can', 0),
+    ('AF44/150', 'Foil — giay bac', 'Giấy bạc', 'each', 4),
+    ('CW45/600 Pro', 'Clingwrap 45cm x 600m', 'Màng bọc thực phẩm 45cm x 600m', 'each', 5),
+    ('BioR-500Y', '500ml Clear Biocup', 'Cốc Biocup 500ml trong', 'each', 0),
+    ('BioC-96D(N)', 'Dome Lid (no hole) for 300-700ml BioCup', 'Nắp vòm BioCup 300-700ml', 'each', 0),
+    ('LWGP33x40', 'Wrap banh mi', 'Túi gói bánh mì', 'bag', 5),
+    ('Rec500-PLA-K', 'Hop vuong takeaway size nho', 'Hộp vuông takeaway size nhỏ', 'carton', 0),
+    ('NapQBES', 'Quilted Brown Express (Tork Xpress Dispenser) Napkin', 'Khăn giấy dispenser Tork Xpress', 'carton', 1),
+    ('EC-DC0552', 'Ly tra (Morley)', 'Ly trà — Morley', 'carton', 1),
+]
+
+
+def seed_morley_packaging(db_path: str) -> None:
+    """Give Morley its own Jaccus Trading catalogue for packaging orders.
+
+    Morley had no packaging supplier at all, so orders could not be raised for
+    that store. Writes only store 2 rows and is guarded by an audit_log marker,
+    so later admin edits (prices, quantities, contacts) survive restarts.
+    """
+    conn = sqlite3.connect(db_path, timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA foreign_keys = ON')
+    try:
+        if conn.execute('SELECT 1 FROM audit_log WHERE action=? LIMIT 1',
+                        (MORLEY_PACKAGING_MARKER,)).fetchone():
+            return
+        s = MORLEY_PACKAGING_SUPPLIER
+        row = conn.execute(
+            '''SELECT id FROM packaging_suppliers
+               WHERE store_id=? AND lower(name)=lower(?) AND active=1''',
+            (MORLEY_STORE_ID, s['name'])).fetchone()
+        if row:
+            supplier_id = row['id']
+            conn.execute('''UPDATE packaging_suppliers
+                SET email=?, phone=?, cc_emails=?, delivery_days=?,
+                    cafe_name=?, cafe_address=?, cafe_contacts=?
+                WHERE id=?''',
+                (s['email'], s['phone'], s['cc_emails'], MORLEY_PACKAGING_DELIVERY_DAYS,
+                 s['cafe_name'], s['cafe_address'], s['cafe_contacts'], supplier_id))
+        else:
+            cur = conn.execute('''INSERT INTO packaging_suppliers
+                (name, email, phone, cc_emails, delivery_days, cafe_name,
+                 cafe_address, cafe_contacts, notes, active, sort_order, store_id)
+                VALUES (?,?,?,?,?,?,?,?,'',1,0,?)''',
+                (s['name'], s['email'], s['phone'], s['cc_emails'],
+                 MORLEY_PACKAGING_DELIVERY_DAYS, s['cafe_name'], s['cafe_address'],
+                 s['cafe_contacts'], MORLEY_STORE_ID))
+            supplier_id = cur.lastrowid
+
+        priced = unpriced = 0
+        for idx, (code, en, vi, unit, qty) in enumerate(MORLEY_PACKAGING_ITEMS):
+            unit_measure, unit_price = JACCUS_PRICE_DATA.get(code, ('', 0))
+            if unit_price:
+                priced += 1
+            else:
+                unpriced += 1
+            existing = conn.execute(
+                'SELECT id FROM packaging_items WHERE supplier_id=? AND product_code=?',
+                (supplier_id, code)).fetchone()
+            if existing:
+                conn.execute('''UPDATE packaging_items
+                    SET name_en=?, name_vi=?, unit=?, unit_measure=?, unit_price=?,
+                        default_qty=?, sort_order=?, active=1
+                    WHERE id=?''',
+                    (en, vi, unit, unit_measure, unit_price, qty, idx, existing['id']))
+            else:
+                conn.execute('''INSERT INTO packaging_items
+                    (supplier_id, product_code, name_en, name_vi, unit, unit_measure,
+                     unit_price, default_qty, sort_order, active)
+                    VALUES (?,?,?,?,?,?,?,?,?,1)''',
+                    (supplier_id, code, en, vi, unit, unit_measure, unit_price, qty, idx))
+
+        conn.execute('''INSERT INTO audit_log(action, record_type, user_name, details)
+            VALUES (?, 'migration', 'system', ?)''',
+            (MORLEY_PACKAGING_MARKER,
+             f'Seeded Morley Jaccus packaging catalogue: {len(MORLEY_PACKAGING_ITEMS)} item(s) '
+             f'({priced} priced, {unpriced} awaiting price).'))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # Cool Room & Freezer checklist records its temperature in the Equipment
 # Temperature Check, so every store needs a Cool Room unit there.
 COOL_ROOM_EQUIPMENT_MARKER = 'cool_room_equipment_v1'
