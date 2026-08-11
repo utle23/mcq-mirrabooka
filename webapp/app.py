@@ -41,7 +41,8 @@ from webauthn_routes  import webauthn_bp,                 init_webauthn
 from food_pricing_routes import food_pricing as food_pricing_bp, init_food_pricing_tables
 from food_safety_routes import defrost_bp, delivery_bp, init_food_safety_tables
 from branch_seed import (seed_subiaco_branch, seed_morley_branch,
-                         seed_noodle_bar_checklists, seed_subiaco_merged_checklists)
+                         seed_noodle_bar_checklists, seed_subiaco_merged_checklists,
+                         seed_cool_room_equipment)
 import email_service
 app.register_blueprint(prep_bp)
 app.register_blueprint(pastry_bp)
@@ -262,6 +263,31 @@ CHECKLISTS = {
         'opening': [],
         'closing': [],
     },
+    # Cool Room & Freezer — one DAILY check run at closing by every store, so it
+    # declares a single 'closing' section instead of the usual open/close pair.
+    # Tasks carrying TASK_PHOTO_MARKER require at least one photo of their own.
+    'cool_room': {
+        'title': 'Cool Room & Freezer',
+        'short': 'Cool Room',
+        'color': '#0097A7',
+        'badge': 'info',
+        'sections': ('closing',),
+        'daily': True,
+        # The four "(photo required)" tasks below ARE the evidence for this
+        # check, so it does not also ask for the usual 4 general photos.
+        'photos_required': 0,
+        'opening': [],
+        'closing': [
+            'Check and record Cool Room & Freezer temperature (logged in Equipment Temperature Check)',
+            'Check food storage — everything covered, wrapped or in proper containers (photo required)',
+            'Check labels & dates — every item labelled with production and use-by dates (photo required)',
+            'Check food quality — discard expired, spoiled or substandard food immediately',
+            'Apply FIFO (First In, First Out) — all food off the floor and on shelves, older stock used first',
+            'Separate food correctly — raw food kept apart from cooked and ready-to-eat, everything in its designated zone',
+            'Clean the Cool Room — floor, shelves and the whole area kept clean (photo required)',
+            'Organise food neatly — all stock tidy, in its zone and easy to inspect (photo required)',
+        ],
+    },
     # Noodle Bar runs only at Morley (2) and Subiaco (3) — the 'stores' key
     # hides this checklist everywhere else (dashboard, digests, history filters).
     'noodle_bar': {
@@ -290,6 +316,34 @@ CHECKLISTS = {
         ],
     },
 }
+
+
+# ── Task-level behaviour, driven by the task text itself ─────────────────────
+# Task templates are admin-editable free text, so the extra UI a task gets is
+# keyed off markers inside its name. That keeps the behaviour visible to whoever
+# edits the task and survives per-store wording changes.
+TASK_PHOTO_MARKER = '(photo required)'
+
+
+def task_requires_photo(task_name):
+    """True when this task must carry at least one photo of its own."""
+    return TASK_PHOTO_MARKER in (task_name or '').lower()
+
+
+def is_uniform_task(task_name):
+    """True for the 'uniform check' task, which gets the not-in-uniform picker."""
+    return 'uniform' in (task_name or '').lower()
+
+
+def checklist_sections(chk):
+    """Sections a checklist type runs. Most have Opening + Closing; a 'daily'
+    type such as Cool Room declares a single section instead."""
+    return tuple(chk.get('sections') or ('opening', 'closing'))
+
+
+def expected_checklist_sections(visible):
+    """How many checklist submissions a store owes per day."""
+    return sum(len(checklist_sections(chk)) for chk in visible.values())
 
 
 def merge_checklist_tasks(*task_lists):
@@ -1176,7 +1230,16 @@ def init_db():
                 photo_number  INTEGER DEFAULT 0,
                 file_size     INTEGER,
                 uploaded_at   TEXT DEFAULT (datetime('now','localtime')),
-                uploaded_by   TEXT
+                uploaded_by   TEXT,
+                task_order    INTEGER
+            );
+            -- Staff reported as not wearing correct uniform on a given checklist.
+            -- One row per person, so a single check can name several people.
+            CREATE TABLE IF NOT EXISTS checklist_uniform_flags (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id  INTEGER NOT NULL REFERENCES checklist_sessions(id) ON DELETE CASCADE,
+                staff_name  TEXT NOT NULL,
+                created_at  TEXT DEFAULT (datetime('now','localtime'))
             );
             CREATE TABLE IF NOT EXISTS issue_reports (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1446,6 +1509,9 @@ def init_db():
             'ALTER TABLE staff_members ADD COLUMN emergency_contact TEXT',
             'ALTER TABLE staff_members ADD COLUMN staff_notes TEXT',
             "ALTER TABLE staff_violations ADD COLUMN warning_step TEXT DEFAULT 'Verbal Discussion'",
+            # Per-task photo evidence: NULL = one of the general session photos
+            # (existing behaviour), a number = photo belonging to that task_order.
+            'ALTER TABLE checklist_photos ADD COLUMN task_order INTEGER',
         ]:
             try:
                 conn.execute(col_sql)
@@ -1485,6 +1551,7 @@ def init_db():
             'CREATE INDEX IF NOT EXISTS idx_chktasks_session   ON checklist_tasks(session_id)',
             'CREATE UNIQUE INDEX IF NOT EXISTS idx_chktasks_session_order ON checklist_tasks(session_id, task_order)',
             'CREATE INDEX IF NOT EXISTS idx_chkphotos_session  ON checklist_photos(session_id)',
+            'CREATE INDEX IF NOT EXISTS idx_chkuniform_session ON checklist_uniform_flags(session_id)',
             'CREATE INDEX IF NOT EXISTS idx_temp_date          ON temp_sessions(date)',
             'CREATE INDEX IF NOT EXISTS idx_temp_type_date     ON temp_sessions(type, date)',
             'CREATE INDEX IF NOT EXISTS idx_tempreadings_sess  ON temp_readings(session_id)',
@@ -2311,6 +2378,7 @@ def dashboard():
     with get_db() as conn:
         chk_status = {}
         for t in vis_checklists:
+            sections = checklist_sections(vis_checklists[t])
             op = conn.execute(
                 'SELECT id,verified,(SELECT COUNT(*) FROM checklist_tasks WHERE session_id=checklist_sessions.id AND done=1) as done_count,(SELECT COUNT(*) FROM checklist_tasks WHERE session_id=checklist_sessions.id) as total FROM checklist_sessions WHERE type=? AND section="opening" AND date=? AND store_id=?',
                 (t, today_str, sid)).fetchone()
@@ -2320,6 +2388,8 @@ def dashboard():
             chk_status[t] = {
                 'opening': dict(op) if op else None,
                 'closing': dict(cl) if cl else None,
+                'sections': sections,
+                'daily': bool(vis_checklists[t].get('daily')),
             }
 
         temp_status = {}
@@ -2355,15 +2425,16 @@ def dashboard():
 
         # Alerts: missing today's records
         alerts = []
-        total_expected = len(vis_checklists) * 2 + len(TEMPERATURES)
+        expected_sections = expected_checklist_sections(vis_checklists)
+        total_expected = expected_sections + len(TEMPERATURES)
         submitted_today = conn.execute(
             'SELECT COUNT(*) as c FROM checklist_sessions WHERE date=? AND store_id=?',
             (today_str, sid)).fetchone()['c']
         temp_today = conn.execute(
             'SELECT COUNT(*) as c FROM temp_sessions WHERE date=? AND store_id=?',
             (today_str, sid)).fetchone()['c']
-        if submitted_today < len(vis_checklists) * 2:
-            alerts.append({'type': 'warning', 'msg': f'{len(vis_checklists)*2 - submitted_today} checklist section(s) not yet submitted today'})
+        if submitted_today < expected_sections:
+            alerts.append({'type': 'warning', 'msg': f'{expected_sections - submitted_today} checklist section(s) not yet submitted today'})
         if temp_today < len(TEMPERATURES):
             alerts.append({'type': 'warning', 'msg': f'{len(TEMPERATURES) - temp_today} temperature record(s) not yet submitted today'})
         if pending_count > 0:
@@ -2419,14 +2490,17 @@ def checklist_form(chk_type):
     if chk_type not in visible_checklists(current_store_id()):
         return redirect(url_for('dashboard'))
     chk_date = request.args.get('date', perth_today().isoformat())
-    # Only TODAY's Opening locks after 3 PM Perth; past dates stay open for review.
-    locked = opening_locked(chk_date)
-    section  = request.args.get('section') or ('closing' if locked else 'opening')
-    section  = 'closing' if section not in ('opening', 'closing') else section
+    chk_data = CHECKLISTS[chk_type]
+    sections = checklist_sections(chk_data)
+    # A daily checklist (e.g. Cool Room) has no morning/evening split, so the
+    # 3 PM Opening lock must not apply to it.
+    locked = opening_locked(chk_date) and not chk_data.get('daily')
+    section = request.args.get('section') or ('closing' if locked else 'opening')
+    if section not in sections:
+        section = sections[-1] if locked and len(sections) > 1 else sections[0]
     if section == 'opening' and locked:
         flash('Opening checklist is locked after 3 PM. View it in History.', 'warning')
         return redirect(url_for('checklist_form', chk_type=chk_type, date=chk_date, section='closing'))
-    chk_data = CHECKLISTS[chk_type]
     try:
         day_name = datetime.strptime(chk_date, '%Y-%m-%d').strftime('%A')
     except Exception:
@@ -2440,16 +2514,40 @@ def checklist_form(chk_type):
             'SELECT * FROM checklist_sessions WHERE type=? AND section=? AND date=? AND store_id=?',
             (chk_type, section, chk_date, current_store_id())).fetchone()
         existing_tasks = []
+        existing_task_photos = {}
+        uniform_flagged = []
         if existing:
             existing_tasks = [dict(r) for r in conn.execute(
                 'SELECT * FROM checklist_tasks WHERE session_id=? ORDER BY task_order',
                 (existing['id'],)).fetchall()]
+            existing_task_photos = {r['task_order']: r['filename'] for r in conn.execute(
+                'SELECT task_order, filename FROM checklist_photos '
+                'WHERE session_id=? AND task_order IS NOT NULL ORDER BY task_order',
+                (existing['id'],)).fetchall()}
+            uniform_flagged = [r['staff_name'] for r in conn.execute(
+                'SELECT staff_name FROM checklist_uniform_flags WHERE session_id=? ORDER BY id',
+                (existing['id'],)).fetchall()]
+
+    # Per-task extras, resolved once so the template stays declarative.
+    task_meta = [{
+        'index': i,
+        'name': name,
+        'needs_photo': task_requires_photo(name),
+        'is_uniform': is_uniform_task(name),
+    } for i, name in enumerate(tasks)]
 
     return render_template('checklist.html',
         chk_type=chk_type, chk_data=chk_data, section=section,
         chk_date=chk_date, day_name=day_name, tasks=tasks,
+        task_meta=task_meta,
         existing=dict(existing) if existing else None,
-        existing_tasks=existing_tasks, staff=get_active_staff(), managers=MANAGERS,
+        existing_tasks=existing_tasks,
+        existing_task_photos=existing_task_photos,
+        uniform_flagged=uniform_flagged,
+        staff=get_active_staff(), managers=MANAGERS,
+        # Per-checklist override of the global 4-photo rule (Cool Room collects
+        # its evidence per task instead).
+        photos_required=chk_data.get('photos_required', PHOTOS_REQUIRED),
         opening_locked=locked,   # date-aware: overrides the global (today) lock
     )
 
@@ -2541,9 +2639,11 @@ def checklist_save(chk_type):
         return redirect(url_for('dashboard'))
     chk_date       = request.form.get('date', perth_today().isoformat())
     section        = request.form.get('section', 'opening')
+    if section not in checklist_sections(CHECKLISTS[chk_type]):
+        return redirect(url_for('dashboard'))
     # Server-side lock: only TODAY's Opening is locked after 3 PM Perth; past dates
     # stay editable so earlier records can be corrected.
-    if section == 'opening' and opening_locked(chk_date):
+    if section == 'opening' and opening_locked(chk_date) and not CHECKLISTS[chk_type].get('daily'):
         flash('Opening checklist is locked after 3 PM. View it in History.', 'warning')
         return redirect(url_for('checklist_form', chk_type=chk_type, date=chk_date, section='closing'))
     responsible    = request.form.get('responsible', '')
@@ -2643,32 +2743,76 @@ def checklist_save(chk_type):
                      (sid, len(task_rows)))
 
         # ── Handle photo uploads ──────────────────────────────────────────────
+        def _store_photo(upload, number, task_order=None):
+            """Save one upload and register it against this session."""
+            ext   = os.path.splitext(upload.filename)[1].lower()
+            dest  = os.path.join(UPLOAD_FOLDER,
+                                 f'{sid}_{number}_{uuid.uuid4().hex[:8]}{ext}')
+            # save_uploaded_photo resizes large phone photos before writing;
+            # it may rewrite as .jpg, so use the returned filename.
+            fname = save_uploaded_photo(upload, dest)
+            fsize = os.path.getsize(os.path.join(UPLOAD_FOLDER, fname))
+            conn.execute(
+                'INSERT INTO checklist_photos (session_id,filename,original_name,photo_number,file_size,uploaded_by,task_order) VALUES (?,?,?,?,?,?,?)',
+                (sid, fname, secure_filename(upload.filename), number, fsize,
+                 submitted_by, task_order))
+
+        def _valid_upload(f):
+            return (f and f.filename and f.filename.strip()
+                    and os.path.splitext(f.filename)[1].lower().lstrip('.') in ALLOWED_EXT)
+
         new_photos = []
         for i in range(PHOTOS_REQUIRED + 6):
             f = request.files.get(f'photo_{i}')
-            if f and f.filename and f.filename.strip():
-                ext = os.path.splitext(f.filename)[1].lower().lstrip('.')
-                if ext in ALLOWED_EXT:
-                    new_photos.append((i, f))
+            if _valid_upload(f):
+                new_photos.append((i, f))
 
         if new_photos:
-            # Delete old photo files then re-insert
-            old = conn.execute('SELECT filename FROM checklist_photos WHERE session_id=?', (sid,)).fetchall()
+            # Replace only the GENERAL photos; per-task evidence is kept.
+            old = conn.execute(
+                'SELECT filename FROM checklist_photos WHERE session_id=? AND task_order IS NULL',
+                (sid,)).fetchall()
             for ph in old:
                 try: os.remove(os.path.join(UPLOAD_FOLDER, ph['filename']))
                 except: pass
-            conn.execute('DELETE FROM checklist_photos WHERE session_id=?', (sid,))
+            conn.execute('DELETE FROM checklist_photos WHERE session_id=? AND task_order IS NULL', (sid,))
             for i, f in new_photos:
-                ext   = os.path.splitext(f.filename)[1].lower()
-                fname = f'{sid}_{i}_{uuid.uuid4().hex[:8]}{ext}'
-                dest  = os.path.join(UPLOAD_FOLDER, fname)
-                # save_uploaded_photo resizes large phone photos before writing;
-                # it may rewrite as .jpg, so use the returned filename.
-                fname = save_uploaded_photo(f, dest)
-                fsize = os.path.getsize(os.path.join(UPLOAD_FOLDER, fname))
-                conn.execute(
-                    'INSERT INTO checklist_photos (session_id,filename,original_name,photo_number,file_size,uploaded_by) VALUES (?,?,?,?,?,?)',
-                    (sid, fname, secure_filename(f.filename), i, fsize, submitted_by))
+                _store_photo(f, i)
+
+        # Per-task evidence (tasks marked "(photo required)" and the uniform
+        # task). Each replaces only its own previous photo.
+        task_photo_count = 0
+        for i, _task_name, _done, _note in task_rows:
+            f = request.files.get(f'taskphoto_{i}')
+            if not _valid_upload(f):
+                continue
+            old = conn.execute(
+                'SELECT filename FROM checklist_photos WHERE session_id=? AND task_order=?',
+                (sid, i)).fetchall()
+            for ph in old:
+                try: os.remove(os.path.join(UPLOAD_FOLDER, ph['filename']))
+                except: pass
+            conn.execute('DELETE FROM checklist_photos WHERE session_id=? AND task_order=?', (sid, i))
+            _store_photo(f, 100 + i, task_order=i)
+            task_photo_count += 1
+        # ─────────────────────────────────────────────────────────────────────
+
+        # ── Staff reported as not in correct uniform ─────────────────────────
+        # Only meaningful for a checklist that actually carries a uniform task;
+        # always rewritten from the form so unticking a name clears it.
+        uniform_staff = []
+        if any(is_uniform_task(t[1]) for t in task_rows):
+            seen_names = set()
+            for n in request.form.getlist('uniform_staff'):
+                n = n.strip()
+                if n and n.lower() not in seen_names:
+                    seen_names.add(n.lower())
+                    uniform_staff.append(n)
+        conn.execute('DELETE FROM checklist_uniform_flags WHERE session_id=?', (sid,))
+        for name in uniform_staff:
+            conn.execute(
+                'INSERT INTO checklist_uniform_flags (session_id, staff_name) VALUES (?,?)',
+                (sid, name))
         # ─────────────────────────────────────────────────────────────────────
 
         log_action_conn(conn, 'SAVE_CHECKLIST', 'checklist', sid, submitted_by,
@@ -2685,7 +2829,9 @@ def checklist_save(chk_type):
             f'Date: {chk_date} ({day_name})',
             f'Completion: {done_count} / {len(task_rows)} tasks ({completion_pct}%)',
             f'Late submission: {"Yes" if is_late else "On time"}',
-            f'Photos attached: {len(new_photos)}',
+            f'Photos attached: {len(new_photos)}' + (
+                f' (+{task_photo_count} task photo(s))' if task_photo_count else ''),
+            f'Staff not in uniform: {", ".join(uniform_staff) if uniform_staff else "None reported"}',
             f'General note: {general_note or "-"}',
             f'Submitted by: {submitted_by or "-"}',
             f'Responsible: {responsible or "-"}',
@@ -2709,11 +2855,22 @@ def checklist_view(session_id):
         tasks = [dict(r) for r in conn.execute(
             'SELECT * FROM checklist_tasks WHERE session_id=? ORDER BY task_order',
             (session_id,)).fetchall()]
-        photos = [dict(r) for r in conn.execute(
+        all_photos = [dict(r) for r in conn.execute(
             'SELECT * FROM checklist_photos WHERE session_id=? ORDER BY photo_number',
             (session_id,)).fetchall()]
+        uniform_flagged = [r['staff_name'] for r in conn.execute(
+            'SELECT staff_name FROM checklist_uniform_flags WHERE session_id=? ORDER BY id',
+            (session_id,)).fetchall()]
+    # General evidence stays in the photo grid; per-task photos are shown inline
+    # on their own task row.
+    photos = [p for p in all_photos if p.get('task_order') is None]
+    task_photos = {p['task_order']: p for p in all_photos if p.get('task_order') is not None}
+    for t in tasks:
+        t['photo'] = task_photos.get(t['task_order'])
+        t['is_uniform'] = is_uniform_task(t['task_name'])
     return render_template('checklist_view.html',
         sess=dict(sess), tasks=tasks, photos=photos,
+        uniform_flagged=uniform_flagged,
         chk_data=CHECKLISTS.get(sess['type'], {}), staff=get_active_staff(),
     )
 
@@ -5927,6 +6084,7 @@ _safe_init(seed_subiaco_branch, DB_PATH,
 _safe_init(seed_morley_branch, DB_PATH)
 _safe_init(seed_noodle_bar_checklists, DB_PATH)
 _safe_init(seed_subiaco_merged_checklists, DB_PATH, CHECKLISTS)
+_safe_init(seed_cool_room_equipment, DB_PATH)
 
 if __name__ == '__main__':
     print('\n' + '='*50)

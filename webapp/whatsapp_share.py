@@ -184,6 +184,9 @@ def _collect_today(date_str: str, period: str | None = None, store_id=None) -> d
                 (r['id'],)).fetchall()]
             r['photos'] = photos
             r['meta']   = meta
+            r['uniform_flagged'] = [u['staff_name'] for u in conn.execute(
+                'SELECT staff_name FROM checklist_uniform_flags '
+                'WHERE session_id=? ORDER BY id', (r['id'],)).fetchall()]
             out['checklists'].append(r)
 
         # Food temperature (chef / banh_mi / pastry) — recorded once per day, so
@@ -771,9 +774,24 @@ def _checklist_detail(session_id: int) -> dict | None:
         sess['tasks'] = [dict(r) for r in conn.execute(
             'SELECT task_order, task_name, done, note FROM checklist_tasks '
             'WHERE session_id=? ORDER BY task_order', (session_id,)).fetchall()]
-        sess['photos'] = [dict(r) for r in conn.execute(
-            'SELECT filename, photo_number FROM checklist_photos '
+        all_photos = [dict(r) for r in conn.execute(
+            'SELECT filename, photo_number, task_order FROM checklist_photos '
             'WHERE session_id=? ORDER BY photo_number', (session_id,)).fetchall()]
+        # General evidence goes in the photo grid; per-task photos are captioned
+        # with their task and rendered after it.
+        sess['photos'] = [p for p in all_photos if p.get('task_order') is None]
+        task_photos = {p['task_order']: p for p in all_photos
+                       if p.get('task_order') is not None}
+        for t in sess['tasks']:
+            t['photo'] = task_photos.get(t['task_order'])
+        sess['task_photos'] = [
+            dict(p, task_name=next((t['task_name'] for t in sess['tasks']
+                                    if t['task_order'] == p['task_order']), ''))
+            for p in sorted(task_photos.values(), key=lambda p: p['task_order'])
+        ]
+        sess['uniform_flagged'] = [r['staff_name'] for r in conn.execute(
+            'SELECT staff_name FROM checklist_uniform_flags '
+            'WHERE session_id=? ORDER BY id', (session_id,)).fetchall()]
         sess['meta'] = CHECKLISTS_META.get(sess['type'], {})
     return sess
 
@@ -1806,6 +1824,27 @@ def build_daily_pdf(date_str: str, period: str | None = None, store_id=None) -> 
         story.append(meta)
         story.append(Spacer(1, 6 * mm))
 
+        # Uniform breach callout — a red band naming everyone reported out of
+        # uniform, so it cannot be missed when the report is read on a phone.
+        if full.get('uniform_flagged'):
+            names = full['uniform_flagged']
+            uni_tbl = Table([[
+                Paragraph(
+                    f'<font color="white" size="11"><b>STAFF NOT IN CORRECT UNIFORM '
+                    f'({len(names)})</b></font><br/>'
+                    f'<font color="#FFE2E2" size="11">{_esc(", ".join(names))}</font>',
+                    ParagraphStyle('uni', fontName=bold_font, leading=16))
+            ]], colWidths=[USABLE_W])
+            uni_tbl.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), BAD),
+                ('LEFTPADDING', (0, 0), (-1, -1), 14),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 14),
+                ('TOPPADDING', (0, 0), (-1, -1), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+            ]))
+            story.append(uni_tbl)
+            story.append(Spacer(1, 6 * mm))
+
         # Tasks list
         story.append(Paragraph('TASKS', S['section']))
         task_rows = []
@@ -1829,6 +1868,63 @@ def build_daily_pdf(date_str: str, period: str | None = None, store_id=None) -> 
             ]))
             story.append(tt)
         story.append(Spacer(1, 6 * mm))
+
+        # Per-task evidence — each photo captioned with the task it proves.
+        if full.get('task_photos'):
+            story.append(PageBreak())
+            story.append(hdr_tbl)
+            story.append(Spacer(1, 4 * mm))
+            story.append(Paragraph(
+                f'TASK EVIDENCE ({len(full["task_photos"])})', S['section']))
+            tcol_w = (USABLE_W - 6 * mm) / 2
+            tmax_h = 85 * mm
+            tcells = []
+            for p in full['task_photos']:
+                cap = Paragraph(
+                    f'<b>{p["task_order"] + 1}.</b> {_esc(p.get("task_name") or "")}',
+                    S['photo_cap'])
+                src = os.path.join(UPLOAD_DIR, p['filename'])
+                if not os.path.exists(src):
+                    tcells.append([Paragraph('(photo missing)', S['small']), cap])
+                    continue
+                try:
+                    img = RLImage(_pdf_photo_buffer(src) or src)
+                    iw, ih = img.imageWidth, img.imageHeight
+                    ratio = tcol_w / float(iw) if iw else 1
+                    h = ih * ratio
+                    if h > tmax_h:
+                        ratio = tmax_h / float(ih) if ih else 1
+                        img.drawWidth, img.drawHeight = iw * ratio, tmax_h
+                    else:
+                        img.drawWidth, img.drawHeight = tcol_w, h
+                    tcells.append([img, cap])
+                except Exception:
+                    tcells.append([Paragraph('(could not load)', S['small']), cap])
+
+            inner = TableStyle([
+                ('TOPPADDING', (0, 0), (-1, -1), 0),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+                ('LEFTPADDING', (0, 0), (-1, -1), 0),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ])
+            trows = []
+            for i in range(0, len(tcells), 2):
+                pair = tcells[i:i + 2]
+                if len(pair) == 1:
+                    pair.append(['', ''])
+                trows.append([
+                    Table([[pair[0][0]], [pair[0][1]]], colWidths=[tcol_w], style=inner),
+                    Table([[pair[1][0]], [pair[1][1]]], colWidths=[tcol_w], style=inner),
+                ])
+            story.append(Table(trows, colWidths=[tcol_w, tcol_w],
+                               style=TableStyle([
+                                   ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                                   ('LEFTPADDING', (0, 0), (-1, -1), 3),
+                                   ('RIGHTPADDING', (0, 0), (-1, -1), 3),
+                                   ('TOPPADDING', (0, 0), (-1, -1), 3),
+                                   ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                               ])))
+            story.append(Spacer(1, 4 * mm))
 
         # Photos — BIG and beautiful. 2 columns, full usable width.
         if full.get('photos'):

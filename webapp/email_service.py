@@ -1537,8 +1537,10 @@ def collect_daily_digest(target_date: str, checklists_meta: dict | None = None,
         chk_total_done = sum(1 for r in chk_rows)
         chk_total_late = sum(1 for r in chk_rows if r.get('is_late'))
         chk_verified   = sum(1 for r in chk_rows if r.get('verified'))
-        # Expected = 2 sections per checklist type
-        chk_expected   = 2 * len(checklists_meta) if checklists_meta else 0
+        # Expected = the sections each type actually runs (most have Opening +
+        # Closing; a 'daily' type such as Cool Room declares just one).
+        chk_expected   = sum(len(c.get('sections') or ('opening', 'closing'))
+                             for c in checklists_meta.values())
 
         # ── Temperatures ──
         temp_rows = [dict(r) for r in conn.execute('''

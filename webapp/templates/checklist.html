@@ -216,6 +216,69 @@
               </td>
               {% endif %}
             </tr>
+            {% set tm = task_meta[i] if task_meta and i < task_meta|length else None %}
+            {% if tm and (tm.is_uniform or tm.needs_photo) %}
+            {% set existing_photo = existing_task_photos.get(i) if existing_task_photos else None %}
+            <tr class="task-extra-row">
+              <td></td>
+              <td colspan="{{ 4 if is_admin else 3 }}">
+
+                {% if tm.is_uniform %}
+                <div class="task-extra uniform-panel">
+                  <div class="te-head">
+                    <i class="fas fa-user-xmark me-1"></i>Staff NOT in correct uniform
+                    <span class="te-hint">— tick everyone who is out of uniform. Leave empty if all staff are compliant.</span>
+                  </div>
+                  <div class="uniform-chips">
+                    {% for s in staff %}
+                    <label class="uniform-chip">
+                      <input type="checkbox" name="uniform_staff" value="{{ s }}"
+                             onchange="updateUniformCount()"
+                             {% if s in uniform_flagged %}checked{% endif %}>
+                      <span>{{ s }}</span>
+                    </label>
+                    {% endfor %}
+                  </div>
+                  <div class="uniform-summary" id="uniform-summary">
+                    <i class="fas fa-circle-check me-1"></i>All staff in correct uniform
+                  </div>
+                </div>
+                {% endif %}
+
+                <div class="task-extra photo-panel {% if tm.needs_photo %}is-required{% endif %}"
+                     id="tp-panel-{{ i }}">
+                  <div class="te-head">
+                    <i class="fas fa-camera me-1"></i>
+                    {% if tm.is_uniform %}Photo evidence <span class="te-hint">— optional, attach if someone is out of uniform</span>
+                    {% else %}Photo required <span class="te-hint">— at least 1 photo for this task</span>{% endif %}
+                  </div>
+                  <div class="te-photo-row">
+                    <button type="button" class="btn btn-sm te-photo-btn"
+                            onclick="document.getElementById('taskphoto-{{ i }}').click()">
+                      <i class="fas fa-camera me-1"></i>
+                      {% if existing_photo %}Replace photo{% else %}Take / choose photo{% endif %}
+                    </button>
+                    <input type="file" name="taskphoto_{{ i }}" id="taskphoto-{{ i }}"
+                           accept="image/*" capture="environment"
+                           class="photo-file-input d-none"
+                           data-task-photo="{{ i }}"
+                           onchange="previewTaskPhoto(this, {{ i }})">
+                    <img class="te-thumb {% if not existing_photo %}d-none{% endif %}"
+                         id="taskphoto-preview-{{ i }}"
+                         src="{% if existing_photo %}/photo/{{ existing_photo }}{% endif %}" alt="">
+                    <span class="te-photo-state {% if existing_photo %}is-ok{% endif %}"
+                          id="taskphoto-state-{{ i }}"
+                          data-has-photo="{{ '1' if existing_photo else '0' }}">
+                      {% if existing_photo %}<i class="fas fa-circle-check me-1"></i>Photo attached
+                      {% elif tm.needs_photo %}<i class="fas fa-circle-exclamation me-1"></i>No photo yet
+                      {% else %}<i class="fas fa-circle-info me-1"></i>No photo{% endif %}
+                    </span>
+                  </div>
+                </div>
+
+              </td>
+            </tr>
+            {% endif %}
             {% endfor %}
           </tbody>
         </table>
@@ -224,6 +287,7 @@
       <!-- ═══════════════════════════════════════════════════════════════════ -->
       <!-- PHOTO UPLOAD SECTION (MANDATORY 4 PHOTOS)                         -->
       <!-- ═══════════════════════════════════════════════════════════════════ -->
+      {% if photos_required > 0 %}
       <div class="photo-section">
         <div class="photo-section-header">
           <i class="fas fa-camera me-2"></i>
@@ -294,10 +358,18 @@
           </div>
         </div>
       </div>
+      {% else %}
+      <div class="alert alert-info py-2 small mb-0">
+        <i class="fas fa-circle-info me-1"></i>
+        This checklist collects its evidence <strong>per task</strong> — attach the photo
+        directly under each task marked <em>photo required</em> above.
+      </div>
+      {% endif %}
       <!-- ═══════════════════════════════════════════════════════════════════ -->
 
       <div class="mt-4 d-flex gap-2 flex-wrap">
-        <button type="submit" class="btn btn-success btn-lg" id="submit-btn" disabled>
+        <button type="submit" class="btn btn-success btn-lg" id="submit-btn"
+                {% if photos_required > 0 %}disabled{% endif %}>
           <i class="fas fa-save me-2"></i>Save &amp; Submit Checklist
         </button>
         {% if existing %}
@@ -339,6 +411,52 @@
   border-radius:8px;
   padding:10px;
 }
+
+/* ── Per-task extras: uniform picker + task photo ─────────────────────────── */
+.task-extra-row > td { border-top:0 !important; padding-top:0 !important; }
+.task-extra {
+  border-radius:10px; padding:11px 13px; margin-bottom:8px;
+  border:1px solid #E3E8EF; background:#F8FAFC;
+}
+.task-extra:last-child { margin-bottom:2px; }
+.te-head {
+  font-size:.78rem; font-weight:800; letter-spacing:.02em;
+  color:#1A2B44; margin-bottom:8px;
+}
+.te-hint { font-weight:500; color:#7A8699; letter-spacing:0; }
+.uniform-panel { border-color:#FFD9A0; background:#FFFBF3; }
+.uniform-panel .te-head { color:#8A4B00; }
+.uniform-chips { display:flex; flex-wrap:wrap; gap:6px; }
+.uniform-chip { cursor:pointer; margin:0; }
+.uniform-chip input { position:absolute; opacity:0; pointer-events:none; }
+.uniform-chip span {
+  display:inline-block; padding:5px 12px; border-radius:999px;
+  border:1px solid #DCE3EC; background:#fff; color:#41506A;
+  font-size:.8rem; font-weight:600; transition:all .12s; user-select:none;
+}
+.uniform-chip input:checked + span {
+  background:#C62828; border-color:#C62828; color:#fff;
+  box-shadow:0 2px 8px rgba(198,40,40,.28);
+}
+.uniform-chip input:focus-visible + span { outline:2px solid #1565C0; outline-offset:2px; }
+.uniform-summary {
+  margin-top:9px; font-size:.78rem; font-weight:700; color:#2E7D32;
+}
+.uniform-summary.has-flags { color:#C62828; }
+.photo-panel.is-required { border-color:#B2EBF2; background:#F2FBFC; }
+.photo-panel.is-required .te-head { color:#00636E; }
+.te-photo-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.te-photo-btn {
+  background:#fff; border:1px solid #C6D0DD; color:#2C3E56; font-weight:600;
+}
+.te-photo-btn:hover { background:#EEF4FB; border-color:#8FB4DA; color:#12395F; }
+.te-thumb {
+  width:52px; height:52px; object-fit:cover; border-radius:8px;
+  border:1px solid #D5DEE9;
+}
+.te-photo-state { font-size:.76rem; font-weight:700; color:#94A1B2; }
+.te-photo-state.is-ok { color:#2E7D32; }
+.photo-panel.is-required .te-photo-state:not(.is-ok) { color:#C62828; }
 </style>
 {% endblock %}
 
@@ -379,35 +497,46 @@ function previewExtra(input) {
 }
 
 function updatePhotoCount() {
+  const submitBtn = document.getElementById('submit-btn');
+  // Checklists that collect evidence per task have no general photo grid.
+  if (PHOTOS_REQ <= 0) {
+    if (submitBtn) submitBtn.disabled = false;
+    return;
+  }
   let count = 0;
   for (let i = 0; i < PHOTOS_REQ; i++) {
     const inp = document.getElementById('photo-input-' + i);
     if (inp && inp.files && inp.files[0]) count++;
   }
   photoCount = count;
-  document.getElementById('photo-count').textContent = count;
+  const countEl = document.getElementById('photo-count');
+  if (countEl) countEl.textContent = count;
   const pct = Math.min(count / PHOTOS_REQ * 100, 100);
-  document.getElementById('photo-progress').style.width = pct + '%';
+  const bar = document.getElementById('photo-progress');
+  if (bar) bar.style.width = pct + '%';
 
-  const submitBtn = document.getElementById('submit-btn');
+  const msg = document.getElementById('photo-status-msg');
   if (count >= PHOTOS_REQ) {
-    submitBtn.disabled = false;
-    submitBtn.classList.replace('btn-success', 'btn-success');
-    document.getElementById('photo-status-msg').innerHTML =
+    if (submitBtn) submitBtn.disabled = false;
+    if (msg) msg.innerHTML =
       '<i class="fas fa-check-circle me-1 text-success"></i><span class="text-success">Ready to submit!</span>';
   } else {
-    submitBtn.disabled = true;
+    if (submitBtn) submitBtn.disabled = true;
     const need = PHOTOS_REQ - count;
-    document.getElementById('photo-status-msg').innerHTML =
+    if (msg) msg.innerHTML =
       `<i class="fas fa-exclamation-circle me-1"></i>${need} more photo${need>1?'s':''} required`;
   }
 }
 
 // Allow existing submissions to update without re-uploading photos
 {% if existing %}
-document.getElementById('submit-btn').disabled = false;
-document.getElementById('photo-status-msg').innerHTML =
-  '<i class="fas fa-info-circle me-1 text-info"></i><span class="text-info">Existing photos kept. Upload new ones to replace.</span>';
+(function () {
+  const btn = document.getElementById('submit-btn');
+  if (btn) btn.disabled = false;
+  const msg = document.getElementById('photo-status-msg');
+  if (msg) msg.innerHTML =
+    '<i class="fas fa-info-circle me-1 text-info"></i><span class="text-info">Existing photos kept. Upload new ones to replace.</span>';
+})();
 {% endif %}
 
 function loadPhoto(file) {
@@ -530,8 +659,74 @@ async function preparePhotosForSubmit() {
   }
 }
 
+// ── Per-task extras: uniform picker + task photo ──────────────────────────
+function previewTaskPhoto(input, i) {
+  const state = document.getElementById('taskphoto-state-' + i);
+  const thumb = document.getElementById('taskphoto-preview-' + i);
+  if (!input.files || !input.files[0]) return;
+  const url = URL.createObjectURL(input.files[0]);
+  if (thumb) {
+    thumb.onload = () => URL.revokeObjectURL(url);
+    thumb.src = url;
+    thumb.classList.remove('d-none');
+  }
+  if (state) {
+    state.dataset.hasPhoto = '1';
+    state.classList.add('is-ok');
+    state.innerHTML = '<i class="fas fa-circle-check me-1"></i>Photo attached';
+  }
+}
+
+function updateUniformCount() {
+  const picked = Array.from(document.querySelectorAll('input[name="uniform_staff"]:checked'))
+    .map(cb => cb.value);
+  const el = document.getElementById('uniform-summary');
+  if (!el) return;
+  if (!picked.length) {
+    el.classList.remove('has-flags');
+    el.innerHTML = '<i class="fas fa-circle-check me-1"></i>All staff in correct uniform';
+  } else {
+    el.classList.add('has-flags');
+    el.innerHTML = '<i class="fas fa-triangle-exclamation me-1"></i>' +
+      picked.length + ' staff reported out of uniform: ' + picked.join(', ');
+  }
+}
+
+// A task marked "(photo required)" must carry a photo once it is ticked done.
+function missingRequiredTaskPhotos() {
+  const missing = [];
+  document.querySelectorAll('.photo-panel.is-required').forEach(panel => {
+    const i = panel.id.replace('tp-panel-', '');
+    const done = document.getElementById('check-' + i);
+    if (!done || !done.checked) return;               // not claimed done yet
+    const input = document.getElementById('taskphoto-' + i);
+    const state = document.getElementById('taskphoto-state-' + i);
+    const hasNew = input && input.files && input.files[0];
+    const hasOld = state && state.dataset.hasPhoto === '1';
+    if (!hasNew && !hasOld) {
+      const nameEl = document.getElementById('taskname-text-' + i);
+      missing.push(nameEl ? nameEl.textContent.trim() : ('Task ' + (Number(i) + 1)));
+    }
+  });
+  return missing;
+}
+
+document.addEventListener('DOMContentLoaded', updateUniformCount);
+
 document.getElementById('chk-form').addEventListener('submit', async function(e) {
   if (this.dataset.photosPrepared === '1' || preparingPhotos) return;
+
+  const missing = missingRequiredTaskPhotos();
+  if (missing.length) {
+    e.preventDefault();
+    alert('A photo is required for these completed task(s):\n\n• ' +
+          missing.join('\n• ') +
+          '\n\nAttach a photo, or untick the task if it is not done.');
+    const first = document.querySelector('.photo-panel.is-required');
+    if (first) first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
+
   const inputs = Array.from(document.querySelectorAll('.photo-file-input'))
     .filter(input => input.files && input.files[0] && input.dataset.compressed !== '1');
   if (!inputs.length) return;

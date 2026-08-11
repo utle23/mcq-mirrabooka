@@ -165,7 +165,31 @@
         {% for t in tasks %}
         <tr class="{% if t.done %}table-success{% endif %}">
           <td class="text-center text-muted">{{ t.task_order+1 }}</td>
-          <td>{{ t.task_name }}</td>
+          <td>
+            {{ t.task_name }}
+            {% if t.is_uniform and uniform_flagged %}
+            <div class="mt-2 p-2 rounded" style="background:#FFF4F4;border:1px solid #F5C2C2">
+              <div class="small fw-bold text-danger mb-1">
+                <i class="fas fa-user-xmark me-1"></i>Not in correct uniform ({{ uniform_flagged|length }})
+              </div>
+              {% for name in uniform_flagged %}
+              <span class="badge bg-danger me-1 mb-1">{{ name }}</span>
+              {% endfor %}
+            </div>
+            {% elif t.is_uniform %}
+            <div class="small text-success mt-1">
+              <i class="fas fa-circle-check me-1"></i>All staff in correct uniform
+            </div>
+            {% endif %}
+            {% if t.photo %}
+            <div class="mt-2">
+              <a href="/photo/{{ t.photo.filename }}" target="_blank" title="Open full size">
+                <img src="/photo/{{ t.photo.filename }}" alt="Task photo"
+                     style="width:110px;height:110px;object-fit:cover;border-radius:8px;border:1px solid #d5dee9">
+              </a>
+            </div>
+            {% endif %}
+          </td>
           <td class="text-center">
             {% if t.done %}
               <i class="fas fa-check-circle text-success fs-5"></i>

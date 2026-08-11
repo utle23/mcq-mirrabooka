@@ -95,6 +95,12 @@
   border-radius: 4px; border: 1px solid #ddd;
 }
 
+.uniform-alert {
+  margin-top: 6px; padding: 6px 10px; border-radius: 8px;
+  background: #FFF4F4; border: 1px solid #F5C2C2; color: #A32020;
+  font-size: 0.8rem; font-weight: 600;
+}
+
 .empty-section {
   background: #f7f9fb; border: 1px dashed #ccd; border-radius: 10px;
   padding: 18px; text-align: center; color: #888; font-size: 0.9rem;
@@ -177,6 +183,13 @@
       <strong>Resp:</strong> {{ c.responsible or '—' }}
       {% if c.submitted_at %} · {{ c.submitted_at[:16] }}{% endif %}
     </div>
+    {% if c.uniform_flagged %}
+    <div class="uniform-alert">
+      <i class="fas fa-user-xmark me-1"></i>
+      <strong>Not in uniform ({{ c.uniform_flagged|length }}):</strong>
+      {{ c.uniform_flagged|join(', ') }}
+    </div>
+    {% endif %}
     {% if c.photos %}
     <div class="photos">
       {% for p in c.photos %}<img src="/photo/{{ p.filename }}" alt="" onerror="this.style.opacity=0.3">{% endfor %}

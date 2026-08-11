@@ -591,6 +591,51 @@ SUBIACO_MERGED_SOURCES = {
 }
 
 
+# Cool Room & Freezer checklist records its temperature in the Equipment
+# Temperature Check, so every store needs a Cool Room unit there.
+COOL_ROOM_EQUIPMENT_MARKER = 'cool_room_equipment_v1'
+COOL_ROOM_EQUIPMENT_NAME = 'Cool Room'
+
+
+def seed_cool_room_equipment(db_path: str) -> None:
+    """Give every active store a Cool Room unit in the Equipment Temperature
+    Check, which is where the Cool Room checklist records its temperature.
+
+    Adds the unit only when the store has no cool-room entry yet, so renamed or
+    deleted units are never resurrected. Guarded by an audit_log marker.
+    """
+    conn = sqlite3.connect(db_path, timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA foreign_keys = ON')
+    try:
+        if conn.execute('SELECT 1 FROM audit_log WHERE action=? LIMIT 1',
+                        (COOL_ROOM_EQUIPMENT_MARKER,)).fetchone():
+            return
+        added = 0
+        stores = conn.execute('SELECT id FROM stores WHERE active=1 ORDER BY id').fetchall()
+        for store in stores:
+            sid = store['id']
+            exists = conn.execute(
+                '''SELECT 1 FROM equipment_units
+                   WHERE store_id=? AND active=1 AND lower(name) LIKE '%cool room%' ''',
+                (sid,)).fetchone()
+            if exists:
+                continue
+            nxt = conn.execute(
+                'SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM equipment_units WHERE store_id=?',
+                (sid,)).fetchone()['n']
+            conn.execute('''INSERT INTO equipment_units (name, kind, sort_order, active, store_id)
+                            VALUES (?, 'cold', ?, 1, ?)''', (COOL_ROOM_EQUIPMENT_NAME, nxt, sid))
+            added += 1
+        conn.execute('''INSERT INTO audit_log(action, record_type, user_name, details)
+            VALUES (?, 'migration', 'system', ?)''',
+            (COOL_ROOM_EQUIPMENT_MARKER,
+             f'Added "{COOL_ROOM_EQUIPMENT_NAME}" to Equipment Temperature Check for {added} store(s).'))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def seed_subiaco_merged_checklists(db_path: str, checklists_defaults: dict) -> None:
     """Build Subiaco's combined checklists from its LIVE per-station tasks once.
 

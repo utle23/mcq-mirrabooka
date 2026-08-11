@@ -87,53 +87,44 @@
     <div class="row g-3 mb-4">
       {% for key, chk in checklists.items() %}
       {% set status = chk_status.get(key, {}) %}
-      {% set op = status.get('opening') %}
-      {% set cl = status.get('closing') %}
+      {% set sections = status.get('sections') or ('opening', 'closing') %}
+      {% set is_daily = status.get('daily') %}
       <div class="col-12 col-sm-6">
         <div class="checklist-card">
           <div class="cc-header" style="border-left:4px solid {{ chk.color }}">
             <span class="cc-title">{{ chk.title }}</span>
+            {% if is_daily %}
+            <span class="badge ms-2" style="background:{{ chk.color }}">Daily</span>
+            {% endif %}
           </div>
           <div class="cc-body">
-            <!-- Opening -->
-            <div class="cc-section">
-              <span class="cc-label"><i class="fas fa-sun text-warning me-1"></i>Open</span>
-              {% if op %}
-                <span class="badge bg-{% if op.verified %}success{% else %}warning text-dark{% endif %} me-1">
-                  {% if op.verified %}Verified{% else %}Submitted{% endif %}
+            {% for sec in sections %}
+            {% set rec = status.get(sec) %}
+            <div class="cc-section {% if not loop.first %}mt-1{% endif %}">
+              <span class="cc-label">
+                {% if is_daily %}<i class="fas fa-snowflake me-1" style="color:{{ chk.color }}"></i>Daily
+                {% elif sec == 'opening' %}<i class="fas fa-sun text-warning me-1"></i>Open
+                {% else %}<i class="fas fa-moon text-info me-1"></i>Close{% endif %}
+              </span>
+              {% if rec %}
+                <span class="badge bg-{% if rec.verified %}success{% else %}warning text-dark{% endif %} me-1">
+                  {% if rec.verified %}Verified{% else %}Submitted{% endif %}
                 </span>
                 <span class="cc-time text-muted small">
-                  {% if op.get('submitted_at') %}{{ op['submitted_at'][-8:-3] }}{% endif %}
+                  {% if rec.get('submitted_at') %}{{ rec['submitted_at'][-8:-3] }}{% endif %}
                 </span>
-                <a href="/checklist/view/{{ op.id }}" class="btn btn-sm btn-outline-secondary ms-auto">View</a>
-              {% elif opening_locked %}
+                <a href="/checklist/view/{{ rec.id }}" class="btn btn-sm btn-outline-secondary ms-auto">View</a>
+              {% elif sec == 'opening' and opening_locked and not is_daily %}
                 <span class="badge bg-secondary me-1"><i class="fas fa-lock me-1"></i>Locked</span>
                 <a href="/history" class="btn btn-sm btn-outline-secondary ms-auto" title="Opening locked after 3 PM — view in History">History</a>
               {% else %}
                 <span class="badge bg-secondary me-1">Pending</span>
-                <a href="/checklist/{{ key }}?section=opening" class="btn btn-sm btn-success ms-auto">
+                <a href="/checklist/{{ key }}?section={{ sec }}" class="btn btn-sm btn-success ms-auto">
                   <i class="fas fa-plus"></i> Fill
                 </a>
               {% endif %}
             </div>
-            <!-- Closing -->
-            <div class="cc-section mt-1">
-              <span class="cc-label"><i class="fas fa-moon text-info me-1"></i>Close</span>
-              {% if cl %}
-                <span class="badge bg-{% if cl.verified %}success{% else %}warning text-dark{% endif %} me-1">
-                  {% if cl.verified %}Verified{% else %}Submitted{% endif %}
-                </span>
-                <span class="cc-time text-muted small">
-                  {% if cl.get('submitted_at') %}{{ cl['submitted_at'][-8:-3] }}{% endif %}
-                </span>
-                <a href="/checklist/view/{{ cl.id }}" class="btn btn-sm btn-outline-secondary ms-auto">View</a>
-              {% else %}
-                <span class="badge bg-secondary me-1">Pending</span>
-                <a href="/checklist/{{ key }}?section=closing" class="btn btn-sm btn-success ms-auto">
-                  <i class="fas fa-plus"></i> Fill
-                </a>
-              {% endif %}
-            </div>
+            {% endfor %}
           </div>
         </div>
       </div>
