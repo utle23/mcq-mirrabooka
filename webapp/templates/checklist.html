@@ -452,6 +452,21 @@
 .te-photo-state { font-size:.76rem; font-weight:700; color:#94A1B2; }
 .te-photo-state.is-ok { color:#2E7D32; }
 .photo-panel.is-required .te-photo-state:not(.is-ok) { color:#C62828; }
+
+/* ── Phone: finger-sized targets ──────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* The done switch is the most-used control on this page — make it a
+     comfortable tap target instead of a 26x13px sliver. */
+  .task-check { width: 3rem !important; height: 1.6rem !important; margin: 0; }
+  .task-row td { padding-left: .4rem; padding-right: .4rem; }
+  /* Let the task name wrap and drop its badge / Edit button onto the next line
+     instead of forcing the table wider than the screen. */
+  .taskname-view { flex-wrap: wrap; row-gap: 6px; }
+  .task-label { white-space: normal; }
+  .edit-task-btn { margin-left: 0 !important; }
+  .uniform-chip span { padding: 8px 14px; font-size: .85rem; }
+  .te-photo-btn { padding: 8px 14px; }
+}
 </style>
 {% endblock %}
 

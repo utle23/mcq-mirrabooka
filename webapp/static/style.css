@@ -108,6 +108,10 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
   flex-direction: column;
   min-height: 100vh;
   transition: margin-left 0.25s ease;
+  /* Without min-width:0 a flex item never shrinks below its content's
+     min-content width, so one wide child (the topbar badges, a table) stretched
+     the whole page and forced sideways scrolling on phones. */
+  min-width: 0;
 }
 .main-area.full { margin-left: 56px; }
 
@@ -127,14 +131,24 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
 }
 .sidebar-toggle { background: none; border: 1px solid #e0e0e0; color: #555; }
 .sidebar-toggle:hover { background: var(--bg); }
-.topbar-center { flex: 1; font-size: 14.5px; color: #333; }
-.topbar-right { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+/* min-width:0 lets these shrink instead of forcing the topbar (and with it the
+   whole page) wider than the screen. */
+.topbar-center {
+  flex: 1 1 0; min-width: 0; font-size: 14.5px; color: #333;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.topbar-right {
+  display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end;
+  min-width: 0; flex-shrink: 1;
+}
 .topbar-badge {
   font-size: 11.5px; color: #666;
   background: var(--bg);
   border: 1px solid #ddd;
   border-radius: 20px;
   padding: 3px 10px;
+  white-space: nowrap; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis;
 }
 
 /* ── Page Body ── */
@@ -470,6 +484,12 @@ body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: va
   .stat-value { font-size: 24px; }
   .photo-gallery-grid { grid-template-columns: repeat(3, 1fr); }
   .completion-time-bar { gap: 10px; }
+  /* Phone topbar: keep the page title readable and drop the date chip, which
+     is the least useful of the badges on a narrow screen. */
+  .topbar { padding: 0 12px; gap: 8px; }
+  .topbar-right { gap: 6px; }
+  .topbar-badge { font-size: 10.5px; padding: 2px 8px; max-width: 42vw; }
+  .topbar-badge.badge-date { display: none; }
 }
 
 /* ── Daily Tasks quick-bar (under the topbar) ── */

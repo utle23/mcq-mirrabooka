@@ -380,7 +380,7 @@
         {% else %}
         <span class="topbar-badge"><i class="fas fa-store"></i> MCQ {{ branch or 'Mirrabooka' }}</span>
         {% endif %}
-        <span class="topbar-badge"><i class="fas fa-calendar-day"></i> {{ day_name }}, {{ today }}</span>
+        <span class="topbar-badge badge-date"><i class="fas fa-calendar-day"></i> {{ day_name }}, {{ today }}</span>
         {% if is_super_admin %}
         <span class="topbar-badge badge-admin" style="background:#6A1B9A"><i class="fas fa-crown"></i> Owner</span>
         {% elif is_admin %}
