@@ -1471,6 +1471,8 @@ def build_daily_pdf(date_str: str, period: str | None = None, store_id=None) -> 
     NAVY      = colors.HexColor('#1A1A2E')
     NAVY_DK   = colors.HexColor('#0F0F1F')
     BRAND     = colors.HexColor(branding['accent'])   # per-branch accent
+    # Darker shade of the branch colour for the cover gradient and footer band.
+    BRAND_DK  = colors.Color(BRAND.red * 0.62, BRAND.green * 0.62, BRAND.blue * 0.62)
     GOLD      = colors.HexColor('#D4AF37')
     OK        = colors.HexColor('#2E7D32')
     BAD       = colors.HexColor('#C62828')
@@ -1539,17 +1541,19 @@ def build_daily_pdf(date_str: str, period: str | None = None, store_id=None) -> 
         canvas.setFillColor(colors.white)
         canvas.rect(0, 0, PAGE_W, PAGE_H, fill=1, stroke=0)
 
-        # Top gradient band: accent (top) → darker accent (bottom)
+        # Top gradient band: the BRANCH colour (top) → darker (bottom), so the
+        # cover itself says which shop this is. The opening/closing distinction
+        # stays on the period pill below.
         bands = 48
-        r1, g1, b1 = ACC.red, ACC.green, ACC.blue
-        r2, g2, b2 = ACC_DK.red, ACC_DK.green, ACC_DK.blue
+        r1, g1, b1 = BRAND.red, BRAND.green, BRAND.blue
+        r2, g2, b2 = BRAND_DK.red, BRAND_DK.green, BRAND_DK.blue
         seg = BAND_H / bands
         for i in range(bands):
             t = i / float(bands - 1)
             canvas.setFillColorRGB(r1 + (r2 - r1) * t, g1 + (g2 - g1) * t, b1 + (b2 - b1) * t)
             canvas.rect(0, PAGE_H - (i + 1) * seg, PAGE_W, seg + 1, fill=1, stroke=0)
         # Crisp darker line at the band's lower edge
-        canvas.setFillColor(ACC_DK)
+        canvas.setFillColor(BRAND_DK)
         canvas.rect(0, PAGE_H - BAND_H, PAGE_W, 1.6 * mm, fill=1, stroke=0)
 
         # Floating white logo card straddling the band's lower edge (soft shadow)
@@ -1571,9 +1575,9 @@ def build_daily_pdf(date_str: str, period: str | None = None, store_id=None) -> 
             except Exception:
                 pass
 
-        # Bottom accent footer with tagline + generated timestamp
+        # Bottom footer band, in the branch colour to match the cover band
         fb = 17 * mm
-        canvas.setFillColor(ACC_DK)
+        canvas.setFillColor(BRAND_DK)
         canvas.rect(0, 0, PAGE_W, fb, fill=1, stroke=0)
         canvas.setFont(bold_font, 11)
         canvas.setFillColor(colors.white)
