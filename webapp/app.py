@@ -2534,9 +2534,17 @@ def checklist_form(chk_type):
     section = request.args.get('section') or ('closing' if locked else 'opening')
     if section not in sections:
         section = sections[-1] if locked and len(sections) > 1 else sections[0]
+    # A locked Opening still has to be reachable by an admin, otherwise the task
+    # list for tomorrow can never be edited after 3 PM. Admins get the form in
+    # template-edit mode (task names editable, submitting still blocked);
+    # everyone else is sent to Closing as before.
+    template_edit = False
     if section == 'opening' and locked:
-        flash('Opening checklist is locked after 3 PM. View it in History.', 'warning')
-        return redirect(url_for('checklist_form', chk_type=chk_type, date=chk_date, section='closing'))
+        if session.get('role') in ('admin', 'super_admin'):
+            template_edit = True
+        else:
+            flash('Opening checklist is locked after 3 PM. View it in History.', 'warning')
+            return redirect(url_for('checklist_form', chk_type=chk_type, date=chk_date, section='closing'))
     try:
         day_name = datetime.strptime(chk_date, '%Y-%m-%d').strftime('%A')
     except Exception:
@@ -2589,8 +2597,30 @@ def checklist_form(chk_type):
         allow_second_responsible=(
             chk_type == 'banh_mi'
             and current_store_id() not in (chk_data.get('single_responsible_stores') or ())),
+        # Locked Opening opened by an admin: curate tomorrow's task list only.
+        template_edit=template_edit,
         opening_locked=locked,   # date-aware: overrides the global (today) lock
     )
+
+
+def _materialise_template(conn, chk_type, section, store_id):
+    """Copy the built-in task list into this store's template rows before the
+    first admin edit.
+
+    _template_tasks() treats "this store has any rows" as "these ARE the tasks",
+    so writing a single edited/added row into an empty template would silently
+    drop every other task. Materialising first keeps the list intact.
+    """
+    existing = conn.execute(
+        '''SELECT COUNT(*) AS c FROM checklist_task_templates
+           WHERE chk_type=? AND section=? AND store_id=?''',
+        (chk_type, section, store_id)).fetchone()['c']
+    if existing:
+        return
+    for i, name in enumerate(CHECKLISTS.get(chk_type, {}).get(section, [])):
+        conn.execute('''INSERT OR IGNORE INTO checklist_task_templates
+            (chk_type, section, task_order, task_name, store_id) VALUES (?,?,?,?,?)''',
+            (chk_type, section, i, name, store_id))
 
 
 @app.route('/admin/checklist-task/update', methods=['POST'])
@@ -2610,6 +2640,7 @@ def update_checklist_task():
         return jsonify({'error': 'invalid order'}), 400
     with get_db() as conn:
         sid = current_store_id()
+        _materialise_template(conn, chk_type, section, sid)
         conn.execute('''INSERT INTO checklist_task_templates
             (chk_type, section, task_order, task_name, store_id)
             VALUES (?,?,?,?,?)
@@ -2628,6 +2659,7 @@ def add_checklist_task():
         return jsonify({'error': 'invalid'}), 400
     with get_db() as conn:
         sid = current_store_id()
+        _materialise_template(conn, chk_type, section, sid)
         next_order = conn.execute('''
             SELECT COALESCE(MAX(task_order), -1) + 1 as next_order
             FROM checklist_task_templates
@@ -2660,6 +2692,7 @@ def delete_checklist_task():
 
     with get_db() as conn:
         sid = current_store_id()
+        _materialise_template(conn, chk_type, section, sid)
         conn.execute('''DELETE FROM checklist_task_templates
             WHERE chk_type=? AND section=? AND task_order=? AND store_id=?''',
             (chk_type, section, order, sid))

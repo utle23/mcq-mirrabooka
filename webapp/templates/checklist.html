@@ -12,7 +12,13 @@
                onchange="location.href='/checklist/{{ chk_type }}?date='+this.value+'&section={{ section }}'">
       </div>
       <div class="btn-group">
-        {% if opening_locked %}
+        {% if opening_locked and is_admin %}
+        <a href="/checklist/{{ chk_type }}?date={{ chk_date }}&section=opening"
+           class="btn btn-sm {% if section=='opening' %}btn-warning{% else %}btn-outline-warning{% endif %}"
+           title="Opening is locked — admins can still edit the task list for tomorrow">
+          <i class="fas fa-pen-to-square me-1"></i>Opening tasks
+        </a>
+        {% elif opening_locked %}
         <span class="btn btn-sm btn-outline-secondary disabled" tabindex="-1" aria-disabled="true"
               title="Opening is locked after 3 PM — view it in History">
           <i class="fas fa-lock me-1"></i>Opening
@@ -68,6 +74,18 @@
           data-draft-scope="checklist:{{ store_id }}:{{ chk_type }}:{{ section }}:{{ chk_date }}">
       <input type="hidden" name="date" value="{{ chk_date }}">
       <input type="hidden" name="section" value="{{ section }}">
+
+      {% if template_edit %}
+      <div class="alert alert-warning d-flex align-items-start gap-2 py-2">
+        <i class="fas fa-lock mt-1"></i>
+        <div>
+          <strong>Opening is locked for today.</strong>
+          You are editing the <strong>task list</strong> only — rename, add or delete tasks
+          and the changes apply from <strong>tomorrow's Opening</strong> onwards.
+          Today's record cannot be submitted from here.
+        </div>
+      </div>
+      {% endif %}
 
       <div class="row g-3 mb-3">
         {% set resp_parts = ((existing.responsible if existing else '') or '').split(' & ') %}
@@ -287,7 +305,7 @@
       <!-- ═══════════════════════════════════════════════════════════════════ -->
       <!-- PHOTO UPLOAD SECTION (MANDATORY 4 PHOTOS)                         -->
       <!-- ═══════════════════════════════════════════════════════════════════ -->
-      {% if photos_required > 0 %}
+      {% if photos_required > 0 and not template_edit %}
       <div class="photo-section">
         <div class="photo-section-header">
           <i class="fas fa-camera me-2"></i>
@@ -353,7 +371,7 @@
           </div>
         </div>
       </div>
-      {% else %}
+      {% elif not template_edit %}
       <div class="alert alert-info py-2 small mb-0">
         <i class="fas fa-circle-info me-1"></i>
         This checklist collects its evidence <strong>per task</strong> — attach the photo
@@ -363,6 +381,14 @@
       <!-- ═══════════════════════════════════════════════════════════════════ -->
 
       <div class="mt-4 d-flex gap-2 flex-wrap">
+        {% if template_edit %}
+        <span class="alert alert-secondary py-2 px-3 mb-0 small">
+          <i class="fas fa-circle-info me-1"></i>Task changes save instantly — no need to submit.
+        </span>
+        <a href="/checklist/{{ chk_type }}?date={{ chk_date }}&section=closing" class="btn btn-success btn-lg">
+          <i class="fas fa-moon me-1"></i>Go to Closing
+        </a>
+        {% else %}
         <button type="submit" class="btn btn-success btn-lg" id="submit-btn"
                 {% if photos_required > 0 %}disabled{% endif %}>
           <i class="fas fa-save me-2"></i>Save &amp; Submit Checklist
@@ -371,6 +397,7 @@
         <button type="submit" class="btn btn-warning btn-lg" id="submit-btn-existing">
           <i class="fas fa-edit me-2"></i>Update (Keep Existing Photos)
         </button>
+        {% endif %}
         {% endif %}
         <a href="/" class="btn btn-outline-secondary btn-lg">
           <i class="fas fa-home me-1"></i>Dashboard
