@@ -1027,17 +1027,23 @@ def seed_morley_packaging(db_path: str) -> None:
 
 # Cool Room & Freezer checklist records its temperature in the Equipment
 # Temperature Check, so every store needs a Cool Room unit there.
-COOL_ROOM_EQUIPMENT_MARKER = 'cool_room_equipment_v1'
+# v2 repairs stores where v1 inserted Cool Room into an empty equipment list:
+# equipment_routes only seeds its standard units when a store has ZERO units, so
+# adding Cool Room first left those branches with Cool Room as their only unit.
+COOL_ROOM_EQUIPMENT_MARKER = 'cool_room_equipment_v2'
 COOL_ROOM_EQUIPMENT_NAME = 'Cool Room'
 
 
 def seed_cool_room_equipment(db_path: str) -> None:
-    """Give every active store a Cool Room unit in the Equipment Temperature
-    Check, which is where the Cool Room checklist records its temperature.
+    """Make sure every active store has the standard equipment list plus a Cool
+    Room unit, which is where the Cool Room checklist records its temperature.
 
-    Adds the unit only when the store has no cool-room entry yet, so renamed or
-    deleted units are never resurrected. Guarded by an audit_log marker.
+    Existing units are never touched or renamed: a standard unit is only added
+    when the store has none of them, so a branch that deliberately removed one
+    keeps its own list.
     """
+    from equipment_routes import UNITS_SEED
+
     conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA foreign_keys = ON')
@@ -1045,26 +1051,30 @@ def seed_cool_room_equipment(db_path: str) -> None:
         if conn.execute('SELECT 1 FROM audit_log WHERE action=? LIMIT 1',
                         (COOL_ROOM_EQUIPMENT_MARKER,)).fetchone():
             return
-        added = 0
-        stores = conn.execute('SELECT id FROM stores WHERE active=1 ORDER BY id').fetchall()
-        for store in stores:
+        standard = added_cool = 0
+        for store in conn.execute('SELECT id FROM stores WHERE active=1 ORDER BY id').fetchall():
             sid = store['id']
-            exists = conn.execute(
-                '''SELECT 1 FROM equipment_units
-                   WHERE store_id=? AND active=1 AND lower(name) LIKE '%cool room%' ''',
-                (sid,)).fetchone()
-            if exists:
-                continue
-            nxt = conn.execute(
-                'SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM equipment_units WHERE store_id=?',
-                (sid,)).fetchone()['n']
-            conn.execute('''INSERT INTO equipment_units (name, kind, sort_order, active, store_id)
-                            VALUES (?, 'cold', ?, 1, ?)''', (COOL_ROOM_EQUIPMENT_NAME, nxt, sid))
-            added += 1
+            names = {(r['name'] or '').strip().lower() for r in conn.execute(
+                'SELECT name FROM equipment_units WHERE store_id=?', (sid,)).fetchall()}
+            # Seed the standard units when the store has none of them yet.
+            if not any(n.lower() in names for n, _ in UNITS_SEED):
+                for i, (name, kind) in enumerate(UNITS_SEED):
+                    conn.execute('''INSERT INTO equipment_units
+                        (name, kind, sort_order, active, store_id) VALUES (?,?,?,1,?)''',
+                        (name, kind, i, sid))
+                    standard += 1
+            if not any('cool room' in n for n in names):
+                nxt = conn.execute(
+                    'SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM equipment_units WHERE store_id=?',
+                    (sid,)).fetchone()['n']
+                conn.execute('''INSERT INTO equipment_units (name, kind, sort_order, active, store_id)
+                                VALUES (?, 'cold', ?, 1, ?)''', (COOL_ROOM_EQUIPMENT_NAME, nxt, sid))
+                added_cool += 1
         conn.execute('''INSERT INTO audit_log(action, record_type, user_name, details)
             VALUES (?, 'migration', 'system', ?)''',
             (COOL_ROOM_EQUIPMENT_MARKER,
-             f'Added "{COOL_ROOM_EQUIPMENT_NAME}" to Equipment Temperature Check for {added} store(s).'))
+             f'Equipment lists checked: added {standard} standard unit(s) and '
+             f'{added_cool} Cool Room unit(s).'))
         conn.commit()
     finally:
         conn.close()
