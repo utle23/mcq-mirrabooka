@@ -591,6 +591,51 @@ SUBIACO_MERGED_SOURCES = {
 }
 
 
+# ── Morley food-temperature records ──────────────────────────────────────────
+# Morley had no temp_food_templates rows, so its Food Temperature Records fell
+# back to the built-in defaults. Copy Mirrabooka's live list so Morley owns an
+# editable set of its own.
+MORLEY_TEMP_FOODS_MARKER = 'morley_temp_foods_from_mirrabooka_v1'
+
+
+def seed_morley_temp_foods(db_path: str) -> None:
+    """Copy Mirrabooka's food-temperature lists to Morley, once.
+
+    Skips entirely if Morley already has rows, so an admin's own list is never
+    replaced; guarded by an audit_log marker so restarts do not re-copy.
+    """
+    conn = sqlite3.connect(db_path, timeout=30)
+    conn.row_factory = sqlite3.Row
+    try:
+        if conn.execute('SELECT 1 FROM audit_log WHERE action=? LIMIT 1',
+                        (MORLEY_TEMP_FOODS_MARKER,)).fetchone():
+            return
+        already = conn.execute(
+            'SELECT COUNT(*) AS c FROM temp_food_templates WHERE store_id=?',
+            (MORLEY_STORE_ID,)).fetchone()['c']
+        copied = 0
+        if not already:
+            rows = conn.execute(
+                '''SELECT temp_type, food_order, food_name, food_kind
+                   FROM temp_food_templates WHERE store_id=1
+                   ORDER BY temp_type, food_order''').fetchall()
+            for r in rows:
+                conn.execute('''INSERT OR IGNORE INTO temp_food_templates
+                    (temp_type, food_order, food_name, food_kind, store_id)
+                    VALUES (?,?,?,?,?)''',
+                    (r['temp_type'], r['food_order'], r['food_name'],
+                     r['food_kind'], MORLEY_STORE_ID))
+                copied += 1
+        conn.execute('''INSERT INTO audit_log(action, record_type, user_name, details)
+            VALUES (?, 'migration', 'system', ?)''',
+            (MORLEY_TEMP_FOODS_MARKER,
+             f'Copied {copied} food-temperature row(s) from Mirrabooka to Morley'
+             + (' (skipped: Morley already had its own list).' if already else '.')))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # ── Store profiles (address / phone) ─────────────────────────────────────────
 # Reports and order documents print the branch address, but only Subiaco had one
 # on the stores row. Fill the blanks once, without touching anything an admin

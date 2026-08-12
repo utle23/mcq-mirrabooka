@@ -44,7 +44,7 @@ from branch_seed import (seed_subiaco_branch, seed_morley_branch,
                          seed_noodle_bar_checklists, seed_subiaco_merged_checklists,
                          seed_cool_room_equipment, seed_morley_packaging,
                          seed_morley_staff, seed_morley_checklists_v2,
-                         seed_store_profiles)
+                         seed_store_profiles, seed_morley_temp_foods)
 import email_service
 app.register_blueprint(prep_bp)
 app.register_blueprint(pastry_bp)
@@ -3021,6 +3021,26 @@ def temperature_form(temp_type):
         existing_readings=existing_readings, staff=get_active_staff(),
     )
 
+def _materialise_temp_template(conn, temp_type, store_id):
+    """Copy the built-in food list into this store's rows before the first edit.
+
+    get_temp_foods() treats "this store has any rows" as "these ARE the foods",
+    so writing one edited/added row into an empty template would drop the rest.
+    Mirrors _materialise_template() for checklist tasks.
+    """
+    existing = conn.execute(
+        'SELECT COUNT(*) AS c FROM temp_food_templates WHERE temp_type=? AND store_id=?',
+        (temp_type, store_id)).fetchone()['c']
+    if existing:
+        return
+    for i, food in enumerate(TEMPERATURES.get(temp_type, {}).get('foods', [])):
+        conn.execute('''INSERT OR IGNORE INTO temp_food_templates
+            (temp_type, food_order, food_name, food_kind, store_id) VALUES (?,?,?,?,?)''',
+            (temp_type, i, food['name'],
+             food.get('kind') or temp_food_kind_default(temp_type, food['name']),
+             store_id))
+
+
 @app.route('/admin/temperature-food/update', methods=['POST'])
 @admin_required
 def update_temperature_food():
@@ -3038,6 +3058,7 @@ def update_temperature_food():
 
     with get_db() as conn:
         sid = current_store_id()
+        _materialise_temp_template(conn, temp_type, sid)
         kind = temp_food_kind_default(temp_type, name)
         conn.execute('''INSERT INTO temp_food_templates
             (temp_type, food_order, food_name, food_kind, store_id)
@@ -3056,6 +3077,7 @@ def add_temperature_food():
         return jsonify({'error': 'invalid'}), 400
     with get_db() as conn:
         sid = current_store_id()
+        _materialise_temp_template(conn, temp_type, sid)
         next_order = conn.execute('''
             SELECT COALESCE(MAX(food_order), -1) + 1 as next_order
             FROM temp_food_templates
@@ -3084,6 +3106,7 @@ def delete_temperature_food():
 
     with get_db() as conn:
         sid = current_store_id()
+        _materialise_temp_template(conn, temp_type, sid)
         conn.execute('''DELETE FROM temp_food_templates
             WHERE temp_type=? AND food_order=? AND store_id=?''', (temp_type, order, sid))
         conn.execute('''UPDATE temp_food_templates
@@ -6171,6 +6194,7 @@ _safe_init(seed_morley_packaging, DB_PATH)
 _safe_init(seed_morley_staff, DB_PATH)
 _safe_init(seed_morley_checklists_v2, DB_PATH, CHECKLISTS)
 _safe_init(seed_store_profiles, DB_PATH)
+_safe_init(seed_morley_temp_foods, DB_PATH)
 
 if __name__ == '__main__':
     print('\n' + '='*50)
