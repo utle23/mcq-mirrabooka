@@ -256,11 +256,31 @@ def _conn() -> sqlite3.Connection:
 # ── Settings helpers ──────────────────────────────────────────────────────────
 
 def get_settings(store_id: int | None = None) -> dict:
+    """This store's email settings, borrowing the Brevo account credentials from
+    a sibling branch when this one has not entered them.
+
+    Brevo is one account for the whole business, so the API key and sender
+    address are chain-wide credentials rather than per-branch settings. Without
+    this fallback a new branch silently fails with "Brevo not configured" on
+    every order email and digest until someone re-pastes the same key.
+    Branch-specific fields (from_name, base_url, enabled, recipients) are NOT
+    inherited — only the credentials.
+    """
     sid = _resolve_store_id(store_id)
     with _conn() as conn:
         conn.execute('INSERT OR IGNORE INTO email_settings (store_id) VALUES (?)', (sid,))
         row = conn.execute('SELECT * FROM email_settings WHERE store_id=?', (sid,)).fetchone()
-        return dict(row) if row else {}
+        settings = dict(row) if row else {}
+        if not (settings.get('brevo_api_key') and settings.get('sender_email')):
+            donor = conn.execute('''
+                SELECT brevo_api_key, sender_email FROM email_settings
+                WHERE COALESCE(brevo_api_key,'') <> '' AND COALESCE(sender_email,'') <> ''
+                ORDER BY (store_id <> 1), store_id LIMIT 1''').fetchone()
+            if donor:
+                settings['brevo_api_key'] = settings.get('brevo_api_key') or donor['brevo_api_key']
+                settings['sender_email'] = settings.get('sender_email') or donor['sender_email']
+                settings['brevo_inherited'] = True
+        return settings
 
 
 def update_settings(store_id: int | None = None, **kwargs) -> None:

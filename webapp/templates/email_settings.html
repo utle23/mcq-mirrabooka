@@ -109,6 +109,12 @@
                  value="{{ settings.brevo_api_key or '' }}"
                  placeholder="xkeysib-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
                  autocomplete="new-password">
+          {% if settings.brevo_inherited %}
+          <div class="form-text text-success">
+            <i class="fas fa-link me-1"></i>Using the shared Brevo account from another branch.
+            Save here only if this branch needs its own key.
+          </div>
+          {% endif %}
         </div>
         <div class="col-md-6">
           <label class="form-label fw-semibold small">
